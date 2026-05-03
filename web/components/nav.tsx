@@ -204,7 +204,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
     .filter(item => item.type !== 'group' || item.children.length > 0)
 
   const navLinks = (
-    <div className="space-y-0.5">
+    <div className="vds-space-y-0.5">
       {visibleItems.map((item) => {
         if (item.type === 'link') {
           const active = pathname.startsWith(item.href)
@@ -214,14 +214,14 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
               href={item.href}
               title={collapsed ? t(item.labelKey) : undefined}
               className={cn(
-                'flex items-center rounded-md text-sm font-medium transition-colors',
-                collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-3 px-3 py-2',
+                'vds-flex vds-items-center vds-rounded-md vds-text-sm vds-font-500 vds-transition-colors',
+                collapsed ? 'vds-justify-center vds-h-9 vds-w-9 vds-mx-auto' : 'vds-gap-3 vds-px-3 vds-py-2',
                 active
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  ? 'vds-bg-primary vds-text-primary-fg'
+                  : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
               )}
             >
-              <item.icon className="h-4 w-4 flex-shrink-0" />
+              <item.icon className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
               {!collapsed && t(item.labelKey)}
             </Link>
           )
@@ -239,38 +239,38 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
                 title={t(item.labelKey)}
                 onClick={() => expandAndOpenGroup(item.id)}
                 className={cn(
-                  'flex items-center justify-center h-9 w-9 mx-auto rounded-md text-sm font-medium transition-colors',
+                  'vds-flex vds-items-center vds-justify-center vds-h-9 vds-w-9 vds-mx-auto vds-rounded-md vds-text-sm vds-font-500 vds-transition-colors',
                   groupActive
-                    ? 'bg-primary/15 text-primary'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                    ? 'vds-bg-primary/15 vds-text-primary'
+                    : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
                 )}
               >
-                <item.icon className="h-4 w-4 flex-shrink-0" />
+                <item.icon className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
               </button>
             ) : (
               <button
                 type="button"
                 onClick={() => toggleGroup(item.id)}
                 className={cn(
-                  'w-full flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                  'vds-w-full vds-flex vds-items-center vds-gap-3 vds-px-3 vds-py-2 vds-rounded-md vds-text-sm vds-font-500 vds-transition-colors',
                   groupActive
-                    ? 'text-primary'
-                    : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                    ? 'vds-text-primary'
+                    : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
                 )}
               >
-                <item.icon className="h-4 w-4 flex-shrink-0" />
-                <span className="flex-1 text-left">{t(item.labelKey)}</span>
+                <item.icon className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
+                <span className="vds-flex-1 vds-text-left">{t(item.labelKey)}</span>
                 <ChevronDown
                   className={cn(
-                    'h-3.5 w-3.5 shrink-0 transition-transform duration-150',
-                    groupOpen && 'rotate-180',
+                    'vds-h-3.5 vds-w-3.5 vds-flex-shrink-0 vds-transition-transform vds-duration-medium',
+                    groupOpen && 'vds-rotate-180',
                   )}
                 />
               </button>
             )}
 
             {!collapsed && groupOpen && (
-              <div className="mt-0.5 ml-3 pl-3 border-l border-border space-y-0.5">
+              <div className="vds-mt-0.5 vds-ml-3 vds-pl-3 vds-border-l-1 vds-border-subtle vds-space-y-0.5">
                 {item.children.map((child) => {
                   const active = isChildActive(child, item.basePath)
                   return (
@@ -278,13 +278,13 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
                       key={child.href}
                       href={child.href}
                       className={cn(
-                        'flex items-center gap-2.5 px-2 py-1.5 rounded-md text-sm transition-colors',
+                        'vds-flex vds-items-center vds-gap-2.5 vds-px-2 vds-py-1.5 vds-rounded-md vds-text-sm vds-transition-colors',
                         active
-                          ? 'bg-primary text-primary-foreground font-medium'
-                          : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                          ? 'vds-bg-primary vds-text-primary-fg vds-font-500'
+                          : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
                       )}
                     >
-                      <child.icon className="h-3.5 w-3.5 flex-shrink-0" />
+                      <child.icon className="vds-h-3.5 vds-w-3.5 vds-flex-shrink-0" />
                       {t(child.labelKey)}
                     </Link>
                   )
@@ -300,20 +300,20 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
   // ── Footer slots ──────────────────────────────────────────────────────────────
 
   const bottomSlot = (
-    <div className="py-3 px-2 space-y-2">
+    <div className="vds-py-3 vds-px-2 vds-space-y-2">
       {authUser && !collapsed && (
-        <div className="px-1 space-y-0.5">
+        <div className="vds-px-1 vds-space-y-0.5">
           {hasPermission('account_manage') && (
             <Link
               href="/accounts"
               className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                'vds-flex vds-items-center vds-gap-3 vds-px-3 vds-py-2 vds-rounded-md vds-text-sm vds-font-500 vds-transition-colors',
                 pathname.startsWith('/accounts')
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  ? 'vds-bg-primary vds-text-primary-fg'
+                  : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
               )}
             >
-              <Users className="h-4 w-4 flex-shrink-0" />
+              <Users className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
               {t('accounts.title')}
             </Link>
           )}
@@ -321,77 +321,77 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
             <Link
               href="/audit"
               className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-md text-sm font-medium transition-colors',
+                'vds-flex vds-items-center vds-gap-3 vds-px-3 vds-py-2 vds-rounded-md vds-text-sm vds-font-500 vds-transition-colors',
                 pathname.startsWith('/audit')
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+                  ? 'vds-bg-primary vds-text-primary-fg'
+                  : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
               )}
             >
-              <Shield className="h-4 w-4 flex-shrink-0" />
+              <Shield className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
               {t('audit.title')}
             </Link>
           )}
         </div>
       )}
 
-      <div className="px-1">
+      <div className="vds-px-1">
         <Link
           href="/api-docs"
           title={collapsed ? t('nav.apiDocs') : undefined}
           className={cn(
-            'flex items-center rounded-md text-sm font-medium transition-colors',
-            collapsed ? 'justify-center h-9 w-9 mx-auto' : 'gap-3 px-3 py-2',
+            'vds-flex vds-items-center vds-rounded-md vds-text-sm vds-font-500 vds-transition-colors',
+            collapsed ? 'vds-justify-center vds-h-9 vds-w-9 vds-mx-auto' : 'vds-gap-3 vds-px-3 vds-py-2',
             pathname.startsWith('/api-docs')
-              ? 'bg-primary text-primary-foreground'
-              : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground',
+              ? 'vds-bg-primary vds-text-primary-fg'
+              : 'vds-text-dim vds-hover:bg-hover vds-hover:text-primary',
           )}
         >
-          <BookOpen className="h-4 w-4 flex-shrink-0" />
+          <BookOpen className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
           {!collapsed && t('nav.apiDocs')}
         </Link>
       </div>
 
       {authUser && !collapsed && (
-        <div className="px-1">
-          <div className="flex items-center justify-between px-3 py-1.5 rounded-md hover:bg-accent/50 transition-colors">
-            <span className="text-xs text-muted-foreground truncate">{authUser.username}</span>
+        <div className="vds-px-1">
+          <div className="vds-flex vds-items-center vds-justify-between vds-px-3 vds-py-1.5 vds-rounded-md vds-hover:bg-hover/50 vds-transition-colors">
+            <span className="vds-text-xs vds-text-dim vds-truncate">{authUser.username}</span>
             <button
               type="button"
               aria-label={t('common.signOut')}
               title={t('common.signOut')}
               onClick={() => redirectToLogin()}
-              className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+              className="vds-p-1 vds-rounded-md vds-text-dim vds-hover:text-primary vds-hover:bg-hover vds-transition-colors"
             >
-              <LogOut className="h-3.5 w-3.5" />
+              <LogOut className="vds-h-3.5 vds-w-3.5" />
             </button>
           </div>
         </div>
       )}
 
       <div className={cn(
-        'flex items-center gap-1 px-1',
-        collapsed ? 'justify-center flex-col gap-0.5' : 'justify-between',
+        'vds-flex vds-items-center vds-gap-1 vds-px-1',
+        collapsed ? 'vds-justify-center vds-flex-col vds-gap-0.5' : 'vds-justify-between',
       )}>
-        {!collapsed && <p className="text-xs text-muted-foreground shrink-0">v0.1.0</p>}
+        {!collapsed && <p className="vds-text-xs vds-text-dim vds-flex-shrink-0">v0.1.0</p>}
 
         <button
           type="button"
           onClick={() => setShowSettings(true)}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="vds-p-1.5 vds-rounded-md vds-text-dim vds-hover:text-primary vds-hover:bg-hover vds-transition-colors vds-flex-shrink-0"
           aria-label={t('common.settings')}
           title={t('common.settings')}
         >
-          <Settings2 className="h-4 w-4" />
+          <Settings2 className="vds-h-4 vds-w-4" />
         </button>
 
         <button
           type="button"
           onClick={toggleTheme}
-          className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0"
+          className="vds-p-1.5 vds-rounded-md vds-text-dim vds-hover:text-primary vds-hover:bg-hover vds-transition-colors vds-flex-shrink-0"
           aria-label={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
           title={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
         >
-          {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+          {theme === 'dark' ? <Sun className="vds-h-4 vds-w-4" /> : <Moon className="vds-h-4 vds-w-4" />}
         </button>
       </div>
 
@@ -407,11 +407,11 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
     <SidebarFrame
       collapsed={collapsed}
       onToggle={onToggle}
-      icon={<HexLogo className="h-7 w-7" />}
+      icon={<HexLogo className="vds-h-7 vds-w-7" />}
       brand={
-        <div className="flex items-center gap-2.5">
-          <HexLogo className="h-7 w-7 flex-shrink-0" />
-          <span className="text-base font-semibold tracking-tight truncate">Veronex</span>
+        <div className="vds-flex vds-items-center vds-gap-2.5">
+          <HexLogo className="vds-h-7 vds-w-7 vds-flex-shrink-0" />
+          <span className="vds-text-base vds-font-600 vds-tracking-tight vds-truncate">Veronex</span>
         </div>
       }
       nav={navLinks}

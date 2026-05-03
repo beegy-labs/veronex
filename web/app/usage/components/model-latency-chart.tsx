@@ -32,8 +32,8 @@ export function ModelLatencyChart({ data }: { data: ModelBreakdown[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">{t('usage.modelLatencyChart')}</CardTitle>
-        <p className="text-xs text-muted-foreground">{t('usage.avgLatency')} per model (ms)</p>
+        <CardTitle className="vds-text-base">{t('usage.modelLatencyChart')}</CardTitle>
+        <p className="vds-text-xs vds-text-dim">{t('usage.avgLatency')} per model (ms)</p>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={Math.max(140, chartData.length * 34)}>

@@ -58,15 +58,15 @@ Radix-based, unstyled. All use `--theme-*` CSS tokens.
 
 ### Design Tokens (`web/lib/design-tokens.ts`)
 
-Single source for all programmatic color references (charts, dynamic styles).
-CSS custom properties defined in `web/app/tokens.css`.
+Single source for all programmatic color references (charts, dynamic styles, SVG fills).
+CSS custom properties defined in `web/app/styles/vds/theme-veronex.css` (Verde Nexus override on top of verodesign).
 
 ### Extraction Guide
 
 To extract shared components into a separate package:
 1. Move `web/components/ui/` → `packages/ui/`
 2. Move domain components (StatusPill, DataTable, TimeRangeSelector, etc.) → `packages/veronex-ui/`
-3. Keep `web/lib/design-tokens.ts` and `web/app/tokens.css` in the UI package
+3. Keep `web/lib/design-tokens.ts` + `web/app/styles/vds/theme-veronex.css` + `web/lib/vds-merge.ts` in the UI package
 4. Import via workspace alias: `@veronex/ui`
 
 ---

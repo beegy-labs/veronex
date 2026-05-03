@@ -84,40 +84,40 @@ export const ApiTestConversation = memo(function ApiTestConversation({
 
   return (
     <div
-      className={`border border-border rounded-md overflow-hidden flex flex-col h-[520px]${isDragging ? ' ring-2 ring-ring ring-offset-2' : ''}`}
+      className={`vds-border-1 vds-border-subtle vds-rounded-md vds-overflow-hidden vds-flex vds-flex-col vds-h-[520px]${isDragging ? ' vds-ring-2 vds-ring-focus vds-ring-offset-2' : ''}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       {/* Session tab strip */}
-      <div className="flex items-center gap-0 border-b border-border bg-muted/20 overflow-x-auto">
+      <div className="vds-flex vds-items-center vds-gap-0 vds-border-b-1 vds-border-subtle vds-bg-muted/20 vds-overflow-x-auto">
         {sessions.map((s) => (
           <div
             key={s.id}
             role="button"
             tabIndex={0}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium cursor-pointer select-none transition-colors shrink-0 border-r border-border ${
-              s.id === activeSessionId
-                ? 'bg-card text-foreground'
-                : 'text-muted-foreground hover:text-foreground hover:bg-muted/50'
-            }`}
+            className={`vds-flex vds-items-center vds-gap-1.5 vds-px-3 vds-py-1.5 vds-text-xs vds-font-500 vds-cursor-pointer vds-select-none vds-transition-colors vds-flex-shrink-0 vds-border-r-1 vds-border-subtle ${
+ s.id === activeSessionId
+ ? 'vds-bg-card vds-text-primary'
+ : 'vds-text-dim vds-hover:text-primary vds-hover:bg-hover/50'
+ }`}
             onClick={() => onSelectSession(s.id)}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectSession(s.id) } }}
           >
             {s.status === 'streaming' && (
-              <span className="h-1.5 w-1.5 rounded-full bg-status-info-fg animate-pulse shrink-0" />
+              <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-info-bg-fg vds-animate-pulse vds-flex-shrink-0" />
             )}
             {s.status === 'error' && (
-              <span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />
+              <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-error vds-flex-shrink-0" />
             )}
-            <span className="max-w-[120px] truncate">{sessionLabel(s)}</span>
+            <span className="vds-max-w-[120px] vds-truncate">{sessionLabel(s)}</span>
             <button
               type="button"
               aria-label={t('common.close')}
-              className="ml-0.5 rounded hover:bg-destructive/20 hover:text-destructive p-0.5 -mr-1"
+              className="vds-ml-0.5 vds-rounded vds-hover:bg-destructive/20 vds-hover:text-destructive vds-p-0.5 vds--mr-1"
               onClick={(e) => { e.stopPropagation(); onCloseSession(s.id) }}
             >
-              <X className="h-3 w-3" />
+              <X className="vds-h-3 vds-w-3" />
             </button>
           </div>
         ))}
@@ -125,35 +125,35 @@ export const ApiTestConversation = memo(function ApiTestConversation({
           <button
             type="button"
             onClick={onNewSession}
-            className="flex items-center gap-1 px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors shrink-0"
+            className="vds-flex vds-items-center vds-gap-1 vds-px-2 vds-py-1.5 vds-text-xs vds-text-dim vds-hover:text-primary vds-transition-colors vds-flex-shrink-0"
             aria-label={t('test.newSession')}
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="vds-h-3.5 vds-w-3.5" />
           </button>
         )}
         {/* Spacer + turn count + stop/clear on active session */}
         {activeSessionId !== null && hasContent && (
-          <div className="flex items-center gap-1 ml-auto px-2 shrink-0">
+          <div className="vds-flex vds-items-center vds-gap-1 vds-ml-auto vds-px-2 vds-flex-shrink-0">
             {activeSession?.conversationId && (
               <span
-                className="font-mono text-xs text-muted-foreground/60 select-all cursor-text"
+                className="vds-font-mono vds-text-xs vds-text-dim/60 vds-select-all vds-cursor-text"
                 title="conversation_id"
               >
                 {activeSession.conversationId}
               </span>
             )}
-            <span className="text-xs text-muted-foreground">{turnCount} {t('test.turns')}</span>
+            <span className="vds-text-xs vds-text-dim">{turnCount} {t('test.turns')}</span>
             {status === 'streaming' && (
               <Button type="button" variant="ghost" size="sm" onClick={onStop}
-                className="h-6 text-xs text-muted-foreground hover:text-foreground">
-                <Square className="h-3 w-3 mr-1" fill="currentColor" />
+                className="vds-h-6 vds-text-xs vds-text-dim vds-hover:text-primary">
+                <Square className="vds-h-3 vds-w-3 vds-mr-1" fill="currentColor" />
                 {t('test.stop')}
               </Button>
             )}
             <Button type="button" variant="ghost" size="sm" onClick={onClear}
               disabled={status === 'streaming'}
-              className="h-6 text-xs text-muted-foreground hover:text-destructive">
-              <Trash2 className="h-3 w-3 mr-1" />
+              className="vds-h-6 vds-text-xs vds-text-dim vds-hover:text-destructive">
+              <Trash2 className="vds-h-3 vds-w-3 vds-mr-1" />
               {t('test.clearConversation')}
             </Button>
           </div>
@@ -162,10 +162,10 @@ export const ApiTestConversation = memo(function ApiTestConversation({
 
       {/* Empty state */}
       {isEmpty && (
-        <div className="flex-1 flex flex-col items-center justify-center py-8 text-muted-foreground text-sm gap-2">
+        <div className="vds-flex-1 vds-flex vds-flex-col vds-items-center vds-justify-center vds-py-8 vds-text-dim vds-text-sm vds-gap-2">
           <p>{t('test.noSessions')}</p>
           <Button type="button" variant="outline" size="sm" onClick={onNewSession}>
-            <Plus className="h-3.5 w-3.5 mr-1" />
+            <Plus className="vds-h-3.5 vds-w-3.5 vds-mr-1" />
             {t('test.newSession')}
           </Button>
         </div>
@@ -173,144 +173,144 @@ export const ApiTestConversation = memo(function ApiTestConversation({
 
       {/* Message thread */}
       {!isEmpty && (
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-3 space-y-3 min-h-0">
+        <div ref={scrollRef} className="vds-flex-1 vds-overflow-y-auto vds-p-3 vds-space-y-3 vds-min-h-0">
           {messages.map((msg, i) =>
             msg.role === 'system' ? (
-              <div key={`msg-${i}-system`} className="flex items-center gap-2 py-1">
-                <div className="flex-1 h-px bg-border/60" />
-                <span className="text-[11px] text-muted-foreground/70 shrink-0">{msg.content}</span>
-                <div className="flex-1 h-px bg-border/60" />
+              <div key={`msg-${i}-system`} className="vds-flex vds-items-center vds-gap-2 vds-py-1">
+                <div className="vds-flex-1 vds-h-px vds-bg-border-subtle/60" />
+                <span className="vds-text-2xs vds-text-dim/70 vds-flex-shrink-0">{msg.content}</span>
+                <div className="vds-flex-1 vds-h-px vds-bg-border-subtle/60" />
               </div>
             ) : msg.role === 'user' ? (
-              <div key={`msg-${i}-user`} className="flex justify-end">
-                <div className="max-w-[80%] rounded-2xl rounded-tr-sm px-3 py-2 bg-primary text-primary-foreground text-sm">
+              <div key={`msg-${i}-user`} className="vds-flex vds-justify-end">
+                <div className="vds-max-w-[80%] vds-rounded-2xl vds-rounded-tr-sm vds-px-3 vds-py-2 vds-bg-primary vds-text-primary-fg vds-text-sm">
                   {msg.images && msg.images.length > 0 && (
-                    <div className="flex gap-1 mb-2 flex-wrap">
+                    <div className="vds-flex vds-gap-1 vds-mb-2 vds-flex-wrap">
                       {msg.images.map((b64, j) => (
                         // eslint-disable-next-line @next/next/no-img-element
-                        <img key={b64.slice(0, 16)} src={`data:image/jpeg;base64,${b64}`} alt="" className="h-12 w-12 rounded object-cover" />
+                        <img key={b64.slice(0, 16)} src={`data:image/jpeg;base64,${b64}`} alt="" className="vds-h-12 vds-w-12 vds-rounded vds-object-cover" />
                       ))}
                     </div>
                   )}
-                  <span className="whitespace-pre-wrap break-words">{msg.content}</span>
+                  <span className="vds-whitespace-pre-wrap vds-break-words">{msg.content}</span>
                 </div>
               </div>
             ) : (
-              <div key={`msg-${i}-assistant`} className="flex justify-start">
-                <div className="max-w-[80%] relative group/msg">
+              <div key={`msg-${i}-assistant`} className="vds-flex vds-justify-start">
+                <div className="vds-max-w-[80%] vds-relative vds-group">
                   {msg.model && (
-                    <div className="mb-1 px-1">
-                      <span className="text-xs text-muted-foreground/60 font-mono">{msg.model}</span>
+                    <div className="vds-mb-1 vds-px-1">
+                      <span className="vds-text-xs vds-text-dim/60 vds-font-mono">{msg.model}</span>
                     </div>
                   )}
-                  <div className="rounded-2xl rounded-tl-sm px-3 py-2 bg-muted text-foreground text-sm font-mono leading-relaxed">
+                  <div className="vds-rounded-2xl vds-rounded-tl-sm vds-px-3 vds-py-2 vds-bg-muted vds-text-primary vds-text-sm vds-font-mono vds-leading-relaxed">
                     {msg.content
                       ? renderWithMermaid(msg.content, false)
                       : msg.hasMcpTools
-                        ? <span className="text-xs text-muted-foreground/70 italic">{t('test.toolOnlyTurn')}</span>
+                        ? <span className="vds-text-xs vds-text-dim/70 vds-italic">{t('test.toolOnlyTurn')}</span>
                         : renderWithMermaid(msg.content, false)}
                   </div>
                   {/* SDD §3 Tier B — show the model's emitted tool_calls
-                      inline (S3 TurnRecord-sourced, populated after the SSE
-                      stream completes). Renders even when content is empty,
-                      so tool-only turns are no longer "결과 없음". */}
-                  {msg.toolCalls && msg.toolCalls.length > 0 && (
-                    <div className="mt-1.5 space-y-1">
-                      {msg.toolCalls.map((tc, j) => (
-                        <div key={`tc-${j}-${tc.name}`} className="rounded border border-border/60 bg-background px-2 py-1.5">
-                          <div className="flex items-center gap-1.5">
-                            <Wrench className="h-3 w-3 text-status-info-fg shrink-0" />
-                            <code className="text-[11px] font-mono font-semibold text-status-info-fg break-all">{tc.name}</code>
-                          </div>
-                          {tc.arguments != null && (
-                            <pre className="text-[10px] font-mono text-foreground/60 mt-1 whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
-                              {typeof tc.arguments === 'string' ? tc.arguments : JSON.stringify(tc.arguments, null, 2)}
-                            </pre>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {/* PG audit (latency / cache_hit / outcome). Lazy — user
-                      clicks to expand. Key off jobId being a real persisted
-                      job_id (resolved from S3 turn list, not chunk.id). */}
-                  {msg.jobId && msg.hasMcpTools && activeSession?.conversationId && (
-                    <div className="mt-1 px-1">
-                      <TurnInternals
-                        convId={activeSession.conversationId}
-                        jobId={msg.jobId}
-                      />
-                    </div>
-                  )}
-                  <div className="absolute top-1 right-1 opacity-0 group-hover/msg:opacity-100 transition-opacity">
-                    <CopyButton text={msg.content} />
-                  </div>
-                </div>
-              </div>
-            )
-          )}
+ vds-inline (S3 TurnRecord-sourced, populated after the SSE
+ stream completes). Renders even when content is empty,
+ so tool-only turns are no longer "결과 없음". */}
+ {msg.toolCalls && msg.toolCalls.length > 0 && (
+ <div className="vds-mt-1.5 vds-space-y-1">
+ {msg.toolCalls.map((tc, j) => (
+ <div key={`tc-${j}-${tc.name}`} className="vds-rounded vds-border-1 vds-border-subtle/60 vds-bg-page vds-px-2 vds-py-1.5">
+ <div className="vds-flex vds-items-center vds-gap-1.5">
+ <Wrench className="vds-h-3 vds-w-3 vds-text-info vds-flex-shrink-0" />
+ <code className="vds-text-2xs vds-font-mono vds-font-600 vds-text-info vds-break-all">{tc.name}</code>
+ </div>
+ {tc.arguments != null && (
+ <pre className="vds-text-[10px] vds-font-mono vds-text-primary/60 vds-mt-1 vds-whitespace-pre-wrap vds-break-words vds-max-h-24 vds-overflow-y-auto">
+ {typeof tc.arguments ==='string'? tc.arguments : JSON.stringify(tc.arguments, null, 2)}
+ </pre>
+ )}
+ </div>
+ ))}
+ </div>
+ )}
+ {/* PG audit (latency / cache_hit / outcome). Lazy — user
+ clicks to expand. Key off jobId being a real persisted
+ job_id (resolved from S3 turn list, not chunk.id). */}
+ {msg.jobId && msg.hasMcpTools && activeSession?.conversationId && (
+ <div className="vds-mt-1 vds-px-1">
+ <TurnInternals
+ convId={activeSession.conversationId}
+ jobId={msg.jobId}
+ />
+ </div>
+ )}
+ <div className="vds-absolute vds-top-1 vds-right-1 vds-opacity-0 vds-group-hover:opacity-100 vds-transition-opacity">
+ <CopyButton text={msg.content} />
+ </div>
+ </div>
+ </div>
+ )
+ )}
 
-          {status === 'streaming' && (
-            <div className="flex justify-start">
-              <div className="max-w-[80%] rounded-2xl rounded-tl-sm px-3 py-2 bg-muted text-foreground text-sm font-mono leading-relaxed">
-                {streamingText
-                  ? renderWithMermaid(streamingText, true)
-                  : (
-                    <span className="inline-flex flex-col gap-1">
-                      <span className="inline-flex gap-1 items-center text-muted-foreground">
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '0ms' }} />
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '150ms' }} />
-                        <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground animate-bounce" style={{ animationDelay: '300ms' }} />
-                      </span>
-                      {mcpToolCall && (
-                        <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground/70 font-mono">
-                          <Wrench className="h-3 w-3 shrink-0" />
-                          {mcpToolCall}
-                        </span>
-                      )}
-                    </span>
-                  )
-                }
-              </div>
-            </div>
-          )}
+ {status ==='streaming'&& (
+ <div className="vds-flex vds-justify-start">
+ <div className="vds-max-w-[80%] vds-rounded-2xl vds-rounded-tl-sm vds-px-3 vds-py-2 vds-bg-muted vds-text-primary vds-text-sm vds-font-mono vds-leading-relaxed">
+ {streamingText
+ ? renderWithMermaid(streamingText, true)
+ : (
+ <span className="vds-inline-flex vds-flex-col vds-gap-1">
+ <span className="vds-inline-flex vds-gap-1 vds-items-center vds-text-dim">
+ <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-neutral vds-animate-bounce" style={{ animationDelay:'0ms'}} />
+ <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-neutral vds-animate-bounce" style={{ animationDelay:'150ms'}} />
+ <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-neutral vds-animate-bounce" style={{ animationDelay:'300ms'}} />
+ </span>
+ {mcpToolCall && (
+ <span className="vds-inline-flex vds-items-center vds-gap-1 vds-text-2xs vds-text-dim/70 vds-font-mono">
+ <Wrench className="vds-h-3 vds-w-3 vds-flex-shrink-0" />
+ {mcpToolCall}
+ </span>
+ )}
+ </span>
+ )
+ }
+ </div>
+ </div>
+ )}
 
-          {status === 'error' && (
-            <div className="rounded-md border border-status-error/30 bg-status-error/5 px-3 py-2 text-sm text-status-error-fg">
-              {errorMsg}
-            </div>
-          )}
+ {status ==='error'&& (
+ <div className="vds-rounded-md vds-border-1 vds-border-error/30 vds-bg-error/5 vds-px-3 vds-py-2 vds-text-sm vds-text-error">
+ {errorMsg}
+ </div>
+ )}
 
-        </div>
-      )}
+ </div>
+ )}
 
-      {/* Input area — hidden when no sessions */}
-      {!isEmpty && (
-        <div className="px-4 pt-3 pb-3 border-t border-border shrink-0">
-          {/* Image thumbnails above input */}
-          {images.length > 0 && (
-            <div className="flex flex-wrap gap-2 mb-2">
-              {images.map((b64, i) => (
-                <div key={b64.slice(0, 16)} className="relative group">
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={`data:image/jpeg;base64,${b64}`}
-                    alt={`image-${i + 1}`}
-                    className="h-12 w-12 rounded-md object-cover border border-border"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onImageRemove(i)}
-                    aria-label={t('test.imageRemove')}
-                    className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
-                  >
-                    <X className="h-2.5 w-2.5" />
-                  </button>
-                </div>
-              ))}
-              {isCompressing && (
-                <div className="flex h-12 w-12 items-center justify-center rounded-md border border-dashed border-border">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
+ {/* Input area — vds-hidden when no sessions */}
+ {!isEmpty && (
+ <div className="vds-px-4 vds-pt-3 vds-pb-3 vds-border-t-1 vds-border-subtle vds-flex-shrink-0">
+ {/* Image thumbnails above input */}
+ {images.length > 0 && (
+ <div className="vds-flex vds-flex-wrap vds-gap-2 vds-mb-2">
+ {images.map((b64, i) => (
+ <div key={b64.slice(0, 16)} className="vds-relative vds-group">
+ {/* eslint-disable-next-line @next/next/no-img-element */}
+ <img
+ src={`data:image/jpeg;base64,${b64}`}
+ alt={`image-${i + 1}`}
+ className="vds-h-12 vds-w-12 vds-rounded-md vds-object-cover vds-border-1 vds-border-default"
+ />
+ <button
+ type="button"
+ onClick={() => onImageRemove(i)}
+ aria-label={t('test.imageRemove')}
+ className="vds-absolute vds--top-1.5 vds--right-1.5 vds-hidden vds-group-hover:flex vds-h-4 vds-w-4 vds-items-center vds-justify-center vds-rounded-full vds-bg-destructive vds-text-destructive-fg"
+ >
+ <X className="vds-h-2.5 vds-w-2.5" />
+ </button>
+ </div>
+ ))}
+ {isCompressing && (
+ <div className="vds-flex vds-h-12 vds-w-12 vds-items-center vds-justify-center vds-rounded-md vds-border-1 vds-border-dashed vds-border-default">
+ <Loader2 className="vds-h-5 vds-w-5 vds-animate-spin vds-text-dim" aria-label={t('test.imageCompressing')} />
                 </div>
               )}
             </div>
@@ -323,19 +323,19 @@ export const ApiTestConversation = memo(function ApiTestConversation({
             rows={3}
             placeholder={t('test.promptPlaceholder')}
             disabled={status === 'streaming'}
-            className="w-full rounded-md border-0 bg-transparent px-0 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none disabled:cursor-not-allowed disabled:opacity-50 resize-none"
-          />
-          {/* Gmail-style bottom toolbar */}
-          <div className="flex items-center gap-2 pt-2 border-t border-border/50">
-            <Button
-              type="button"
-              onClick={onRun}
-              disabled={!canRun}
-              className="rounded-full px-5 h-8 text-sm font-medium"
-              aria-label={t('test.run')}
-            >
-              <Send className="h-3.5 w-3.5 mr-1.5" />
-              {t('test.run')}
+ className="vds-w-full vds-rounded-md vds-border-0 vds-bg-transparent vds-px-0 vds-py-1 vds-text-sm vds-placeholder:text-dim vds-focus-visible:outline-none vds-disabled:cursor-not-allowed vds-disabled:opacity-50 vds-resize-none"
+ />
+ {/* Gmail-style bottom toolbar */}
+ <div className="vds-flex vds-items-center vds-gap-2 vds-pt-2 vds-border-t-1 vds-border-subtle/50">
+ <Button
+ type="button"
+ onClick={onRun}
+ disabled={!canRun}
+ className="vds-rounded-full vds-px-5 vds-h-8 vds-text-sm vds-font-medium"
+ aria-label={t('test.run')}
+ >
+ <Send className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
+ {t('test.run')}
             </Button>
             {!isGeminiProvider && (
               <ImageAttachButton
@@ -351,13 +351,13 @@ export const ApiTestConversation = memo(function ApiTestConversation({
                 size="sm"
                 onClick={() => onUseMcpChange(!useMcp)}
                 title={useMcp ? t('test.mcpDisable') : t('test.mcpEnable')}
-                className={`h-8 px-2 text-xs gap-1 ${useMcp ? 'text-muted-foreground hover:text-foreground' : 'text-muted-foreground/40 hover:text-muted-foreground'}`}
-              >
-                <Wrench className="h-3.5 w-3.5" />
-                {t('test.mcp')}
+ className={`vds-h-8 vds-px-2 vds-text-xs vds-gap-1 ${useMcp ? 'vds-text-dim vds-hover:text-primary' : 'vds-text-dim/40 vds-hover:text-dim'}`}
+ >
+ <Wrench className="vds-h-3.5 vds-w-3.5" />
+ {t('test.mcp')}
               </Button>
             )}
-            <span className="ml-auto text-xs text-muted-foreground/50">⌘↵</span>
+            <span className="vds-ml-auto vds-text-xs vds-text-dim/50">⌘↵</span>
           </div>
         </div>
       )}

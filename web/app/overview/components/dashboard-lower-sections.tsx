@@ -31,7 +31,7 @@ export function RequestTrendSection({ trendData }: {
     <Card>
       <CardHeader>
         <CardTitle>{t('overview.requestTrend')}</CardTitle>
-        <p className="text-xs text-muted-foreground">{t('overview.last24h')}</p>
+        <p className="vds-text-xs vds-text-dim">{t('overview.last24h')}</p>
       </CardHeader>
       <CardContent>
         <ResponsiveContainer width="100%" height={220}>
@@ -72,19 +72,19 @@ export function TopModelsSection({ modelBarData, geminiEnabled }: {
   return (
     <Card>
       <CardHeader>
-        <div className="flex items-center justify-between flex-wrap gap-2">
+        <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-2">
           <div>
             <CardTitle>{t('overview.topModels')}</CardTitle>
-            <p className="text-xs text-muted-foreground mt-0.5">{t('overview.last24h')}</p>
+            <p className="vds-text-xs vds-text-dim vds-mt-0.5">{t('overview.last24h')}</p>
           </div>
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1.5">
-              <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: tokens.brand.primary }} />
+          <div className="vds-flex vds-items-center vds-gap-3 vds-text-xs vds-text-dim">
+            <span className="vds-flex vds-items-center vds-gap-1.5">
+              <span className="vds-h-2.5 vds-w-2.5 vds-rounded-sm vds-inline-block" style={{ background: tokens.brand.primary }} />
               {t('nav.ollama')}
             </span>
             {geminiEnabled && (
-              <span className="flex items-center gap-1.5">
-                <span className="h-2.5 w-2.5 rounded-sm inline-block" style={{ background: tokens.status.info }} />
+              <span className="vds-flex vds-items-center vds-gap-1.5">
+                <span className="vds-h-2.5 vds-w-2.5 vds-rounded-sm vds-inline-block" style={{ background: tokens.status.info }} />
                 {t('nav.gemini')}
               </span>
             )}
@@ -128,40 +128,40 @@ export function RecentJobsSection({ recentJobs, tz }: {
 
   return (
     <Card>
-      <CardHeader className="flex flex-row items-center justify-between pb-3">
-        <CardTitle className="text-base">{t('overview.recentJobs')}</CardTitle>
-        <Link href="/jobs" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-          {t('overview.viewAllJobs')} <ArrowRight className="h-3 w-3" />
+      <CardHeader className="vds-flex vds-flex-row vds-items-center vds-justify-between vds-pb-3">
+        <CardTitle className="vds-text-base">{t('overview.recentJobs')}</CardTitle>
+        <Link href="/jobs" className="vds-text-xs vds-text-dim vds-hover:text-primary vds-flex vds-items-center vds-gap-1 vds-transition-colors">
+          {t('overview.viewAllJobs')} <ArrowRight className="vds-h-3 vds-w-3" />
         </Link>
       </CardHeader>
       {recentJobs.length === 0 ? (
-        <CardContent className="pb-6 text-center text-sm text-muted-foreground">
+        <CardContent className="vds-pb-6 vds-text-center vds-text-sm vds-text-dim">
           {t('jobs.noJobs')}
         </CardContent>
       ) : (
-        <div className="overflow-x-auto">
-          <Table style={{ minWidth: '560px' }} className="text-sm">
+        <div className="vds-overflow-x-auto">
+          <Table style={{ minWidth: '560px' }} className="vds-text-sm">
             <TableHeader>
-              <TableRow className="border-b border-border">
-                <TableHead className="h-11 px-4 pl-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.model')}</TableHead>
-                <TableHead className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.provider')}</TableHead>
-                <TableHead className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.status')}</TableHead>
-                <TableHead className="h-11 px-4 text-left text-xs font-medium text-muted-foreground">{t('jobs.latency')}</TableHead>
-                <TableHead className="h-11 px-4 pr-6 text-left text-xs font-medium text-muted-foreground">{t('jobs.createdAt')}</TableHead>
+              <TableRow className="vds-border-b-1 vds-border-subtle">
+                <TableHead className="vds-h-11 vds-px-4 vds-pl-6 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.model')}</TableHead>
+                <TableHead className="vds-h-11 vds-px-4 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.provider')}</TableHead>
+                <TableHead className="vds-h-11 vds-px-4 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.status')}</TableHead>
+                <TableHead className="vds-h-11 vds-px-4 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.latency')}</TableHead>
+                <TableHead className="vds-h-11 vds-px-4 vds-pr-6 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.createdAt')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {recentJobs.map((job) => (
-                <TableRow key={job.id} className="border-b border-border last:border-0">
-                  <TableCell className="py-3 px-4 pl-6 font-mono text-xs max-w-[180px] truncate">{job.model_name}</TableCell>
-                  <TableCell className="py-3 px-4 text-xs text-muted-foreground max-w-[120px] truncate">{job.provider_type}</TableCell>
-                  <TableCell className="py-3 px-4">
-                    <Badge variant="outline" className={`text-xs ${STATUS_STYLES[job.status] ?? 'bg-muted/20 text-muted-foreground border-muted/30'}`}>
+                <TableRow key={job.id} className="vds-border-b-1 vds-border-subtle last:border-0">
+                  <TableCell className="vds-py-3 vds-px-4 vds-pl-6 vds-font-mono vds-text-xs vds-max-w-[180px] vds-truncate">{job.model_name}</TableCell>
+                  <TableCell className="vds-py-3 vds-px-4 vds-text-xs vds-text-dim vds-max-w-[120px] vds-truncate">{job.provider_type}</TableCell>
+                  <TableCell className="vds-py-3 vds-px-4">
+                    <Badge variant="outline" className={`vds-text-xs ${STATUS_STYLES[job.status] ?? 'vds-bg-muted/20 vds-text-dim vds-border-muted/30'}`}>
                       {t(`jobs.statuses.${job.status}` as Parameters<typeof t>[0])}
                     </Badge>
                   </TableCell>
-                  <TableCell className="py-3 px-4 text-xs tabular-nums">{fmtMsNullable(job.latency_ms)}</TableCell>
-                  <TableCell className="py-3 px-4 pr-6 text-xs text-muted-foreground whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</TableCell>
+                  <TableCell className="vds-py-3 vds-px-4 vds-text-xs vds-tabular-nums">{fmtMsNullable(job.latency_ms)}</TableCell>
+                  <TableCell className="vds-py-3 vds-px-4 vds-pr-6 vds-text-xs vds-text-dim vds-whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</TableCell>
                 </TableRow>
               ))}
             </TableBody>
@@ -178,27 +178,27 @@ export function TokenSummarySection({ usage }: { usage: UsageAggregate | undefin
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">{t('overview.tokenSummary')}</CardTitle>
-        <p className="text-xs text-muted-foreground">{t('overview.last24h')}</p>
+      <CardHeader className="vds-pb-2">
+        <CardTitle className="vds-text-base">{t('overview.tokenSummary')}</CardTitle>
+        <p className="vds-text-xs vds-text-dim">{t('overview.last24h')}</p>
       </CardHeader>
-      <CardContent className="pt-0">
+      <CardContent className="vds-pt-0">
         {usage ? (
           <>
-            <p className="text-3xl font-bold tabular-nums flex items-baseline gap-1">
+            <p className="vds-text-3xl vds-font-700 vds-tabular-nums vds-flex vds-items-baseline vds-gap-1">
               {fmtCompact(usage.total_tokens)}
-              <span className="text-sm font-normal text-muted-foreground">{t('common.tokensUnit')}</span>
+              <span className="vds-text-sm vds-font-400 vds-text-dim">{t('common.tokensUnit')}</span>
             </p>
-            <p className="text-xs text-muted-foreground mt-1">
+            <p className="vds-text-xs vds-text-dim vds-mt-1">
               {t('usage.promptTokens')} {fmtCompact(usage.prompt_tokens)} · {t('usage.completionTokens')} {fmtCompact(usage.completion_tokens)}
             </p>
           </>
         ) : (
-          <p className="text-sm text-muted-foreground">{t('overview.analyticsOffline')}</p>
+          <p className="vds-text-sm vds-text-dim">{t('overview.analyticsOffline')}</p>
         )}
-        <div className="mt-3 pt-2 border-t border-border">
-          <Link href="/usage" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-            {t('overview.goToUsage')} <ArrowRight className="h-3 w-3" />
+        <div className="vds-mt-3 vds-pt-2 vds-border-t-1 vds-border-subtle">
+          <Link href="/usage" className="vds-text-xs vds-text-dim vds-hover:text-primary vds-flex vds-items-center vds-gap-1 vds-transition-colors">
+            {t('overview.goToUsage')} <ArrowRight className="vds-h-3 vds-w-3" />
           </Link>
         </div>
       </CardContent>

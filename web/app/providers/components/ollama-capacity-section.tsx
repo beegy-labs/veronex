@@ -27,31 +27,31 @@ import { ProgressBar } from '@/components/progress-bar'
 export const ThermalBadge = memo(function ThermalBadge({ state }: { state: 'normal' | 'soft' | 'hard' }) {
   const { t } = useTranslation()
   if (state === 'hard') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-error/15 text-status-error-fg border border-status-error/30">
-      <AlertTriangle className="h-2.5 w-2.5" />{t('providers.capacity.thermal.hard')}
+    <span className="vds-inline-flex vds-items-center vds-gap-1 vds-px-2 vds-py-0.5 vds-rounded-full vds-text-[10px] vds-font-600 vds-bg-error/15 vds-text-error vds-border-1 vds-border-error/30">
+      <AlertTriangle className="vds-h-2.5 vds-w-2.5" />{t('providers.capacity.thermal.hard')}
     </span>
   )
   if (state === 'soft') return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-warning/15 text-status-warning-fg border border-status-warning/30">
-      <AlertTriangle className="h-2.5 w-2.5" />{t('providers.capacity.thermal.soft')}
+    <span className="vds-inline-flex vds-items-center vds-gap-1 vds-px-2 vds-py-0.5 vds-rounded-full vds-text-[10px] vds-font-600 vds-bg-warning/15 vds-text-warning vds-border-1 vds-border-warning/30">
+      <AlertTriangle className="vds-h-2.5 vds-w-2.5" />{t('providers.capacity.thermal.soft')}
     </span>
   )
   return (
-    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-status-success/10 text-status-success-fg border border-status-success/30">
-      <span className="h-1.5 w-1.5 rounded-full bg-status-success" />{t('providers.capacity.thermal.normal')}
+    <span className="vds-inline-flex vds-items-center vds-gap-1 vds-px-2 vds-py-0.5 vds-rounded-full vds-text-[10px] vds-font-600 vds-bg-success/10 vds-text-success vds-border-1 vds-border-success/30">
+      <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success" />{t('providers.capacity.thermal.normal')}
     </span>
   )
 })
 
 export const VramBar = memo(function VramBar({ used, total }: { used: number; total: number }) {
   const { t } = useTranslation()
-  if (total === 0) return <span className="text-xs text-muted-foreground italic">{t('common.na')}</span>
+  if (total === 0) return <span className="vds-text-xs vds-text-dim vds-italic">{t('common.na')}</span>
   const pct = Math.min(100, calcPercentage(used, total))
-  const color = pct > RESOURCE_CRITICAL ? 'bg-status-error' : pct > RESOURCE_WARNING ? 'bg-status-warning' : 'bg-status-success'
+  const color = pct > RESOURCE_CRITICAL ? 'vds-bg-error' : pct > RESOURCE_WARNING ? 'vds-bg-warning' : 'vds-bg-success'
   return (
-    <div className="flex items-center gap-2 min-w-24">
-      <ProgressBar pct={pct} height="h-1.5" colorClass={color} trackClass="bg-muted/60" className="flex-1" />
-      <span className="text-[11px] text-muted-foreground tabular-nums shrink-0">{pct}%</span>
+    <div className="vds-flex vds-items-center vds-gap-2 vds-min-w-24">
+      <ProgressBar pct={pct} height="vds-h-1.5" colorClass={color} trackClass="vds-bg-muted/60" className="vds-flex-1" />
+      <span className="vds-text-2xs vds-text-dim vds-tabular-nums vds-flex-shrink-0">{pct}%</span>
     </div>
   )
 })
@@ -71,31 +71,31 @@ const ProviderRow = memo(function ProviderRow({
   return (
     <React.Fragment>
       <TableRow
-        className="border-t border-border bg-muted/40 cursor-pointer hover:bg-muted/60 transition-colors"
+        className="vds-border-t-1 vds-border-subtle vds-bg-muted/40 vds-cursor-pointer vds-hover:bg-hover/60 vds-transition-colors"
         onClick={() => onToggle(provider.provider_id)}
       >
-        <TableCell colSpan={4} className="px-3 py-1.5">
-          <div className="flex items-center gap-2 min-w-0">
+        <TableCell colSpan={4} className="vds-px-3 vds-py-1.5">
+          <div className="vds-flex vds-items-center vds-gap-2 vds-min-w-0">
             {isCollapsed
-              ? <ChevronRight className="h-3 w-3 text-muted-foreground/50 shrink-0" />
-              : <ChevronDown className="h-3 w-3 text-muted-foreground/50 shrink-0" />
+              ? <ChevronRight className="vds-h-3 vds-w-3 vds-text-dim/50 vds-flex-shrink-0" />
+              : <ChevronDown className="vds-h-3 vds-w-3 vds-text-dim/50 vds-flex-shrink-0" />
             }
-            <Server className="h-3 w-3 text-muted-foreground/60 shrink-0" />
-            <span className="font-semibold text-sm text-text-bright truncate">{provider.provider_name}</span>
+            <Server className="vds-h-3 vds-w-3 vds-text-dim/60 vds-flex-shrink-0" />
+            <span className="vds-font-600 vds-text-sm vds-text-bright vds-truncate">{provider.provider_name}</span>
             <ThermalBadge state={provider.thermal_state} />
             {provider.temp_c !== null && (
-              <span className="text-[11px] text-muted-foreground">{fmtTemp(provider.temp_c)}</span>
+              <span className="vds-text-2xs vds-text-dim">{fmtTemp(provider.temp_c)}</span>
             )}
             {provider.loaded_models.length > 0 && (
-              <span className="text-[11px] text-muted-foreground/60 ml-0.5">
+              <span className="vds-text-2xs vds-text-dim/60 vds-ml-0.5">
                 ({provider.loaded_models.length})
               </span>
             )}
-            <div className="ml-auto flex items-center gap-2 shrink-0">
-              <span className="text-[11px] text-muted-foreground tabular-nums hidden sm:block">
+            <div className="vds-ml-auto vds-flex vds-items-center vds-gap-2 vds-flex-shrink-0">
+              <span className="vds-text-2xs vds-text-dim vds-tabular-nums vds-hidden vds-sm:block">
                 {fmtMbShort(provider.used_vram_mb)} / {fmtMbShort(provider.total_vram_mb)}
               </span>
-              <div className="w-20">
+              <div className="vds-w-20">
                 <VramBar used={provider.used_vram_mb} total={provider.total_vram_mb} />
               </div>
             </div>
@@ -105,34 +105,34 @@ const ProviderRow = memo(function ProviderRow({
       {!isCollapsed && (
         provider.loaded_models.length === 0 ? (
           <TableRow>
-            <TableCell colSpan={4} className="px-10 py-2 text-[11px] text-muted-foreground italic border-b border-border/30">
+            <TableCell colSpan={4} className="vds-px-10 vds-py-2 vds-text-2xs vds-text-dim vds-italic vds-border-b-1 vds-border-subtle/30">
               {t('providers.capacity.noData')}
             </TableCell>
           </TableRow>
         ) : provider.loaded_models.map((m) => (
           <React.Fragment key={`${provider.provider_id}:${m.model_name}`}>
-            <TableRow className="hover:bg-muted/15 transition-colors border-b border-border/30">
-              <TableCell className="px-10 py-2 font-mono font-medium text-text-bright">{m.model_name}</TableCell>
-              <TableCell className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.weight_mb)}</TableCell>
-              <TableCell className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</TableCell>
-              <TableCell className="px-3 py-2 text-center tabular-nums">
-                <span className={m.active_requests > 0 ? 'font-medium text-status-success-fg' : 'text-muted-foreground'}>
+            <TableRow className="vds-hover:bg-hover/15 vds-transition-colors vds-border-b-1 vds-border-subtle/30">
+              <TableCell className="vds-px-10 vds-py-2 vds-font-mono vds-font-500 vds-text-bright">{m.model_name}</TableCell>
+              <TableCell className="vds-px-3 vds-py-2 vds-text-right vds-font-mono vds-text-dim vds-tabular-nums">{fmtMbShort(m.weight_mb)}</TableCell>
+              <TableCell className="vds-px-3 vds-py-2 vds-text-right vds-font-mono vds-text-dim vds-tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</TableCell>
+              <TableCell className="vds-px-3 vds-py-2 vds-text-center vds-tabular-nums">
+                <span className={m.active_requests > 0 ? 'vds-font-500 vds-text-success' : 'vds-text-dim'}>
                   {m.active_requests}
                 </span>
                 {m.max_concurrent > 0 && (
-                  <span className="text-muted-foreground/50">/{m.max_concurrent}</span>
+                  <span className="vds-text-dim/50">/{m.max_concurrent}</span>
                 )}
               </TableCell>
             </TableRow>
             {m.llm_concern && (
-              <TableRow className="bg-status-warning/5 border-b border-border/30">
-                <TableCell colSpan={4} className="px-10 py-1.5 text-[11px]">
-                  <span className="font-semibold text-status-warning-fg uppercase tracking-wide mr-1.5">
+              <TableRow className="vds-bg-warning/5 vds-border-b-1 vds-border-subtle/30">
+                <TableCell colSpan={4} className="vds-px-10 vds-py-1.5 vds-text-2xs">
+                  <span className="vds-font-600 vds-text-warning vds-uppercase vds-tracking-wide vds-mr-1.5">
                     {t('providers.capacity.concern')}
                   </span>
-                  <span className="text-muted-foreground">{m.llm_concern}</span>
+                  <span className="vds-text-dim">{m.llm_concern}</span>
                   {m.llm_reason && (
-                    <span className="text-muted-foreground/60 ml-1">— {m.llm_reason}</span>
+                    <span className="vds-text-dim/60 vds-ml-1">— {m.llm_reason}</span>
                   )}
                 </TableCell>
               </TableRow>
@@ -248,42 +248,42 @@ export function OllamaCapacitySection() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
 
       {/* ── 1. 분석기 설정 (상단) ──────────────────────────────────────────────── */}
       <Card>
-        <CardContent className="p-4 space-y-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <p className="text-sm font-medium">{t('providers.capacity.settings')}</p>
-            <div className="flex items-center gap-2">
+        <CardContent className="vds-p-4 vds-space-y-3">
+          <div className="vds-flex vds-items-center vds-justify-between vds-gap-2 vds-flex-wrap">
+            <p className="vds-text-sm vds-font-500">{t('providers.capacity.settings')}</p>
+            <div className="vds-flex vds-items-center vds-gap-2">
               {settings?.last_run_at && (
-                <span className="text-xs text-muted-foreground">
+                <span className="vds-text-xs vds-text-dim">
                   {t('providers.capacity.lastRun')}: {fmtRelativeTime(settings.last_run_at)}
                   {settings.last_run_status && (
-                    <span className={`ml-1 font-medium ${settings.last_run_status === 'ok' ? 'text-status-success-fg' : 'text-status-error-fg'}`}>
+                    <span className={`vds-ml-1 vds-font-500 ${settings.last_run_status === 'ok' ? 'vds-text-success' : 'vds-text-error'}`}>
                       · {settings.last_run_status === 'ok' ? t('providers.capacity.statusOk') : t('providers.capacity.statusError')}
                     </span>
                   )}
                 </span>
               )}
-              <Button size="sm" variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="gap-1.5 shrink-0">
-                <RefreshCw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              <Button size="sm" variant="outline" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="vds-gap-1.5 vds-flex-shrink-0">
+                <RefreshCw className={syncMutation.isPending ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
                 {syncMutation.isPending ? t('providers.capacity.syncing') : t('providers.capacity.syncNow')}
               </Button>
             </div>
           </div>
 
-          <div className="flex items-end gap-3 flex-wrap">
-            <div className="space-y-1 min-w-44">
-              <Label className="text-xs text-muted-foreground">{t('providers.capacity.analyzerModel')}</Label>
+          <div className="vds-flex vds-items-end vds-gap-3 vds-flex-wrap">
+            <div className="vds-space-y-1 vds-min-w-44">
+              <Label className="vds-text-xs vds-text-dim">{t('providers.capacity.analyzerModel')}</Label>
               <Select value={analyzerModel} onValueChange={setAnalyzerModel}>
-                <SelectTrigger className="h-8 text-sm">
+                <SelectTrigger className="vds-h-8 vds-text-sm">
                   <SelectValue placeholder={analyzerModel || '—'} />
                 </SelectTrigger>
                 <SelectContent>
                   {Object.entries(availableModels).map(([prov, models]) => (
                     <SelectGroup key={prov}>
-                      <SelectLabel className="text-[10px] uppercase tracking-wider text-muted-foreground/70">{prov}</SelectLabel>
+                      <SelectLabel className="vds-text-[10px] vds-uppercase vds-tracking-wider vds-text-dim/70">{prov}</SelectLabel>
                       {models.map((m) => (
                         <SelectItem key={`${prov}:${m}`} value={m}>{m}</SelectItem>
                       ))}
@@ -292,26 +292,26 @@ export function OllamaCapacitySection() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">{t('providers.capacity.interval')}</Label>
-              <Input type="number" min={60} className="h-8 text-sm w-24" value={intervalSecs}
+            <div className="vds-space-y-1">
+              <Label className="vds-text-xs vds-text-dim">{t('providers.capacity.interval')}</Label>
+              <Input type="number" min={60} className="vds-h-8 vds-text-sm vds-w-24" value={intervalSecs}
                 onChange={(e) => setIntervalSecs(e.target.value)} disabled={!syncEnabled} />
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">{t('providers.capacity.probePermits')}</Label>
-              <Input type="number" className="h-8 text-sm w-20" value={probePermits}
+            <div className="vds-space-y-1">
+              <Label className="vds-text-xs vds-text-dim">{t('providers.capacity.probePermits')}</Label>
+              <Input type="number" className="vds-h-8 vds-text-sm vds-w-20" value={probePermits}
                 onChange={(e) => setProbePermits(e.target.value)} />
             </div>
-            <div className="space-y-1">
-              <Label className="text-xs text-muted-foreground">{t('providers.capacity.probeRate')}</Label>
-              <Input type="number" min={0} className="h-8 text-sm w-20" value={probeRate}
+            <div className="vds-space-y-1">
+              <Label className="vds-text-xs vds-text-dim">{t('providers.capacity.probeRate')}</Label>
+              <Input type="number" min={0} className="vds-h-8 vds-text-sm vds-w-20" value={probeRate}
                 onChange={(e) => setProbeRate(e.target.value)} />
             </div>
-            <div className="flex items-center gap-2 pb-0.5">
+            <div className="vds-flex vds-items-center vds-gap-2 vds-pb-0.5">
               <Switch id="cap-auto" checked={syncEnabled} onCheckedChange={setSyncEnabled} />
-              <Label htmlFor="cap-auto" className="text-sm cursor-pointer">{t('providers.capacity.autoAnalysis')}</Label>
+              <Label htmlFor="cap-auto" className="vds-text-sm vds-cursor-pointer">{t('providers.capacity.autoAnalysis')}</Label>
             </div>
-            <Button size="sm" onClick={handleSave} disabled={saveMutation.isPending} className="pb-0.5">
+            <Button size="sm" onClick={handleSave} disabled={saveMutation.isPending} className="vds-pb-0.5">
               {saveMutation.isPending ? t('providers.capacity.saving') : t('common.save')}
             </Button>
           </div>
@@ -319,11 +319,11 @@ export function OllamaCapacitySection() {
       </Card>
 
       {/* ── 2. 툴바: 검색 + 요약 + 뷰 토글 ────────────────────────────────────── */}
-      <div className="flex items-center gap-3 flex-wrap">
-        <div className="relative flex-1 min-w-40 max-w-64">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+      <div className="vds-flex vds-items-center vds-gap-3 vds-flex-wrap">
+        <div className="vds-relative vds-flex-1 vds-min-w-40 vds-max-w-64">
+          <Search className="vds-absolute vds-left-2.5 vds-top-1/2 -translate-y-1/2 vds-h-3.5 vds-w-3.5 vds-text-dim vds-pointer-events-none" />
           <Input
-            className="h-8 text-sm pl-8"
+            className="vds-h-8 vds-text-sm vds-pl-8"
             placeholder={t('providers.capacity.searchProvider')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -331,50 +331,50 @@ export function OllamaCapacitySection() {
         </div>
 
         {!capacityLoading && (
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="flex items-center gap-1">
-              <Server className="h-3 w-3" />
-              <span className="font-medium text-foreground">{serverTotal}</span>
+          <div className="vds-flex vds-items-center vds-gap-3 vds-text-xs vds-text-dim">
+            <span className="vds-flex vds-items-center vds-gap-1">
+              <Server className="vds-h-3 vds-w-3" />
+              <span className="vds-font-500 vds-text-primary">{serverTotal}</span>
             </span>
             {totalActive > 0 && (
-              <span className="flex items-center gap-1 text-status-success-fg">
-                <Activity className="h-3 w-3" />
-                <span className="font-medium">{totalActive}</span>
+              <span className="vds-flex vds-items-center vds-gap-1 vds-text-success">
+                <Activity className="vds-h-3 vds-w-3" />
+                <span className="vds-font-500">{totalActive}</span>
               </span>
             )}
             {issueCount > 0 && (
-              <span className="flex items-center gap-1 text-status-error-fg">
-                <AlertTriangle className="h-3 w-3" />
-                <span className="font-medium">{issueCount}</span>
+              <span className="vds-flex vds-items-center vds-gap-1 vds-text-error">
+                <AlertTriangle className="vds-h-3 vds-w-3" />
+                <span className="vds-font-500">{issueCount}</span>
               </span>
             )}
           </div>
         )}
 
-        <div className="ml-auto flex items-center rounded-md border border-border overflow-hidden text-xs">
+        <div className="vds-ml-auto vds-flex vds-items-center vds-rounded-md vds-border-1 vds-border-subtle vds-overflow-hidden vds-text-xs">
           <button
-            className={`px-2.5 py-1.5 flex items-center gap-1 transition-colors ${viewMode === 'server' ? 'bg-muted text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`vds-px-2.5 vds-py-1.5 vds-flex vds-items-center vds-gap-1 vds-transition-colors ${viewMode === 'server' ? 'vds-bg-muted vds-text-primary vds-font-medium' : 'vds-text-dim vds-hover:text-primary'}`}
             onClick={() => setViewMode('server')}
           >
-            <Server className="h-3 w-3" />{t('providers.capacity.viewServer')}
+            <Server className="vds-h-3 vds-w-3" />{t('providers.capacity.viewServer')}
           </button>
           <button
-            className={`px-2.5 py-1.5 flex items-center gap-1 transition-colors border-l border-border ${viewMode === 'cluster' ? 'bg-muted text-foreground font-medium' : 'text-muted-foreground hover:text-foreground'}`}
+            className={`vds-px-2.5 vds-py-1.5 vds-flex vds-items-center vds-gap-1 vds-transition-colors vds-border-l-1 vds-border-subtle ${viewMode === 'cluster' ? 'vds-bg-muted vds-text-primary vds-font-medium' : 'vds-text-dim vds-hover:text-primary'}`}
             onClick={() => setViewMode('cluster')}
           >
-            <Layers className="h-3 w-3" />{t('providers.capacity.viewCluster')}
+            <Layers className="vds-h-3 vds-w-3" />{t('providers.capacity.viewCluster')}
           </button>
         </div>
       </div>
 
       {capacityLoading && (
-        <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+        <p className="vds-text-sm vds-text-dim vds-animate-pulse">{t('common.loading')}</p>
       )}
 
       {!capacityLoading && providers.length === 0 && (
-        <Card className="border-dashed">
-          <CardContent className="p-8 text-center text-sm text-muted-foreground">
-            <Activity className="h-8 w-8 mx-auto mb-2 opacity-25" />
+        <Card className="vds-border-dashed">
+          <CardContent className="vds-p-8 vds-text-center vds-text-sm vds-text-dim">
+            <Activity className="vds-h-8 vds-w-8 vds-mx-auto vds-mb-2 vds-opacity-25" />
             {t('providers.capacity.noData')}
           </CardContent>
         </Card>
@@ -383,28 +383,28 @@ export function OllamaCapacitySection() {
       {/* ── 3. 클러스터 뷰 ─────────────────────────────────────────────────────── */}
       {viewMode === 'cluster' && (
         <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table className="text-xs">
+          <CardContent className="vds-p-0">
+            <div className="vds-overflow-x-auto">
+              <Table className="vds-text-xs">
                 <TableHeader>
-                  <TableRow className="border-b border-border bg-muted/30">
-                    <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colWeight')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colKvPerReq')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground">{t('providers.capacity.colProviders')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-center font-medium text-muted-foreground">{t('providers.capacity.colActiveLimit')}</TableHead>
+                  <TableRow className="vds-border-b-1 vds-border-subtle vds-bg-muted/30">
+                    <TableHead className="vds-px-4 vds-py-2.5 vds-text-left vds-font-500 vds-text-dim">{t('providers.capacity.colModel')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim">{t('providers.capacity.colWeight')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim">{t('providers.capacity.colKvPerReq')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim">{t('providers.capacity.colProviders')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-center vds-font-500 vds-text-dim">{t('providers.capacity.colActiveLimit')}</TableHead>
                   </TableRow>
                 </TableHeader>
-                <TableBody className="divide-y divide-border">
+                <TableBody className="vds-divide-y vds-divide-border">
                   {(clusterData ?? []).length === 0 ? (
-                    <TableRow><TableCell colSpan={5} className="px-4 py-8 text-center text-muted-foreground italic">{t('providers.capacity.noData')}</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={5} className="vds-px-4 vds-py-8 vds-text-center vds-text-dim vds-italic">{t('providers.capacity.noData')}</TableCell></TableRow>
                   ) : (clusterData ?? []).map((m) => (
-                    <TableRow key={m.model_name} className="hover:bg-muted/20 transition-colors">
-                      <TableCell className="px-4 py-2.5 font-mono font-medium text-text-bright">{m.model_name}</TableCell>
-                      <TableCell className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.weight_mb)}</TableCell>
-                      <TableCell className="px-3 py-2.5 text-right font-mono text-muted-foreground tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</TableCell>
-                      <TableCell className="px-3 py-2.5 text-right tabular-nums text-muted-foreground">{m.provider_count}</TableCell>
-                      <TableCell className="px-3 py-2.5 text-center tabular-nums text-muted-foreground">
+                    <TableRow key={m.model_name} className="vds-hover:bg-hover/20 vds-transition-colors">
+                      <TableCell className="vds-px-4 vds-py-2.5 vds-font-mono vds-font-500 vds-text-bright">{m.model_name}</TableCell>
+                      <TableCell className="vds-px-3 vds-py-2.5 vds-text-right vds-font-mono vds-text-dim vds-tabular-nums">{fmtMbShort(m.weight_mb)}</TableCell>
+                      <TableCell className="vds-px-3 vds-py-2.5 vds-text-right vds-font-mono vds-text-dim vds-tabular-nums">{fmtMbShort(m.kv_per_request_mb)}</TableCell>
+                      <TableCell className="vds-px-3 vds-py-2.5 vds-text-right vds-tabular-nums vds-text-dim">{m.provider_count}</TableCell>
+                      <TableCell className="vds-px-3 vds-py-2.5 vds-text-center vds-tabular-nums vds-text-dim">
                         {m.total_active}{m.total_limit > 0 ? `/${m.total_limit}` : ''}
                       </TableCell>
                     </TableRow>
@@ -419,15 +419,15 @@ export function OllamaCapacitySection() {
       {/* ── 4. 서버 뷰 — flat table, 프로바이더 행 클릭으로 접기/펼치기 ───────── */}
       {viewMode === 'server' && providers.length > 0 && (
         <Card>
-          <CardContent className="p-0">
-            <div className="overflow-x-auto">
-              <Table className="text-xs">
+          <CardContent className="vds-p-0">
+            <div className="vds-overflow-x-auto">
+              <Table className="vds-text-xs">
                 <TableHeader>
-                  <TableRow className="border-b border-border bg-muted/30">
-                    <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground">{t('providers.capacity.colModel')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colWeight')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colKvPerReq')}</TableHead>
-                    <TableHead className="px-3 py-2.5 text-center font-medium text-muted-foreground whitespace-nowrap">{t('providers.capacity.colActiveLimit')}</TableHead>
+                  <TableRow className="vds-border-b-1 vds-border-subtle vds-bg-muted/30">
+                    <TableHead className="vds-px-4 vds-py-2.5 vds-text-left vds-font-500 vds-text-dim">{t('providers.capacity.colModel')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('providers.capacity.colWeight')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('providers.capacity.colKvPerReq')}</TableHead>
+                    <TableHead className="vds-px-3 vds-py-2.5 vds-text-center vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('providers.capacity.colActiveLimit')}</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -448,7 +448,7 @@ export function OllamaCapacitySection() {
 
       {/* ── 5. 페이지네이션 ────────────────────────────────────────────────────── */}
       {viewMode === 'server' && totalPages > 1 && (
-        <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <div className="vds-flex vds-items-center vds-justify-between vds-text-xs vds-text-dim">
           <span>
             {t('providers.capacity.showingProviders', {
               from: page * PROVIDERS_PAGE_SIZE + 1,
@@ -456,15 +456,15 @@ export function OllamaCapacitySection() {
               total: serverTotal,
             })}
           </span>
-          <div className="flex items-center gap-1">
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" disabled={page === 0}
+          <div className="vds-flex vds-items-center vds-gap-1">
+            <Button size="sm" variant="outline" className="vds-h-7 vds-w-7 vds-p-0" disabled={page === 0}
               onClick={() => setPage(p => p - 1)}>
-              <ChevronRight className="h-3.5 w-3.5 rotate-180" />
+              <ChevronRight className="vds-h-3.5 vds-w-3.5 vds-rotate-180" />
             </Button>
-            <span className="px-2 tabular-nums">{page + 1} / {totalPages}</span>
-            <Button size="sm" variant="outline" className="h-7 w-7 p-0" disabled={page + 1 >= totalPages}
+            <span className="vds-px-2 vds-tabular-nums">{page + 1} / {totalPages}</span>
+            <Button size="sm" variant="outline" className="vds-h-7 vds-w-7 vds-p-0" disabled={page + 1 >= totalPages}
               onClick={() => setPage(p => p + 1)}>
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRight className="vds-h-3.5 vds-w-3.5" />
             </Button>
           </div>
         </div>

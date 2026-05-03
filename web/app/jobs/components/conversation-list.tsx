@@ -61,32 +61,32 @@ export function ConversationList({ onContinue }: ConversationListProps) {
   const clearSearch = useCallback(() => { setSearch(''); setQuery(''); setPage(0) }, [])
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
       {/* Controls row — mirrors JobsSection layout */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-3">
         {data ? (
-          <StatusPill icon={<MessageSquare className="h-3 w-3 shrink-0" />} count={data.total} label={t('jobs.conversations')} />
+          <StatusPill icon={<MessageSquare className="vds-h-3 vds-w-3 vds-flex-shrink-0" />} count={data.total} label={t('jobs.conversations')} />
         ) : (
-          <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+          <p className="vds-text-sm vds-text-dim vds-animate-pulse">{t('common.loading')}</p>
         )}
-        <div className="flex items-center gap-2">
-          <div className="relative flex items-center">
-            <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+        <div className="vds-flex vds-items-center vds-gap-2">
+          <div className="vds-relative vds-flex vds-items-center">
+            <Search className="vds-absolute vds-left-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim vds-pointer-events-none" />
             <Input
-              className="pl-8 pr-8 w-44 h-9 text-sm"
+              className="vds-pl-8 vds-pr-8 vds-w-44 vds-h-9 vds-text-sm"
               placeholder={t('jobs.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => { if (e.key === 'Enter') commitSearch(); if (e.key === 'Escape') clearSearch() }}
             />
             {search && (
-              <button type="button" aria-label={t('common.clearSearch')} className="absolute right-2.5 text-muted-foreground hover:text-foreground" onClick={clearSearch}>
-                <X className="h-3.5 w-3.5" />
+              <button type="button" aria-label={t('common.clearSearch')} className="vds-absolute vds-right-2.5 vds-text-dim vds-hover:text-primary" onClick={clearSearch}>
+                <X className="vds-h-3.5 vds-w-3.5" />
               </button>
             )}
           </div>
           <Select value={sourceFilter} onValueChange={(v) => { setSourceFilter(v); setPage(0) }}>
-            <SelectTrigger className="w-28 h-9 text-sm">
+            <SelectTrigger className="vds-w-28 vds-h-9 vds-text-sm">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -96,20 +96,20 @@ export function ConversationList({ onContinue }: ConversationListProps) {
               <SelectItem value="analyzer">{t('jobs.sourceAnalyzer')}</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="ghost" size="icon" aria-label={t('common.refresh')} className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+          <Button variant="ghost" size="icon" aria-label={t('common.refresh')} className="vds-h-9 vds-w-9 vds-flex-shrink-0" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={`vds-h-3.5 vds-w-3.5 ${isFetching ? 'vds-animate-spin' : ''}`} />
           </Button>
         </div>
       </div>
 
       {isLoading && (
-        <div className="flex h-48 items-center justify-center text-muted-foreground">
+        <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim">
           {t('common.loading')}
         </div>
       )}
 
       {data && data.conversations.length === 0 && (
-        <div className="flex h-48 items-center justify-center text-muted-foreground">
+        <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim">
           {t('jobs.noConversations')}
         </div>
       )}
@@ -117,52 +117,52 @@ export function ConversationList({ onContinue }: ConversationListProps) {
       {data && data.conversations.length > 0 && (
         <DataTable minWidth="640px">
           <TableHeader>
-              <TableRow className="bg-muted/30">
-                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{t('jobs.conversationTitle')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{t('common.model')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-left font-medium text-muted-foreground whitespace-nowrap">{t('jobs.source')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('jobs.turnCount')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('jobs.totalTokens')}</TableHead>
-                <TableHead className="px-4 py-2.5 text-right font-medium text-muted-foreground whitespace-nowrap">{t('jobs.lastActivity')}</TableHead>
-                {onContinue && <TableHead className="px-4 py-2.5" />}
+              <TableRow className="vds-bg-muted/30">
+                <TableHead className="vds-px-4 vds-py-2.5 vds-text-left vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('jobs.conversationTitle')}</TableHead>
+                <TableHead className="vds-px-4 vds-py-2.5 vds-text-left vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('common.model')}</TableHead>
+                <TableHead className="vds-px-4 vds-py-2.5 vds-text-left vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('jobs.source')}</TableHead>
+                <TableHead className="vds-px-4 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('jobs.turnCount')}</TableHead>
+                <TableHead className="vds-px-4 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('jobs.totalTokens')}</TableHead>
+                <TableHead className="vds-px-4 vds-py-2.5 vds-text-right vds-font-500 vds-text-dim vds-whitespace-nowrap">{t('jobs.lastActivity')}</TableHead>
+                {onContinue && <TableHead className="vds-px-4 vds-py-2.5" />}
               </TableRow>
             </TableHeader>
             <TableBody>
               {data.conversations.map((c) => (
                 <TableRow
                   key={c.id}
-                  className="border-b border-border last:border-0 hover:bg-muted/20 cursor-pointer transition-colors"
+                  className="vds-border-b-1 vds-border-subtle last:border-0 vds-hover:bg-hover/20 vds-cursor-pointer vds-transition-colors"
                   onClick={() => setSelectedId(c.id)}
                 >
-                  <TableCell className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      <MessageSquare className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                      <span className="font-medium truncate max-w-[300px]">
+                  <TableCell className="vds-px-4 vds-py-3">
+                    <div className="vds-flex vds-items-center vds-gap-2">
+                      <MessageSquare className="vds-h-3.5 vds-w-3.5 vds-text-dim vds-flex-shrink-0" />
+                      <span className="vds-font-500 vds-truncate vds-max-w-[300px]">
                         {c.title || c.id}
                       </span>
                     </div>
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-muted-foreground">{c.model_name || '—'}</TableCell>
-                  <TableCell className="px-4 py-3">
-                    <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${SOURCE_STYLES[c.source] ?? SOURCE_STYLES.api}`}>{c.source}</span>
+                  <TableCell className="vds-px-4 vds-py-3 vds-text-dim">{c.model_name || '—'}</TableCell>
+                  <TableCell className="vds-px-4 vds-py-3">
+                    <span className={`vds-px-1.5 vds-py-0.5 vds-rounded vds-text-[10px] vds-font-mono ${SOURCE_STYLES[c.source] ?? SOURCE_STYLES.api}`}>{c.source}</span>
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-right tabular-nums">{c.turn_count}</TableCell>
-                  <TableCell className="px-4 py-3 text-right tabular-nums text-muted-foreground">
+                  <TableCell className="vds-px-4 vds-py-3 vds-text-right vds-tabular-nums">{c.turn_count}</TableCell>
+                  <TableCell className="vds-px-4 vds-py-3 vds-text-right vds-tabular-nums vds-text-dim">
                     {fmtNumber(c.total_prompt_tokens + c.total_completion_tokens)}
                   </TableCell>
-                  <TableCell className="px-4 py-3 text-right text-muted-foreground text-xs">
+                  <TableCell className="vds-px-4 vds-py-3 vds-text-right vds-text-dim vds-text-xs">
                     {fmtDatetime(c.updated_at, tz)}
                   </TableCell>
                   {onContinue && (
-                    <TableCell className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <TableCell className="vds-px-4 vds-py-3 vds-text-right" onClick={(e) => e.stopPropagation()}>
                       <Button
                         type="button"
                         variant="ghost"
                         size="sm"
-                        className="h-7 text-xs"
+                        className="vds-h-7 vds-text-xs"
                         onClick={(e) => { e.stopPropagation(); setSelectedId(c.id) }}
                       >
-                        <Play className="h-3 w-3 mr-1" />
+                        <Play className="vds-h-3 vds-w-3 vds-mr-1" />
                         {t('jobs.continue')}
                       </Button>
                     </TableCell>
@@ -175,17 +175,17 @@ export function ConversationList({ onContinue }: ConversationListProps) {
 
       {/* Pagination */}
       {totalPages > 1 && (
-        <div className="flex items-center justify-end gap-2">
-          <Button variant="outline" size="icon" aria-label={t('common.prevPage')} className="h-8 w-8"
+        <div className="vds-flex vds-items-center vds-justify-end vds-gap-2">
+          <Button variant="outline" size="icon" aria-label={t('common.prevPage')} className="vds-h-8 vds-w-8"
             onClick={() => setPage(p => Math.max(0, p - 1))} disabled={page === 0}>
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeft className="vds-h-4 vds-w-4" />
           </Button>
-          <span className="text-sm text-muted-foreground tabular-nums">
+          <span className="vds-text-sm vds-text-dim vds-tabular-nums">
             {page + 1} / {totalPages}
           </span>
-          <Button variant="outline" size="icon" aria-label={t('common.nextPage')} className="h-8 w-8"
+          <Button variant="outline" size="icon" aria-label={t('common.nextPage')} className="vds-h-8 vds-w-8"
             onClick={() => setPage(p => Math.min(totalPages - 1, p + 1))} disabled={page >= totalPages - 1}>
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRight className="vds-h-4 vds-w-4" />
           </Button>
         </div>
       )}
@@ -213,24 +213,24 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
   const hasMetadata = !!(data?.compressed || data?.vision_analysis)
 
   return (
-    <div className="mt-1.5">
+    <div className="vds-mt-1.5">
       <button
         type="button"
         onClick={() => setOpen(v => !v)}
-        className="flex items-center gap-1 text-[10px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+        className="vds-flex vds-items-center vds-gap-1 vds-text-[10px] vds-text-dim/60 vds-hover:text-dim vds-transition-colors"
       >
-        {open ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+        {open ? <ChevronUp className="vds-h-3 vds-w-3" /> : <ChevronDown className="vds-h-3 vds-w-3" />}
         {t('conversations.internals')}
       </button>
 
       {open && (
-        <div className="mt-1 space-y-1.5">
-          {isFetching && <span className="text-[10px] text-muted-foreground">{t('common.loading')}</span>}
+        <div className="vds-mt-1 vds-space-y-1.5">
+          {isFetching && <span className="vds-text-[10px] vds-text-dim">{t('common.loading')}</span>}
           {data && !hasMetadata && (
-            <span className="text-[10px] text-muted-foreground/60">{t('conversations.internalsEmpty')}</span>
+            <span className="vds-text-[10px] vds-text-dim/60">{t('conversations.internalsEmpty')}</span>
           )}
           {data?.compressed && (
-            <span className="inline-flex items-center gap-1 rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-mono text-primary">
+            <span className="vds-inline-flex vds-items-center vds-gap-1 vds-rounded vds-bg-primary/10 vds-px-1.5 vds-py-0.5 vds-text-[10px] vds-font-mono vds-text-primary">
               {t('conversations.compressedBadge', {
                 original: data.compressed.original_tokens,
                 compressed: data.compressed.compressed_tokens,
@@ -239,7 +239,7 @@ function TurnInternalsPanel({ convId, jobId }: { convId: string; jobId: string }
             </span>
           )}
           {data?.vision_analysis && (
-            <span className="inline-flex items-center gap-1 rounded bg-accent/15 px-1.5 py-0.5 text-[10px] font-mono text-accent-foreground">
+            <span className="vds-inline-flex vds-items-center vds-gap-1 vds-rounded vds-bg-hover/15 vds-px-1.5 vds-py-0.5 vds-text-[10px] vds-font-mono vds-text-primary">
               {t('conversations.visionBadge', {
                 model: data.vision_analysis.vision_model,
                 imageCount: data.vision_analysis.image_count,
@@ -259,10 +259,10 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+      <DialogContent className="vds-max-w-2xl vds-max-h-[80vh] vds-overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <MessageSquare className="vds-h-4 vds-w-4" />
             {data?.title || id}
           </DialogTitle>
           {data && (() => {
@@ -271,16 +271,16 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
               return acc + tcs
             }, 0)
             return (
-            <div className="flex items-center justify-between mt-1">
-              <p className="text-xs text-muted-foreground">
-                <span className={`inline-block px-1.5 py-0.5 rounded font-mono mr-2 ${SOURCE_STYLES[data.source] ?? SOURCE_STYLES.api}`}>{data.source}</span>
+            <div className="vds-flex vds-items-center vds-justify-between vds-mt-1">
+              <p className="vds-text-xs vds-text-dim">
+                <span className={`vds-inline-block vds-px-1.5 vds-py-0.5 vds-rounded vds-font-mono vds-mr-2 ${SOURCE_STYLES[data.source] ?? SOURCE_STYLES.api}`}>{data.source}</span>
                 {data.model_name} · {data.turn_count} {t('jobs.turnCount')}
                 {totalMcpCalls > 0 && <> · {t('conversations.mcpCallsBadge', { count: totalMcpCalls })}</>}
                 {' · '}{fmtNumber(data.total_prompt_tokens + data.total_completion_tokens)} {t('common.tokensUnit')}
               </p>
               {onContinue && (
-                <Button type="button" size="sm" variant="outline" className="h-7 text-xs shrink-0" onClick={() => onContinue(data)}>
-                  <Play className="h-3 w-3 mr-1" />
+                <Button type="button" size="sm" variant="outline" className="vds-h-7 vds-text-xs vds-flex-shrink-0" onClick={() => onContinue(data)}>
+                  <Play className="vds-h-3 vds-w-3 vds-mr-1" />
                   {t('jobs.continueInTest')}
                 </Button>
               )}
@@ -289,46 +289,46 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
           })()}
         </DialogHeader>
 
-        {isLoading && <p className="text-muted-foreground py-8 text-center">{t('common.loading')}</p>}
+        {isLoading && <p className="vds-text-dim vds-py-8 vds-text-center">{t('common.loading')}</p>}
 
         {data && (
-          <div className="space-y-3 mt-4">
+          <div className="vds-space-y-3 vds-mt-4">
             {data.turns.map((turn: ConversationTurn, i: number) => (
-              <div key={turn.job_id} className="space-y-1">
+              <div key={turn.job_id} className="vds-space-y-1">
                 {/* User prompt */}
-                <div className="rounded-lg bg-primary/10 px-4 py-2.5">
-                  <p className="text-[10px] font-semibold uppercase text-primary mb-1">{t('jobs.roleUser')}</p>
-                  <p className="text-sm whitespace-pre-wrap">{turn.prompt || '—'}</p>
+                <div className="vds-rounded-lg vds-bg-primary/10 vds-px-4 vds-py-2.5">
+                  <p className="vds-text-[10px] vds-font-600 vds-uppercase vds-text-primary vds-mb-1">{t('jobs.roleUser')}</p>
+                  <p className="vds-text-sm vds-whitespace-pre-wrap">{turn.prompt || '—'}</p>
                 </div>
                 {/* Assistant response */}
-                <div className="rounded-lg bg-muted/40 px-4 py-2.5">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="text-[10px] font-semibold uppercase text-muted-foreground">{t('jobs.roleAssistant')}</p>
+                <div className="vds-rounded-lg vds-bg-muted/40 vds-px-4 vds-py-2.5">
+                  <div className="vds-flex vds-items-center vds-gap-2 vds-mb-1">
+                    <p className="vds-text-[10px] vds-font-600 vds-uppercase vds-text-dim">{t('jobs.roleAssistant')}</p>
                     {turn.model_name && (
-                      <span className="text-[10px] font-mono text-muted-foreground/60">{turn.model_name}</span>
+                      <span className="vds-text-[10px] vds-font-mono vds-text-dim/60">{turn.model_name}</span>
                     )}
                   </div>
                   {turn.tool_calls && Array.isArray(turn.tool_calls) && turn.tool_calls.length > 0 && (
-                    <div className="mb-2 space-y-1">
+                    <div className="vds-mb-2 vds-space-y-1">
                       {turn.tool_calls.map((tc: McpToolCallInline, j: number) => (
-                        <div key={`tool-${j}-${tc.function?.name ?? ''}`} className="rounded border border-border bg-muted/30 px-2 py-1.5">
-                          <div className="flex items-center gap-1.5 flex-wrap">
-                            <Wrench className="h-3 w-3 text-status-info-fg shrink-0" />
-                            <code className="text-[11px] font-mono font-semibold text-status-info-fg">{tc.function?.name ?? 'unknown'}</code>
-                            {typeof tc.round === 'number' && <span className="text-[10px] font-mono text-muted-foreground/70">round {tc.round}</span>}
-                            {tc.outcome && <span className={`text-[10px] font-mono px-1 rounded ${tc.outcome === 'success' || tc.outcome === 'cache_hit' ? 'bg-status-ok-fg/15 text-status-ok-fg' : 'bg-status-error-fg/15 text-status-error-fg'}`}>{tc.outcome}</span>}
-                            {tc.cache_hit && <span className="text-[10px] font-mono px-1 rounded bg-primary/15 text-primary">cache</span>}
-                            {typeof tc.latency_ms === 'number' && <span className="text-[10px] font-mono text-muted-foreground/60">{tc.latency_ms}ms</span>}
+                        <div key={`tool-${j}-${tc.function?.name ?? ''}`} className="vds-rounded vds-border-1 vds-border-subtle vds-bg-muted/30 vds-px-2 vds-py-1.5">
+                          <div className="vds-flex vds-items-center vds-gap-1.5 vds-flex-wrap">
+                            <Wrench className="vds-h-3 vds-w-3 vds-text-info vds-flex-shrink-0" />
+                            <code className="vds-text-2xs vds-font-mono vds-font-600 vds-text-info">{tc.function?.name ?? 'unknown'}</code>
+                            {typeof tc.round === 'number' && <span className="vds-text-[10px] vds-font-mono vds-text-dim/70">round {tc.round}</span>}
+                            {tc.outcome && <span className={`vds-text-[10px] vds-font-mono vds-px-1 vds-rounded ${tc.outcome === 'success' || tc.outcome === 'cache_hit' ? 'vds-bg-success/15 vds-text-success' : 'vds-bg-error-bg-fg/15 vds-text-error'}`}>{tc.outcome}</span>}
+                            {tc.cache_hit && <span className="vds-text-[10px] vds-font-mono vds-px-1 vds-rounded vds-bg-primary/15 vds-text-primary">cache</span>}
+                            {typeof tc.latency_ms === 'number' && <span className="vds-text-[10px] vds-font-mono vds-text-dim/60">{tc.latency_ms}ms</span>}
                           </div>
                           {tc.function?.arguments && (
-                            <pre className="text-[10px] font-mono text-foreground/60 mt-1 whitespace-pre-wrap break-words max-h-20 overflow-y-auto">
+                            <pre className="vds-text-[10px] vds-font-mono vds-text-primary/60 vds-mt-1 vds-whitespace-pre-wrap vds-break-words vds-max-h-20 vds-overflow-y-auto">
                               {typeof tc.function.arguments === 'string' ? tc.function.arguments : JSON.stringify(tc.function.arguments, null, 2)}
                             </pre>
                           )}
                           {tc.result && (
-                            <details className="mt-1">
-                              <summary className="text-[10px] text-muted-foreground/70 cursor-pointer hover:text-muted-foreground">{t('conversations.toolResult')}</summary>
-                              <pre className="text-[10px] font-mono text-foreground/70 mt-1 whitespace-pre-wrap break-words max-h-40 overflow-y-auto">{tc.result}</pre>
+                            <details className="vds-mt-1">
+                              <summary className="vds-text-[10px] vds-text-dim/70 vds-cursor-pointer vds-hover:text-dim">{t('conversations.toolResult')}</summary>
+                              <pre className="vds-text-[10px] vds-font-mono vds-text-primary/70 vds-mt-1 vds-whitespace-pre-wrap vds-break-words vds-max-h-40 vds-overflow-y-auto">{tc.result}</pre>
                             </details>
                           )}
                         </div>
@@ -343,45 +343,45 @@ function ConversationDetailModal({ id, onClose, onContinue }: { id: string; onCl
                       - empty result + no tool_calls → genuinely empty (cancel /
                         error / pre-stream) — show "(저장된 결과 없음)" */}
                   {turn.result ? (
-                    <div className="text-sm leading-relaxed break-words space-y-2 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
+                    <div className="vds-text-sm vds-leading-relaxed vds-break-words vds-space-y-2 [&_p]:my-2 [&_p:first-child]:mt-0 [&_p:last-child]:mb-0">
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         components={{
-                          h1: ({ children }) => <h1 className="text-base font-bold mt-3 mb-2">{children}</h1>,
-                          h2: ({ children }) => <h2 className="text-sm font-bold mt-3 mb-1.5">{children}</h2>,
-                          h3: ({ children }) => <h3 className="text-sm font-semibold mt-2 mb-1">{children}</h3>,
-                          h4: ({ children }) => <h4 className="text-sm font-semibold mt-2 mb-1">{children}</h4>,
-                          ul: ({ children }) => <ul className="list-disc list-outside ml-5 my-2 space-y-1">{children}</ul>,
-                          ol: ({ children }) => <ol className="list-decimal list-outside ml-5 my-2 space-y-1">{children}</ol>,
-                          li: ({ children }) => <li className="text-sm">{children}</li>,
-                          a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="text-primary underline hover:no-underline break-all">{children}</a>,
+                          h1: ({ children }) => <h1 className="vds-text-base vds-font-700 vds-mt-3 vds-mb-2">{children}</h1>,
+                          h2: ({ children }) => <h2 className="vds-text-sm vds-font-700 vds-mt-3 vds-mb-1.5">{children}</h2>,
+                          h3: ({ children }) => <h3 className="vds-text-sm vds-font-600 vds-mt-2 vds-mb-1">{children}</h3>,
+                          h4: ({ children }) => <h4 className="vds-text-sm vds-font-600 vds-mt-2 vds-mb-1">{children}</h4>,
+                          ul: ({ children }) => <ul className="list-disc list-outside vds-ml-5 vds-my-2 vds-space-y-1">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal list-outside vds-ml-5 vds-my-2 vds-space-y-1">{children}</ol>,
+                          li: ({ children }) => <li className="vds-text-sm">{children}</li>,
+                          a: ({ href, children }) => <a href={href} target="_blank" rel="noopener noreferrer" className="vds-text-primary vds-underline vds-hover:no-underline vds-break-all">{children}</a>,
                           code: ({ className, children }) => {
                             const isBlock = /language-/.test(className ?? '')
                             return isBlock
-                              ? <code className="block bg-muted/60 px-2 py-1.5 rounded font-mono text-[12px] my-2 overflow-x-auto whitespace-pre">{children}</code>
-                              : <code className="bg-muted/60 px-1 py-0.5 rounded font-mono text-[12px]">{children}</code>
+                              ? <code className="vds-block vds-bg-muted/60 vds-px-2 vds-py-1.5 vds-rounded vds-font-mono vds-text-xs vds-my-2 vds-overflow-x-auto vds-whitespace-pre">{children}</code>
+                              : <code className="vds-bg-muted/60 vds-px-1 vds-py-0.5 vds-rounded vds-font-mono vds-text-xs">{children}</code>
                           },
-                          pre: ({ children }) => <pre className="bg-muted/60 p-2 rounded font-mono text-[12px] my-2 overflow-x-auto">{children}</pre>,
-                          blockquote: ({ children }) => <blockquote className="border-l-2 border-border pl-3 italic text-muted-foreground my-2">{children}</blockquote>,
-                          table: ({ children }) => <table className="border-collapse text-[12px] my-2">{children}</table>,
-                          th: ({ children }) => <th className="border border-border px-2 py-1 bg-muted/40 font-semibold">{children}</th>,
-                          td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
-                          hr: () => <hr className="my-3 border-border" />,
-                          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-                          em: ({ children }) => <em className="italic">{children}</em>,
+                          pre: ({ children }) => <pre className="vds-bg-muted/60 vds-p-2 vds-rounded vds-font-mono vds-text-xs vds-my-2 vds-overflow-x-auto">{children}</pre>,
+                          blockquote: ({ children }) => <blockquote className="vds-border-l-2 vds-border-subtle vds-pl-3 vds-italic vds-text-dim vds-my-2">{children}</blockquote>,
+                          table: ({ children }) => <table className="vds-border-collapse vds-text-xs vds-my-2">{children}</table>,
+                          th: ({ children }) => <th className="vds-border-1 vds-border-subtle vds-px-2 vds-py-1 vds-bg-muted/40 vds-font-600">{children}</th>,
+                          td: ({ children }) => <td className="vds-border-1 vds-border-subtle vds-px-2 vds-py-1">{children}</td>,
+                          hr: () => <hr className="vds-my-3 vds-border-subtle" />,
+                          strong: ({ children }) => <strong className="vds-font-600">{children}</strong>,
+                          em: ({ children }) => <em className="vds-italic">{children}</em>,
                         }}
                       >
                         {turn.result}
                       </ReactMarkdown>
                     </div>
                   ) : (turn.tool_calls && Array.isArray(turn.tool_calls) && turn.tool_calls.length > 0) ? (
-                    <p className="text-[11px] italic text-muted-foreground/70">{t('jobs.toolOnlyTurnHint')}</p>
+                    <p className="vds-text-2xs vds-italic vds-text-dim/70">{t('jobs.toolOnlyTurnHint')}</p>
                   ) : (
-                    <p className="text-sm whitespace-pre-wrap text-muted-foreground/60">({t('jobs.noResult')})</p>
+                    <p className="vds-text-sm vds-whitespace-pre-wrap vds-text-dim/60">({t('jobs.noResult')})</p>
                   )}
                   <TurnInternalsPanel convId={id} jobId={turn.job_id} />
                 </div>
-                {i < data.turns.length - 1 && <hr className="border-border" />}
+                {i < data.turns.length - 1 && <hr className="vds-border-subtle" />}
               </div>
             ))}
           </div>

@@ -19,9 +19,9 @@ export function StatusPill({
   className?: string
 }) {
   return (
-    <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap ${className ?? 'bg-muted/60 border border-border text-muted-foreground'}`}>
+    <div className={`vds-flex vds-items-center vds-gap-1.5 vds-px-2.5 vds-py-1 vds-rounded-full vds-text-xs vds-font-500 vds-whitespace-nowrap ${className ?? 'vds-bg-muted/60 vds-border-1 vds-border-subtle vds-text-dim'}`}>
       {icon}
-      {count !== undefined && <span className="tabular-nums">{count}</span>}
+      {count !== undefined && <span className="vds-tabular-nums">{count}</span>}
       <span>{label}</span>
     </div>
   )

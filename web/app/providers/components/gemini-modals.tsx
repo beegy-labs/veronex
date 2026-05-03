@@ -39,25 +39,25 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="vds-max-w-sm">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ShieldCheck className="h-4 w-4 text-accent-gpu" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <ShieldCheck className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
             {t('providers.gemini.editPolicyTitle')}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-1 mb-1">
-          <p className="text-sm text-muted-foreground">{t('providers.gemini.model')}</p>
-          <p className="font-mono text-sm font-semibold text-text-bright">
+        <div className="vds-space-y-1 vds-mb-1">
+          <p className="vds-text-sm vds-text-dim">{t('providers.gemini.model')}</p>
+          <p className="vds-font-mono vds-text-sm vds-font-600 vds-text-bright">
             {policy.model_name === '*' ? `* (${t('providers.gemini.globalDefault')})` : policy.model_name}
           </p>
         </div>
 
-        <div className="space-y-4">
-          <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+        <div className="vds-space-y-4">
+          <div className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-4 vds-py-3">
             <div>
-              <p className="text-sm font-medium">{t('providers.gemini.availableOnFreeTier')}</p>
-              <p className="text-xs text-muted-foreground mt-0.5">
+              <p className="vds-text-sm vds-font-500">{t('providers.gemini.availableOnFreeTier')}</p>
+              <p className="vds-text-xs vds-text-dim vds-mt-0.5">
                 {availableOnFreeTier
                   ? t('providers.gemini.freeTierRouting')
                   : t('providers.gemini.paidOnlyRouting')}
@@ -67,18 +67,18 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
           </div>
 
           {availableOnFreeTier && (
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="pol-rpm" className="text-xs">{t('providers.gemini.rpm')} <span className="text-muted-foreground font-normal">({t('providers.gemini.rpmUnit')})</span></Label>
+            <div className="vds-grid vds-grid-cols-1 vds-sm:grid-cols-2 vds-gap-3">
+              <div className="vds-space-y-1.5">
+                <Label htmlFor="pol-rpm" className="vds-text-xs">{t('providers.gemini.rpm')} <span className="vds-text-dim vds-font-400">({t('providers.gemini.rpmUnit')})</span></Label>
                 <Input id="pol-rpm" type="number" min={0} value={rpm}
-                  onChange={(e) => setRpm(e.target.value)} placeholder={t('providers.gemini.rpmPlaceholder')} className="h-8 text-sm" />
+                  onChange={(e) => setRpm(e.target.value)} placeholder={t('providers.gemini.rpmPlaceholder')} className="vds-h-8 vds-text-sm" />
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="pol-rpd" className="text-xs">{t('providers.gemini.rpd')} <span className="text-muted-foreground font-normal">({t('providers.gemini.rpdUnit')})</span></Label>
+              <div className="vds-space-y-1.5">
+                <Label htmlFor="pol-rpd" className="vds-text-xs">{t('providers.gemini.rpd')} <span className="vds-text-dim vds-font-400">({t('providers.gemini.rpdUnit')})</span></Label>
                 <Input id="pol-rpd" type="number" min={0} value={rpd}
-                  onChange={(e) => setRpd(e.target.value)} placeholder={t('providers.gemini.rpdPlaceholder')} className="h-8 text-sm" />
+                  onChange={(e) => setRpd(e.target.value)} placeholder={t('providers.gemini.rpdPlaceholder')} className="vds-h-8 vds-text-sm" />
               </div>
-              <p className="col-span-2 text-[11px] text-muted-foreground -mt-1">
+              <p className="vds-col-span-2 vds-text-2xs vds-text-dim vds--mt-1">
                 {t('providers.gemini.freeLimitsHint')}
               </p>
             </div>
@@ -86,11 +86,11 @@ export function EditPolicyModal({ policy, onClose }: { policy: GeminiRateLimitPo
         </div>
 
         {mutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {mutation.error instanceof Error ? mutation.error.message : t('providers.gemini.failedToSave')}
           </p>
         )}
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate(undefined)} disabled={mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
@@ -119,17 +119,17 @@ export function ApiKeyCell({ providerId, masked }: { providerId: string; masked:
   const displayKey = revealed && data?.key ? data.key : (masked ?? '—')
 
   return (
-    <div className="flex items-center gap-1.5">
-      <span className="font-mono text-xs text-muted-foreground select-all">{displayKey}</span>
+    <div className="vds-flex vds-items-center vds-gap-1.5">
+      <span className="vds-font-mono vds-text-xs vds-text-dim vds-select-all">{displayKey}</span>
       {masked && (
         <Button variant="ghost" size="icon"
-          className="h-6 w-6 text-muted-foreground/70 hover:text-text-dim shrink-0"
+          className="vds-h-6 vds-w-6 vds-text-dim/70 vds-hover:text-dim vds-flex-shrink-0"
           aria-label={revealed ? t('common.hide') : t('common.show')}
           onClick={handleReveal} disabled={isFetching}
           title={revealed ? t('common.hide') : t('common.show')}>
           {revealed
-            ? <EyeOff className="h-3.5 w-3.5" />
-            : <Eye className="h-3.5 w-3.5" />}
+            ? <EyeOff className="vds-h-3.5 vds-w-3.5" />
+            : <Eye className="vds-h-3.5 vds-w-3.5" />}
         </Button>
       )}
     </div>
@@ -170,37 +170,37 @@ export function ModelSelectionModal({ provider, onClose }: { provider: Provider;
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ListFilter className="h-4 w-4 text-accent-gpu" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <ListFilter className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
             {t('providers.gemini.modelSelection')}
-            <span className="text-muted-foreground font-normal text-sm">— {provider.name}</span>
+            <span className="vds-text-dim vds-font-400 vds-text-sm">— {provider.name}</span>
           </DialogTitle>
         </DialogHeader>
 
-        <p className="text-xs text-muted-foreground -mt-1">
+        <p className="vds-text-xs vds-text-dim vds--mt-1">
           {t('providers.gemini.modelSelectionDesc')}
         </p>
 
         {isLoading && (
-          <div className="flex h-20 items-center justify-center text-muted-foreground text-sm animate-pulse">
+          <div className="vds-flex vds-h-20 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
             {t('common.loading')}
           </div>
         )}
 
         {!isLoading && models.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4 text-center">
+          <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center">
             {t('providers.gemini.noGlobalModels')}
           </p>
         )}
 
         {models.length > 0 && (
-          <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+          <div className="vds-space-y-1 vds-max-h-80 vds-overflow-y-auto vds-pr-1">
             {models.map((m) => (
               <div key={m.model_name}
-                className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-                <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
+                className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-3 vds-py-2">
+                <span className="vds-font-mono vds-text-sm vds-text-bright">{m.model_name}</span>
                 <GeminiModelToggle providerId={provider.id} model={m} />
               </div>
             ))}
@@ -208,7 +208,7 @@ export function ModelSelectionModal({ provider, onClose }: { provider: Provider;
         )}
 
         {models.length > 0 && (
-          <p className="text-xs text-muted-foreground text-right">
+          <p className="vds-text-xs vds-text-dim vds-text-right">
             {t('providers.gemini.modelsCount', { enabled: enabledCount, total: models.length })}
           </p>
         )}
@@ -233,32 +233,32 @@ export function SetSyncKeyModal({ current, onClose }: { current: string | null; 
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="vds-max-w-sm">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Key className="h-4 w-4 text-accent-gpu" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <Key className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
             {t('providers.gemini.setSyncKey')}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-3">
+        <div className="vds-space-y-3">
           {current && (
-            <p className="text-xs text-muted-foreground">
-              {t('providers.gemini.syncKey')}: <span className="font-mono text-text-dim">{current}</span>
+            <p className="vds-text-xs vds-text-dim">
+              {t('providers.gemini.syncKey')}: <span className="vds-font-mono vds-text-dim">{current}</span>
             </p>
           )}
-          <div className="space-y-1.5">
-            <Label htmlFor="sync-key">{t('providers.gemini.syncKey')} <span className="text-destructive">*</span></Label>
+          <div className="vds-space-y-1.5">
+            <Label htmlFor="sync-key">{t('providers.gemini.syncKey')} <span className="vds-text-destructive">*</span></Label>
             <Input id="sync-key" type="password" value={apiKey}
               onChange={(e) => setApiKey(e.target.value)} placeholder={t('providers.gemini.apiKeyPlaceholder')} />
-            <p className="text-xs text-muted-foreground">{t('providers.gemini.syncKeyHint')}</p>
+            <p className="vds-text-xs vds-text-dim">{t('providers.gemini.syncKeyHint')}</p>
           </div>
         </div>
         {mutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
           </p>
         )}
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate(undefined)} disabled={!apiKey.trim() || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}

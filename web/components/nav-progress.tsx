@@ -99,14 +99,14 @@ const HoneycombBar = memo(function HoneycombBar({ pct, visible, trackId, fillId 
   return (
     <div
       aria-hidden
-      className="pointer-events-none fixed inset-x-0 top-0 z-[9999] h-[8px] overflow-hidden"
+      className="vds-pointer-events-none vds-fixed vds-inset-x-0 vds-top-0 vds-z-tooltip vds-h-2 vds-overflow-hidden"
       style={{
         opacity: visible ? 1 : 0,
-        transition: visible ? 'opacity 120ms ease-in' : 'opacity 450ms ease-out',
+        transition: visible ? 'vds-opacity 120ms vds-ease-ease-in' : 'vds-opacity 450ms vds-ease-ease-out',
       }}
     >
       <svg
-        className="absolute inset-0 text-border"
+        className="vds-absolute vds-inset-0 vds-text-dim"
         width="100%" height="8" xmlns="http://www.w3.org/2000/svg"
       >
         <defs>
@@ -120,7 +120,7 @@ const HoneycombBar = memo(function HoneycombBar({ pct, visible, trackId, fillId 
       </svg>
 
       <svg
-        className="absolute inset-0 text-primary"
+        className="vds-absolute vds-inset-0 vds-text-primary"
         width="100%" height="8" xmlns="http://www.w3.org/2000/svg"
         style={{ clipPath: `inset(0 ${100 - pct}% 0 0)` }}
       >
@@ -136,7 +136,7 @@ const HoneycombBar = memo(function HoneycombBar({ pct, visible, trackId, fillId 
 
       {pct > 0 && pct < 100 && (
         <div
-          className="absolute top-0 bottom-0 w-14 -translate-x-1/2"
+          className="vds-absolute vds-top-0 vds-bottom-0 vds-w-14 -translate-x-1/2"
           style={{
             left: `${pct}%`,
             background: `linear-gradient(to right, transparent, color-mix(in oklch, ${tokens.brand.primary} 65%, transparent) 50%, transparent)`,
@@ -215,19 +215,19 @@ export function NavigationProgressProvider({ children }: { children: React.React
 
       if (
         event.type === 'updated' &&
-        query.state.fetchStatus === 'idle' &&
-        pendingQueriesRef.current.has(key)
-      ) {
-        pendingQueriesRef.current.delete(key)
-        finish()
-      }
-    })
-    return unsub
-  }, [queryClient, start, finish])
+        query.state.fetchStatus === 'idle'&&
+ pendingQueriesRef.current.has(key)
+ ) {
+ pendingQueriesRef.current.delete(key)
+ finish()
+ }
+ })
+ return unsub
+ }, [queryClient, start, finish])
 
-  return (
-    <>
-      <HoneycombBar pct={pct} visible={phase !== 'idle'} trackId={trackId} fillId={fillId} />
+ return (
+ <>
+ <HoneycombBar pct={pct} visible={phase !=='idle'} trackId={trackId} fillId={fillId} />
       {children}
     </>
   )

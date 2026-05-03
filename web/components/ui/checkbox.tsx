@@ -1,32 +1,57 @@
-"use client"
+'use client'
 
-import * as React from "react"
-import { Checkbox as CheckboxPrimitive } from "radix-ui"
-import { CheckIcon } from "lucide-react"
+import * as React from 'react'
+import { Check } from 'lucide-react'
+import { cn } from '@/lib/utils'
 
-import { cn } from "@/lib/utils"
-
-function Checkbox({
-  className,
-  ...props
-}: React.ComponentProps<typeof CheckboxPrimitive.Root>) {
-  return (
-    <CheckboxPrimitive.Root
-      data-slot="checkbox"
-      className={cn(
-        "peer border-input data-[state=checked]:bg-primary data-[state=checked]:text-primary-foreground data-[state=checked]:border-primary focus-visible:border-ring focus-visible:ring-ring/50 size-4 shrink-0 rounded-[4px] border shadow-xs transition-shadow outline-none focus-visible:ring-[3px] disabled:cursor-not-allowed disabled:opacity-50",
-        className
-      )}
-      {...props}
-    >
-      <CheckboxPrimitive.Indicator
-        data-slot="checkbox-indicator"
-        className="flex items-center justify-center text-current"
-      >
-        <CheckIcon className="size-3.5" />
-      </CheckboxPrimitive.Indicator>
-    </CheckboxPrimitive.Root>
-  )
+/**
+ * Compatible with the prior Radix checkbox API:
+ *   <Checkbox checked={...} onCheckedChange={...} />
+ *   - boolean | "indeterminate"
+ */
+export interface CheckboxProps
+  extends Omit<React.InputHTMLAttributes<HTMLInputElement>, 'type' | 'checked' | 'onChange'> {
+  checked?: boolean | 'indeterminate'
+  defaultChecked?: boolean
+  onCheckedChange?: (checked: boolean) => void
 }
 
-export { Checkbox }
+export const Checkbox = React.forwardRef<HTMLInputElement, CheckboxProps>(
+  ({ className, checked, defaultChecked, onCheckedChange, disabled, ...rest }, ref) => {
+    const inputRef = React.useRef<HTMLInputElement | null>(null)
+    React.useImperativeHandle(ref, () => inputRef.current as HTMLInputElement)
+    const isChecked = checked === true || (checked === undefined && !!defaultChecked)
+    const isIndeterminate = checked === 'indeterminate'
+
+    React.useEffect(() => {
+      if (inputRef.current) inputRef.current.indeterminate = isIndeterminate
+    }, [isIndeterminate])
+
+    return (
+      <span className={cn('vds-relative vds-inline-flex vds-items-center vds-justify-center', className)}>
+        <input
+          ref={inputRef}
+          type="checkbox"
+          disabled={disabled}
+          checked={checked === undefined ? undefined : isChecked}
+          defaultChecked={checked === undefined ? defaultChecked : undefined}
+          onChange={(e) => onCheckedChange?.(e.target.checked)}
+          className={cn(
+            'vds-h-4 vds-w-4 vds-rounded vds-border-1 vds-border-default vds-bg-card',
+            'vds-cursor-pointer vds-appearance-none',
+            'checked:vds-bg-primary checked:vds-border-primary',
+            'vds-disabled:cursor-not-allowed vds-disabled:opacity-50',
+          )}
+          {...rest}
+        />
+        {(isChecked || isIndeterminate) && (
+          <Check
+            aria-hidden
+            className="vds-absolute vds-pointer-events-none vds-h-3 vds-w-3 vds-text-primary-fg"
+          />
+        )}
+      </span>
+    )
+  },
+)
+Checkbox.displayName = 'Checkbox'

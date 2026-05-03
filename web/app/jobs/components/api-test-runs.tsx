@@ -30,40 +30,40 @@ export const ApiTestRuns = memo(function ApiTestRuns({
   if (runs.length === 0) return null
 
   return (
-    <div className="border-t border-border pt-4 space-y-3">
+    <div className="vds-border-t-1 vds-border-subtle vds-pt-4 vds-space-y-3">
       {/* Tab strip */}
-      <div className="flex items-center gap-1 border-b border-border pb-0 -mb-1 flex-wrap">
+      <div className="vds-flex vds-items-center vds-gap-1 vds-border-b-1 vds-border-subtle vds-pb-0 vds--mb-1 vds-flex-wrap">
         {runs.map((run) => (
           <div
             key={run.id}
             role="button"
             tabIndex={0}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-t-md border border-b-0 cursor-pointer select-none transition-colors ${
-              run.id === activeRunId
-                ? 'bg-card border-border text-foreground'
-                : 'bg-muted/40 border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/70'
-            }`}
+            className={`vds-flex vds-items-center vds-gap-1.5 vds-px-3 vds-py-1.5 vds-text-xs vds-font-500 vds-rounded-t-md vds-border-1 vds-border-b-0 vds-cursor-pointer vds-select-none vds-transition-colors ${
+ run.id === activeRunId
+ ? 'vds-bg-card vds-border-subtle vds-text-primary'
+ : 'vds-bg-muted/40 vds-border-transparent vds-text-dim vds-hover:text-primary vds-hover:bg-hover/70'
+ }`}
             onClick={() => onSelectRun(run.id)}
             onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectRun(run.id) } }}
           >
             {run.status === 'streaming' && (
-              <span className="h-1.5 w-1.5 rounded-full bg-status-info-fg animate-pulse shrink-0" />
+              <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-info-bg-fg vds-animate-pulse vds-flex-shrink-0" />
             )}
             {run.status === 'done' && (
-              <span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />
+              <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-flex-shrink-0" />
             )}
             {run.status === 'error' && (
-              <span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />
+              <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-error vds-flex-shrink-0" />
             )}
             <span>#{run.id}</span>
             <button
               type="button"
               aria-label={t('common.close')}
-              className="ml-0.5 rounded hover:bg-destructive/20 hover:text-destructive p-0.5 -mr-1"
+              className="vds-ml-0.5 vds-rounded vds-hover:bg-destructive/20 vds-hover:text-destructive vds-p-0.5 vds--mr-1"
               onClick={(e) => { e.stopPropagation(); onCloseRun(run.id) }}
               title={t('common.close')}
             >
-              <X className="h-3 w-3" />
+              <X className="vds-h-3 vds-w-3" />
             </button>
           </div>
         ))}
@@ -71,12 +71,12 @@ export const ApiTestRuns = memo(function ApiTestRuns({
 
       {/* Active run output */}
       {activeRun && (
-        <div className="pt-1 space-y-2">
+        <div className="vds-pt-1 vds-space-y-2">
           {/* Run controls */}
           {activeRun.status === 'streaming' && (
-            <div className="flex items-center justify-between">
-              <span className="flex items-center gap-1.5 text-xs text-status-info-fg">
-                <span className="h-1.5 w-1.5 rounded-full bg-status-info-fg animate-pulse" />
+            <div className="vds-flex vds-items-center vds-justify-between">
+              <span className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-info">
+                <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-info-bg-fg vds-animate-pulse" />
                 {t('test.streaming')}
               </span>
               <Button
@@ -85,15 +85,15 @@ export const ApiTestRuns = memo(function ApiTestRuns({
                 variant="outline"
                 onClick={() => onStop(activeRun.id)}
               >
-                <Square className="h-3.5 w-3.5 mr-1.5" fill="currentColor" />
+                <Square className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" fill="currentColor" />
                 {t('test.stop')}
               </Button>
             </div>
           )}
 
           {activeRun.status === 'done' && (
-            <div className="flex items-center justify-between">
-              <Badge variant="outline" className={`whitespace-nowrap ${STATUS_STYLES['completed']}`}>
+            <div className="vds-flex vds-items-center vds-justify-between">
+              <Badge variant="outline" className={`vds-whitespace-nowrap ${STATUS_STYLES['completed']}`}>
                 {t('test.complete')}
               </Badge>
               <Button
@@ -103,7 +103,7 @@ export const ApiTestRuns = memo(function ApiTestRuns({
                 onClick={() => onRerun(activeRun)}
                 disabled={isAnyStreaming}
               >
-                <RotateCcw className="h-3.5 w-3.5 mr-1.5" />
+                <RotateCcw className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
                 {t('test.runAgain')}
               </Button>
             </div>
@@ -111,14 +111,14 @@ export const ApiTestRuns = memo(function ApiTestRuns({
 
           {/* Attached images */}
           {activeRun.images && activeRun.images.length > 0 && (
-            <div className="flex flex-wrap gap-2">
+            <div className="vds-flex vds-flex-wrap vds-gap-2">
               {activeRun.images.map((b64, i) => (
                 // eslint-disable-next-line @next/next/no-img-element
                 <img
                   key={b64.slice(0, 16)}
                   src={`data:image/jpeg;base64,${b64}`}
                   alt={`image-${i + 1}`}
-                  className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
+                  className="vds-h-12 vds-w-12 vds-sm:h-16 vds-sm:w-16 vds-rounded-md vds-object-cover vds-border-1 vds-border-subtle"
                 />
               ))}
             </div>
@@ -128,17 +128,17 @@ export const ApiTestRuns = memo(function ApiTestRuns({
               progresses. Surfaced even after `status === 'done'` so users can
               audit which tools were used. */}
           {activeRun.toolCalls.length > 0 && (
-            <div className="rounded-md border border-border bg-muted/10 p-2 space-y-1">
-              <div className="text-xs font-semibold text-muted-foreground tracking-wide">
+            <div className="vds-rounded-md vds-border-1 vds-border-subtle vds-bg-muted/10 vds-p-2 vds-space-y-1">
+              <div className="vds-text-xs vds-font-600 vds-text-dim vds-tracking-wide">
                 {t('test.toolsUsed')}
               </div>
-              <ol className="space-y-1 list-none">
+              <ol className="vds-space-y-1 list-none">
                 {activeRun.toolCalls.map((tc, i) => (
-                  <li key={`${tc.name}-${i}`} className="flex items-center gap-2 text-xs">
-                    <span className="inline-flex items-center justify-center h-4 w-4 rounded-full bg-primary/10 text-primary text-[10px] font-mono">
+                  <li key={`${tc.name}-${i}`} className="vds-flex vds-items-center vds-gap-2 vds-text-xs">
+                    <span className="vds-inline-flex vds-items-center vds-justify-center vds-h-4 vds-w-4 vds-rounded-full vds-bg-primary/10 vds-text-primary vds-text-[10px] vds-font-mono">
                       {i + 1}
                     </span>
-                    <code className="font-mono">{tc.name}</code>
+                    <code className="vds-font-mono">{tc.name}</code>
                   </li>
                 ))}
               </ol>
@@ -147,13 +147,13 @@ export const ApiTestRuns = memo(function ApiTestRuns({
 
           {/* Output */}
           {(activeRun.text.length > 0 || activeRun.status === 'streaming') && (
-            <div className="relative rounded-md border border-border bg-muted/20 p-3 min-h-[64px] group/output">
+            <div className="vds-relative vds-rounded-md vds-border-1 vds-border-subtle vds-bg-muted/20 vds-p-3 vds-min-h-16 vds-group">
               {activeRun.text.length > 0 && (
-                <div className="absolute top-1.5 right-1.5 opacity-0 group-hover/output:opacity-100 transition-opacity">
+                <div className="vds-absolute vds-top-1.5 vds-right-1.5 vds-opacity-0 vds-group-hover:opacity-100 vds-transition-opacity">
                   <CopyButton text={activeRun.text} />
                 </div>
               )}
-              <div className="text-sm text-foreground font-mono leading-relaxed">
+              <div className="vds-text-sm vds-text-primary vds-font-mono vds-leading-relaxed">
                 {renderWithMermaid(activeRun.text, activeRun.status === 'streaming')}
               </div>
             </div>
@@ -161,17 +161,17 @@ export const ApiTestRuns = memo(function ApiTestRuns({
 
           {/* Error */}
           {activeRun.status === 'error' && (
-            <div className="rounded-md border border-status-error/30 bg-status-error/5 p-3">
-              <p className="font-semibold text-sm text-status-error-fg">{t('test.errorTitle')}</p>
-              <p className="text-sm mt-1 text-status-error-fg/80">{activeRun.errorMsg}</p>
+            <div className="vds-rounded-md vds-border-1 vds-border-error/30 vds-bg-error/5 vds-p-3">
+              <p className="vds-font-600 vds-text-sm vds-text-error">{t('test.errorTitle')}</p>
+              <p className="vds-text-sm vds-mt-1 vds-text-error/80">{activeRun.errorMsg}</p>
             </div>
           )}
 
           {/* Prompt snapshot for context */}
-          <p className="text-xs text-muted-foreground truncate">
-            <span className="font-medium">{activeRun.model}</span>
+          <p className="vds-text-xs vds-text-dim vds-truncate">
+            <span className="vds-font-500">{activeRun.model}</span>
             {' · '}
-            <span className="opacity-70">{activeRun.prompt.slice(0, 80)}{activeRun.prompt.length > 80 ? '…' : ''}</span>
+            <span className="vds-opacity-70">{activeRun.prompt.slice(0, 80)}{activeRun.prompt.length > 80 ? '…' : ''}</span>
           </p>
         </div>
       )}

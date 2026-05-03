@@ -1,6 +1,12 @@
+import { useId } from 'react'
 import { tokens } from '@/lib/design-tokens'
 
 export function HexLogo({ className }: { className?: string }) {
+  // SidebarFrame and AppShell each render a HexLogo, so two SVGs sit in the
+  // same document. A static `id="hex-grad"` collides → `fill="url(#hex-grad)"`
+  // resolves to the first match (the hidden mobile bar's gradient on desktop)
+  // and the visible logo paints empty. useId gives each instance its own ID.
+  const gradId = useId()
   return (
     <svg
       className={className}
@@ -10,14 +16,14 @@ export function HexLogo({ className }: { className?: string }) {
       aria-label="Veronex"
     >
       <defs>
-        <linearGradient id="hex-grad" x1="2.5" y1="4.3" x2="29.5" y2="27.7" gradientUnits="userSpaceOnUse">
+        <linearGradient id={gradId} x1="2.5" y1="4.3" x2="29.5" y2="27.7" gradientUnits="userSpaceOnUse">
           <stop offset="0%"   style={{ stopColor: tokens.logo.start }} />
           <stop offset="100%" style={{ stopColor: tokens.logo.end }} />
         </linearGradient>
       </defs>
       <polygon
         points="29.5,16 22.8,27.7 9.2,27.7 2.5,16 9.2,4.3 22.8,4.3"
-        fill="url(#hex-grad)"
+        fill={`url(#${gradId})`}
       />
       <polygon
         points="25,16 20.5,23.8 11.5,23.8 7,16 11.5,8.2 20.5,8.2"

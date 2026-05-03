@@ -75,7 +75,7 @@ export function OllamaTab({
   }, [])
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="providers">{t('nav.ollama')}</TabsTrigger>
@@ -84,7 +84,7 @@ export function OllamaTab({
         </TabsList>
 
         {/* ── 프로바이더 목록 탭 ────────────────────────────────────────────────── */}
-        <TabsContent value="providers" className="mt-6">
+        <TabsContent value="providers" className="vds-mt-6">
           <ProvidersListTab
             servers={servers}
             onRegister={onRegister}
@@ -98,12 +98,12 @@ export function OllamaTab({
         </TabsContent>
 
         {/* ── 동시성 제어 탭 ────────────────────────────────────────────────────── */}
-        <TabsContent value="capacity" className="mt-6">
+        <TabsContent value="capacity" className="vds-mt-6">
           <OllamaCapacitySection />
         </TabsContent>
 
         {/* ── Ollama Lab 탭 ────────────────────────────────────────────────────── */}
-        <TabsContent value="lab" className="mt-6">
+        <TabsContent value="lab" className="vds-mt-6">
           <OllamaLabSection />
         </TabsContent>
       </Tabs>
@@ -158,39 +158,39 @@ function ProvidersListTab({
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-2 flex-wrap">
+    <div className="vds-space-y-4">
+      <div className="vds-flex vds-items-center vds-justify-between vds-gap-3 vds-flex-wrap">
+        <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground animate-pulse">{t('providers.ollama.loadingProviders')}</p>
+            <p className="vds-text-sm vds-text-dim vds-animate-pulse">{t('providers.ollama.loadingProviders')}</p>
           ) : (
-            <span className="text-sm text-muted-foreground">
-              {t('providers.servers.registered')}: <span className="font-medium text-foreground">{total}</span>
+            <span className="vds-text-sm vds-text-dim">
+              {t('providers.servers.registered')}: <span className="vds-font-500 vds-text-primary">{total}</span>
             </span>
           )}
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+        <div className="vds-flex vds-items-center vds-gap-2">
+          <div className="vds-relative">
+            <Search className="vds-absolute vds-left-2.5 vds-top-1/2 -translate-y-1/2 vds-h-3.5 vds-w-3.5 vds-text-dim vds-pointer-events-none" />
             <Input
-              className="h-8 text-sm w-48 pl-8"
+              className="vds-h-8 vds-text-sm vds-w-48 vds-pl-8"
               placeholder={t('providers.ollama.searchProvider')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <Button onClick={onRegister} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />{t('providers.ollama.registerProvider')}
+          <Button onClick={onRegister} className="vds-flex-shrink-0">
+            <Plus className="vds-h-4 vds-w-4 vds-mr-2" />{t('providers.ollama.registerProvider')}
           </Button>
         </div>
       </div>
 
       {error && (
-        <Card className="border-destructive/40 bg-destructive/5">
-          <CardContent className="p-5 text-destructive">
-            <p className="font-semibold">{t('providers.ollama.failedProviders')}</p>
-            <p className="text-sm mt-1 opacity-75">
+        <Card className="vds-border-destructive/40 vds-bg-destructive/5">
+          <CardContent className="vds-p-5 vds-text-destructive">
+            <p className="vds-font-600">{t('providers.ollama.failedProviders')}</p>
+            <p className="vds-text-sm vds-mt-1 vds-opacity-75">
               {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
           </CardContent>
@@ -198,11 +198,11 @@ function ProvidersListTab({
       )}
 
       {!isLoading && providers.length === 0 && !error && (
-        <Card className="border-dashed">
-          <CardContent className="p-10 text-center text-muted-foreground">
-            <Server className="h-10 w-10 mx-auto mb-3 opacity-25" />
-            <p className="font-medium">{t('providers.ollama.noBackends')}</p>
-            <p className="text-sm mt-1">{t('providers.ollama.noBackendsHint')}</p>
+        <Card className="vds-border-dashed">
+          <CardContent className="vds-p-10 vds-text-center vds-text-dim">
+            <Server className="vds-h-10 vds-w-10 vds-mx-auto vds-mb-3 vds-opacity-25" />
+            <p className="vds-font-500">{t('providers.ollama.noBackends')}</p>
+            <p className="vds-text-sm vds-mt-1">{t('providers.ollama.noBackendsHint')}</p>
           </CardContent>
         </Card>
       )}
@@ -211,34 +211,34 @@ function ProvidersListTab({
         <DataTable
           minWidth="800px"
           footer={totalPages > 1 ? (
-            <div className="flex items-center justify-between px-6 py-2">
-              <span className="text-xs text-muted-foreground">
+            <div className="vds-flex vds-items-center vds-justify-between vds-px-6 vds-py-2">
+              <span className="vds-text-xs vds-text-dim">
                 {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, total)} / {total}
               </span>
-              <div className="flex items-center gap-1">
-                <Button variant="outline" size="icon" className="h-7 w-7"
+              <div className="vds-flex vds-items-center vds-gap-1">
+                <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                   aria-label={t('common.prevPage')}
                   onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
-                  <ChevronLeft className="h-3.5 w-3.5" />
+                  <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
                 </Button>
-                <span className="text-xs text-muted-foreground px-1">{page} / {totalPages}</span>
-                <Button variant="outline" size="icon" className="h-7 w-7"
+                <span className="vds-text-xs vds-text-dim vds-px-1">{page} / {totalPages}</span>
+                <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                   aria-label={t('common.nextPage')}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page >= totalPages}>
-                  <ChevronRight className="h-3.5 w-3.5" />
+                  <ChevronRight className="vds-h-3.5 vds-w-3.5" />
                 </Button>
               </div>
             </div>
           ) : undefined}
         >
           <TableHeader>
-            <TableRow className="hover:bg-transparent">
+            <TableRow className="vds-hover:bg-transparent">
               <TableHead>{t('providers.ollama.name')}</TableHead>
               <TableHead>{t('providers.ollama.server')}</TableHead>
-              <TableHead className="min-w-52">{t('providers.servers.liveMetrics')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('providers.ollama.status')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
-              <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
+              <TableHead className="vds-min-w-52">{t('providers.servers.liveMetrics')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('providers.ollama.status')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+              <TableHead className="vds-text-right vds-whitespace-nowrap">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -247,44 +247,44 @@ function ProvidersListTab({
               return (
                 <TableRow key={b.id}>
                   <TableCell>
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-semibold text-text-bright">{b.name}</span>
+                    <div className="vds-flex vds-items-center vds-gap-2 vds-mb-1">
+                      <span className="vds-font-600 vds-text-bright">{b.name}</span>
                       {b.is_free_tier && (
-                        <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5">
+                        <Badge variant="outline" className="vds-bg-warning/15 vds-text-warning vds-border-warning/30 vds-text-[10px] vds-px-2 vds-py-0.5">
                           {t('providers.ollama.freeTier')}
                         </Badge>
                       )}
                     </div>
                     {b.url && (
-                      <span className="font-mono text-xs text-muted-foreground/70">{extractHost(b.url)}</span>
+                      <span className="vds-font-mono vds-text-xs vds-text-dim/70">{extractHost(b.url)}</span>
                     )}
                   </TableCell>
 
                   <TableCell>
-                    <div className="space-y-1 text-xs">
+                    <div className="vds-space-y-1 vds-text-xs">
                       {linkedServer ? (
-                        <div className="flex items-center gap-1.5 text-text-dim">
-                          <Server className="h-3 w-3 text-muted-foreground/70 shrink-0" />
-                          <span className="font-medium">{linkedServer.name}</span>
+                        <div className="vds-flex vds-items-center vds-gap-1.5 vds-text-dim">
+                          <Server className="vds-h-3 vds-w-3 vds-text-dim/70 vds-flex-shrink-0" />
+                          <span className="vds-font-500">{linkedServer.name}</span>
                         </div>
                       ) : (
-                        <span className="text-text-faint italic text-xs">{t('providers.ollama.noServerLinked')}</span>
+                        <span className="vds-text-faint vds-italic vds-text-xs">{t('providers.ollama.noServerLinked')}</span>
                       )}
-                      <div className="flex items-center gap-3 text-muted-foreground pl-0.5">
+                      <div className="vds-flex vds-items-center vds-gap-3 vds-text-dim vds-pl-0.5">
                         {b.gpu_index !== null && (
-                          <span className="flex items-center gap-1">
-                            <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase">{t('providers.ollama.gpuLabel')}</span>
-                            <span className="tabular-nums font-mono">{b.gpu_index}</span>
+                          <span className="vds-flex vds-items-center vds-gap-1">
+                            <span className="vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase">{t('providers.ollama.gpuLabel')}</span>
+                            <span className="vds-tabular-nums vds-font-mono">{b.gpu_index}</span>
                           </span>
                         )}
                         {b.total_vram_mb > 0 && (
-                          <span className="flex items-center gap-1">
-                            <span className="text-[10px] font-semibold text-muted-foreground/70 uppercase">{t('providers.ollama.vram')}</span>
-                            <span className="tabular-nums font-mono">{fmtMb(b.total_vram_mb)}</span>
+                          <span className="vds-flex vds-items-center vds-gap-1">
+                            <span className="vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase">{t('providers.ollama.vram')}</span>
+                            <span className="vds-tabular-nums vds-font-mono">{fmtMb(b.total_vram_mb)}</span>
                           </span>
                         )}
                         {b.gpu_index === null && b.total_vram_mb === 0 && linkedServer && (
-                          <span className="text-text-faint italic">{t('providers.servers.notConfigured')}</span>
+                          <span className="vds-text-faint vds-italic">{t('providers.servers.notConfigured')}</span>
                         )}
                       </div>
                     </div>
@@ -293,7 +293,7 @@ function ProvidersListTab({
                   <TableCell>
                     {linkedServer
                       ? <ServerMetricsCompact serverId={linkedServer.id} gpuIndex={b.gpu_index} />
-                      : <span className="text-xs text-text-faint italic">—</span>
+                      : <span className="vds-text-xs vds-text-faint vds-italic">—</span>
                     }
                   </TableCell>
 
@@ -301,21 +301,21 @@ function ProvidersListTab({
                     <StatusBadge status={b.status} />
                   </TableCell>
 
-                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                  <TableCell className="vds-text-xs vds-text-dim vds-whitespace-nowrap">
                     {fmtDateOnly(b.registered_at, tz)}
                   </TableCell>
 
-                  <TableCell className="text-right">
+                  <TableCell className="vds-text-right">
                     <TooltipProvider delayDuration={200}>
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="vds-flex vds-items-center vds-justify-end vds-gap-1">
                         {linkedServer && (
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button variant="ghost" size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-accent-gpu vds-hover:bg-hover-gpu/10"
                                 aria-label={t('providers.servers.history')}
                                 onClick={() => setHistoryServer(linkedServer)}>
-                                <BarChart2 className="h-4 w-4" />
+                                <BarChart2 className="vds-h-4 vds-w-4" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>{t('providers.servers.history')}</TooltipContent>
@@ -324,13 +324,13 @@ function ProvidersListTab({
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-primary"
                               aria-label={t('common.sync')}
                               onClick={() => onSync(b.id)}
                               disabled={syncPending && syncVars === b.id}>
                               <RefreshCw className={
                                 syncPending && syncVars === b.id
-                                  ? 'h-4 w-4 animate-spin' : 'h-4 w-4'
+                                  ? 'vds-h-4 vds-w-4 vds-animate-spin' : 'vds-h-4 vds-w-4'
                               } />
                             </Button>
                           </TooltipTrigger>
@@ -339,10 +339,10 @@ function ProvidersListTab({
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-accent-gpu vds-hover:bg-hover-gpu/10"
                               aria-label={t('providers.ollama.modelSelection')}
                               onClick={() => setViewModelsProvider(b)}>
-                              <ListFilter className="h-4 w-4" />
+                              <ListFilter className="vds-h-4 vds-w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t('providers.ollama.modelSelection')}</TooltipContent>
@@ -350,10 +350,10 @@ function ProvidersListTab({
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-primary vds-hover:bg-primary/10"
                               aria-label={t('providers.ollama.editTitle')}
                               onClick={() => onEdit(b)}>
-                              <Pencil className="h-4 w-4" />
+                              <Pencil className="vds-h-4 vds-w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t('providers.ollama.editTitle')}</TooltipContent>
@@ -361,11 +361,11 @@ function ProvidersListTab({
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-error vds-hover:bg-error/10"
                               aria-label={t('providers.removeProvider')}
                               onClick={() => onDelete(b.id, b.name)}
                               disabled={deleteIsPending}>
-                              <Trash2 className="h-4 w-4" />
+                              <Trash2 className="vds-h-4 vds-w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t('providers.removeProvider')}</TooltipContent>

@@ -8,7 +8,7 @@ import { useTranslation } from '@/i18n'
 function SwaggerLoadingFallback() {
   const { t } = useTranslation()
   return (
-    <div className="flex items-center justify-center h-64 text-muted-foreground text-sm animate-pulse">
+    <div className="vds-flex vds-items-center vds-justify-center vds-h-64 vds-text-dim vds-text-sm vds-animate-pulse">
       {t('apiDocs.loading')}
     </div>
   )
@@ -30,22 +30,22 @@ export default function SwaggerPage() {
   const specUrl = `${API_URL}/docs/openapi.json?lang=${lang}`
 
   return (
-    <div className="flex flex-col min-h-0">
+    <div className="vds-flex vds-flex-col vds-min-h-0">
       {/* Back nav */}
-      <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-card text-sm">
+      <div className="vds-flex vds-items-center vds-gap-2 vds-px-4 vds-py-2 vds-border-b-1 vds-border-subtle vds-bg-card vds-text-sm">
         <Link
           href="/api-docs"
-          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors"
+          className="vds-flex vds-items-center vds-gap-1 vds-text-dim vds-hover:text-primary vds-transition-colors"
         >
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeft className="vds-h-4 vds-w-4" />
           {t('apiDocs.backToDocs')}
         </Link>
-        <span className="text-border mx-1">/</span>
-        <span className="font-medium">{t('apiDocs.swaggerTitle')}</span>
+        <span className="vds-text-dim vds-mx-1">/</span>
+        <span className="vds-font-500">{t('apiDocs.swaggerTitle')}</span>
       </div>
 
       {/* Viewer — fills remaining space */}
-      <div className="flex-1 overflow-auto">
+      <div className="vds-flex-1 vds-overflow-auto">
         <SwaggerUiWrapper specUrl={specUrl} />
       </div>
     </div>

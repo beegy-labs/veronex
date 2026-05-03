@@ -20,8 +20,8 @@ function statusDotColor(status: string): string {
 }
 
 function StatusIcon({ status }: { status: string }) {
-  const cls = 'h-3 w-3 shrink-0'
-  if (status === 'running') return <Loader2 className={`${cls} animate-spin`} />
+  const cls = 'vds-h-3 vds-w-3 vds-flex-shrink-0'
+  if (status === 'running') return <Loader2 className={`${cls} vds-animate-spin`} />
   return <Clock className={cls} />
 }
 
@@ -48,13 +48,13 @@ export const LiveFeed = memo(function LiveFeed() {
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between">
-          <CardTitle className="text-sm font-semibold">{t('overview.liveFeed')}</CardTitle>
+      <CardHeader className="vds-pb-2">
+        <div className="vds-flex vds-items-center vds-justify-between">
+          <CardTitle className="vds-text-sm vds-font-600">{t('overview.liveFeed')}</CardTitle>
           {activeJobs.length > 0 && (
-            <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <span className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-dim">
               <span
-                className="h-1.5 w-1.5 rounded-full animate-pulse"
+                className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-animate-pulse"
                 style={{ background: tokens.status.success }}
               />
               {t('overview.liveIndicator')}
@@ -62,39 +62,39 @@ export const LiveFeed = memo(function LiveFeed() {
           )}
         </div>
       </CardHeader>
-      <CardContent className="p-0">
+      <CardContent className="vds-p-0">
         {activeJobs.length === 0 ? (
-          <div className="flex items-center justify-center h-20 text-sm text-muted-foreground">
+          <div className="vds-flex vds-items-center vds-justify-center vds-h-20 vds-text-sm vds-text-dim">
             {t('overview.waitingRequests')}
           </div>
         ) : (
-          <div className="overflow-y-auto max-h-64">
-            <Table className="text-xs" style={{ minWidth: 480 }}>
+          <div className="vds-overflow-y-auto vds-max-h-64">
+            <Table className="vds-text-xs" style={{ minWidth: 480 }}>
               <TableBody>
                 {activeJobs.map(job => (
                   <TableRow
                     key={job.id}
-                    className="border-b border-border last:border-0 hover:bg-muted/30 transition-colors"
+                    className="vds-border-b-1 vds-border-subtle last:border-0 vds-hover:bg-hover/30 vds-transition-colors"
                   >
-                    <TableCell className="py-2 pl-4 w-5">
+                    <TableCell className="vds-py-2 vds-pl-4 vds-w-5">
                       <span
-                        className="h-2 w-2 rounded-full inline-block"
+                        className="vds-h-2 vds-w-2 vds-rounded-full vds-inline-block"
                         style={{ background: statusDotColor(job.status) }}
                       />
                     </TableCell>
-                    <TableCell className="py-2 px-2 font-mono max-w-[160px] truncate text-foreground">
+                    <TableCell className="vds-py-2 vds-px-2 vds-font-mono vds-max-w-[160px] vds-truncate vds-text-primary">
                       {job.model_name}
                     </TableCell>
-                    <TableCell className="py-2 px-2 text-muted-foreground">
+                    <TableCell className="vds-py-2 vds-px-2 vds-text-dim">
                       {job.provider_name ?? job.provider_type}
                     </TableCell>
-                    <TableCell className="py-2 px-2" style={{ color: statusDotColor(job.status) }}>
-                      <span className="flex items-center gap-1">
+                    <TableCell className="vds-py-2 vds-px-2" style={{ color: statusDotColor(job.status) }}>
+                      <span className="vds-flex vds-items-center vds-gap-1">
                         <StatusIcon status={job.status} />
                         {t(`jobs.statuses.${job.status}` as Parameters<typeof t>[0])}
                       </span>
                     </TableCell>
-                    <TableCell className="py-2 pl-2 pr-4 tabular-nums text-muted-foreground text-right whitespace-nowrap">
+                    <TableCell className="vds-py-2 vds-pl-2 vds-pr-4 vds-tabular-nums vds-text-dim vds-text-right vds-whitespace-nowrap">
                       <ElapsedTime since={job.created_at} />
                     </TableCell>
                   </TableRow>

@@ -44,7 +44,7 @@ Inbound Adapters → [Ports] → Application Core → [Ports] → Outbound Adapt
 | Enqueue before GPU work | ZSET queue: `veronex:queue:zset` (score = now_ms - tier_bonus) |
 | Stream via SSE | Real-time token delivery |
 | Define ports before adapters | Dependency rule respected |
-| Use `--theme-*` tokens in CSS | `tokens.css` is the design SSOT |
+| Use `--vds-theme-*` tokens in CSS | `web/app/styles/vds/theme-veronex.css` is the design SSOT (verodesign + Verde Nexus override). Bare Tailwind classes are blocked by `pnpm lint:no-tailwind` |
 | Check docs/llm/ before coding | CDD-first: update docs then code |
 | Use `onSettled` for TQ invalidation | Runs on error too |
 | Gate lab features via `useLabSettings()` | Context SSOT, not local state |

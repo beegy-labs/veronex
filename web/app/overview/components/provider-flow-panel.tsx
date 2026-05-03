@@ -217,11 +217,11 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
 
   return (
     <Card>
-      <CardHeader className="pb-2">
-        <div className="flex items-center justify-between gap-4">
-          <CardTitle className="text-sm font-semibold">{t('overview.providerFlow')}</CardTitle>
+      <CardHeader className="vds-pb-2">
+        <div className="vds-flex vds-items-center vds-justify-between vds-gap-4">
+          <CardTitle className="vds-text-sm vds-font-600">{t('overview.providerFlow')}</CardTitle>
           {(pendingJobs > 0 || runningJobs > 0 || recentRequests > 0) && (
-            <div className="flex items-center gap-3 text-xs text-muted-foreground shrink-0">
+            <div className="vds-flex vds-items-center vds-gap-3 vds-text-xs vds-text-dim vds-flex-shrink-0">
               {pendingJobs > 0 && (
                 <span style={{ color: tokens.status.warning }}>
                   {t('overview.pendingJobsCount', { count: pendingJobs })}
@@ -239,18 +239,18 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
           )}
         </div>
       </CardHeader>
-      <CardContent className="p-0 pb-2">
+      <CardContent className="vds-p-0 vds-pb-2">
         {/* Max-width cap — prevents the SVG from filling ultra-wide screens */}
-        <div className="mx-auto w-full" style={{ maxWidth: 680 }}>
+        <div className="vds-mx-auto vds-w-full" style={{ maxWidth: 680 }}>
           <div
             ref={containerRef}
-            className="relative w-full overflow-hidden"
+            className="vds-relative vds-w-full vds-overflow-hidden"
             style={{ aspectRatio: `${VIEW_W} / ${VIEW_H}` }}
           >
             {/* SVG topology */}
             <svg
               viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-              className="absolute inset-0 w-full h-full"
+              className="vds-absolute vds-inset-0 vds-w-full vds-h-full"
               aria-label={t('overview.providerFlow')}
             >
               <defs>
@@ -440,7 +440,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
 
             {/* Bee overlay — positioned in SVG coordinate space then scaled */}
             <div
-              className="absolute top-0 left-0 pointer-events-none"
+              className="vds-absolute vds-top-0 vds-left-0 vds-pointer-events-none"
               style={{
                 width: VIEW_W,
                 height: VIEW_H,

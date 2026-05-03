@@ -87,15 +87,15 @@ export default function LoginPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <Card className="w-full max-w-sm">
-        <CardHeader>
-          <CardTitle className="text-xl">{t('auth.login')}</CardTitle>
+    <div className="vds-min-h-screen vds-flex vds-items-center vds-justify-center vds-bg-page">
+      <Card className="vds-w-full vds-max-w-sm">
+        <CardHeader className="vds-p-5 vds-pb-3">
+          <CardTitle className="vds-text-xl">{t('auth.login')}</CardTitle>
           <CardDescription>{t('auth.loginDescription')}</CardDescription>
         </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
+        <CardContent className="vds-p-5 vds-pt-0">
+          <form onSubmit={handleSubmit} className="vds-space-y-3">
+            <div className="vds-space-y-1">
               <Label htmlFor="username">{t('auth.username')}</Label>
               <Input
                 id="username"
@@ -106,7 +106,7 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1">
               <Label htmlFor="password">{t('auth.password')}</Label>
               <Input
                 id="password"
@@ -117,44 +117,44 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <div className="flex items-center gap-2">
+            <div className="vds-flex vds-items-center vds-gap-2">
               <input
                 id="remember"
                 type="checkbox"
                 checked={rememberUsername}
                 onChange={(e) => setRememberUsername(e.target.checked)}
-                className="h-4 w-4 rounded border-border accent-primary cursor-pointer"
+                className="vds-h-4 vds-w-4 vds-rounded vds-border-subtle vds-accent-primary vds-cursor-pointer"
               />
-              <Label htmlFor="remember" className="cursor-pointer font-normal text-sm text-muted-foreground">
+              <Label htmlFor="remember" className="vds-cursor-pointer vds-font-400 vds-text-sm vds-text-dim">
                 {t('auth.rememberUsername')}
               </Label>
             </div>
             {error && (
-              <p className="text-sm text-destructive">{error}</p>
+              <p className="vds-text-sm vds-text-destructive">{error}</p>
             )}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="vds-w-full" disabled={loading}>
               {loading ? t('auth.signingIn') : t('auth.login')}
             </Button>
           </form>
         </CardContent>
-        <CardFooter className="flex justify-between items-center pt-0">
+        <CardFooter className="vds-flex vds-justify-between vds-items-center vds-p-5 vds-pt-2">
           <Button
             type="button"
             variant="ghost"
             size="icon"
-            className="h-8 w-8"
+            className="vds-h-8 vds-w-8"
             onClick={toggleTheme}
             aria-label={theme === 'dark' ? t('common.switchToLight') : t('common.switchToDark')}
           >
-            {theme === 'dark' ? <Sun className="h-4 w-4" /> : <Moon className="h-4 w-4" />}
+            {theme === 'dark' ? <Sun className="vds-h-4 vds-w-4" /> : <Moon className="vds-h-4 vds-w-4" />}
           </Button>
           <Select value={locale} onValueChange={(v) => changeLocale(v as Locale)}>
-            <SelectTrigger className="w-32 h-8 text-xs" aria-label={t('common.language')}>
+            <SelectTrigger className="vds-w-32 vds-h-8 vds-text-xs" aria-label={t('common.language')}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               {locales.map((l) => (
-                <SelectItem key={l} value={l} className="text-xs">
+                <SelectItem key={l} value={l} className="vds-text-xs">
                   {localeLabels[l]}
                 </SelectItem>
               ))}

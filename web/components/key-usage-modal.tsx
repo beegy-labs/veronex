@@ -69,62 +69,62 @@ export function KeyUsageModal({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-[95vw] sm:max-w-3xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="vds-max-w-[95vw] vds-sm:max-w-3xl vds-max-h-[90vh] vds-overflow-y-auto">
         <DialogHeader>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
+          <div className="vds-flex vds-items-center vds-justify-between vds-gap-3 vds-flex-wrap">
             <div>
-              <DialogTitle className="text-lg">
+              <DialogTitle className="vds-text-lg">
                 {t('keys.usageTitle', { name: apiKey.name })}
               </DialogTitle>
-              <div className="flex items-center gap-2 mt-1">
-                <code className="text-xs font-mono text-muted-foreground">{apiKey.key_prefix}…</code>
+              <div className="vds-flex vds-items-center vds-gap-2 vds-mt-1">
+                <code className="vds-text-xs vds-font-mono vds-text-dim">{apiKey.key_prefix}…</code>
                 <Badge
                   variant="outline"
                   className={
                     apiKey.tier === 'free'
-                      ? 'text-muted-foreground border-border text-[10px] whitespace-nowrap'
-                      : 'bg-status-info/10 text-status-info-fg border-status-info/30 text-[10px] whitespace-nowrap'
+                      ? 'vds-text-dim vds-border-subtle vds-text-[10px] vds-whitespace-nowrap'
+                      : 'vds-bg-info/10 vds-text-info vds-border-info/30 vds-text-[10px] vds-whitespace-nowrap'
                   }
                 >
                   {apiKey.tier === 'free' ? t('keys.tierFree') : t('keys.tierPaid')}
                 </Badge>
               </div>
             </div>
-            <div className="flex items-center gap-1">
+            <div className="vds-flex vds-items-center vds-gap-1">
               <TimeRangeSelector value={range} onChange={setRange} />
             </div>
           </div>
         </DialogHeader>
 
         {isLoading && (
-          <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+          <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim vds-text-sm">
             {t('common.loading')}
           </div>
         )}
 
         {!isLoading && (
-          <div className="space-y-6 mt-2">
+          <div className="vds-space-y-6 vds-mt-2">
             {/* KPI row */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="vds-grid vds-grid-cols-2 vds-sm:grid-cols-4 vds-gap-3">
               <StatsCard
                 title={t('usage.totalRequests')}
                 value={fmtCompact(totalRequests)}
-                icon={<Hash className="h-4 w-4" />}
+                icon={<Hash className="vds-h-4 vds-w-4" />}
               />
               <StatsCard
                 title={t('usage.totalTokens')}
                 value={fmtCompact(totalTokens)}
-                icon={<Coins className="h-4 w-4" />}
+                icon={<Coins className="vds-h-4 vds-w-4" />}
               />
               <StatsCard
                 title={t('usage.success')}
                 value={totalRequests > 0 ? `${successRate}%` : '—'}
-                icon={<CheckCircle className="h-4 w-4" />}
+                icon={<CheckCircle className="vds-h-4 vds-w-4" />}
               />
               <StatsCard
                 title={t('usage.errors')}
                 value={fmtCompact(totalErrors)}
-                icon={<XCircle className="h-4 w-4" />}
+                icon={<XCircle className="vds-h-4 vds-w-4" />}
               />
             </div>
 
@@ -137,29 +137,29 @@ export function KeyUsageModal({
                 <DataTable minWidth="480px">
                   <TableHeader>
                     <TableRow>
-                      <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
-                      <TableHead className="whitespace-nowrap">{t('usage.provider')}</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">{t('usage.requests')}</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">{t('usage.share')}</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">{t('usage.totalTokens')}</TableHead>
-                      <TableHead className="text-right whitespace-nowrap">{t('usage.avgLatency')}</TableHead>
+                      <TableHead className="vds-whitespace-nowrap">{t('jobs.model')}</TableHead>
+                      <TableHead className="vds-whitespace-nowrap">{t('usage.provider')}</TableHead>
+                      <TableHead className="vds-text-right vds-whitespace-nowrap">{t('usage.requests')}</TableHead>
+                      <TableHead className="vds-text-right vds-whitespace-nowrap">{t('usage.share')}</TableHead>
+                      <TableHead className="vds-text-right vds-whitespace-nowrap">{t('usage.totalTokens')}</TableHead>
+                      <TableHead className="vds-text-right vds-whitespace-nowrap">{t('usage.avgLatency')}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {models.map((m) => (
                       <TableRow key={`${m.model_name}-${m.provider_type}`}>
-                        <TableCell className="font-mono text-xs">{m.model_name}</TableCell>
+                        <TableCell className="vds-font-mono vds-text-xs">{m.model_name}</TableCell>
                         <TableCell>
-                          <Badge variant="outline" className="text-[10px] capitalize whitespace-nowrap">{m.provider_type}</Badge>
+                          <Badge variant="outline" className="vds-text-[10px] vds-capitalize vds-whitespace-nowrap">{m.provider_type}</Badge>
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                        <TableCell className="vds-text-right vds-tabular-nums">{fmtCompact(m.request_count)}</TableCell>
+                        <TableCell className="vds-text-right vds-tabular-nums vds-text-dim">
                           {fmtPct1(m.call_pct)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums">
+                        <TableCell className="vds-text-right vds-tabular-nums">
                           {fmtCompact(m.prompt_tokens + m.completion_tokens)}
                         </TableCell>
-                        <TableCell className="text-right tabular-nums text-muted-foreground">
+                        <TableCell className="vds-text-right vds-tabular-nums vds-text-dim">
                           {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
                         </TableCell>
                       </TableRow>
@@ -170,7 +170,7 @@ export function KeyUsageModal({
             )}
 
             {chartData.length === 0 ? (
-              <div className="flex h-32 items-center justify-center text-muted-foreground text-sm rounded-lg border border-dashed">
+              <div className="vds-flex vds-h-32 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-rounded-lg vds-border-1 vds-border-dashed">
                 {t('usage.noKeyData')}
               </div>
             ) : (

@@ -78,33 +78,33 @@ describe('calcPercentage', () => {
 
 describe('successRateCls', () => {
   it('returns muted class for undefined rate', () => {
-    expect(successRateCls(undefined)).toBe('text-muted-foreground')
+    expect(successRateCls(undefined)).toBe('vds-text-dim')
   })
 
   it('returns success class for rate >= 90', () => {
-    expect(successRateCls(90)).toContain('status-success')
-    expect(successRateCls(100)).toContain('status-success')
-    expect(successRateCls(95.5)).toContain('status-success')
+    expect(successRateCls(90)).toContain('vds-text-success')
+    expect(successRateCls(100)).toContain('vds-text-success')
+    expect(successRateCls(95.5)).toContain('vds-text-success')
   })
 
   it('boundary: exactly 90 is success (not warning)', () => {
-    expect(successRateCls(90)).toContain('status-success')
-    expect(successRateCls(90)).not.toContain('status-warning')
+    expect(successRateCls(90)).toContain('vds-text-success')
+    expect(successRateCls(90)).not.toContain('vds-text-warning')
   })
 
   it('returns warning class for rate >= 70 and < 90', () => {
-    expect(successRateCls(70)).toContain('status-warning')
-    expect(successRateCls(80)).toContain('status-warning')
-    expect(successRateCls(89.9)).toContain('status-warning')
+    expect(successRateCls(70)).toContain('vds-text-warning')
+    expect(successRateCls(80)).toContain('vds-text-warning')
+    expect(successRateCls(89.9)).toContain('vds-text-warning')
   })
 
   it('boundary: exactly 70 is warning (not error)', () => {
-    expect(successRateCls(70)).toContain('status-warning')
-    expect(successRateCls(70)).not.toContain('status-error')
+    expect(successRateCls(70)).toContain('vds-text-warning')
+    expect(successRateCls(70)).not.toContain('vds-text-error')
   })
 
   it('returns error class for rate < 70', () => {
-    expect(successRateCls(69.9)).toContain('status-error')
-    expect(successRateCls(0)).toContain('status-error')
+    expect(successRateCls(69.9)).toContain('vds-text-error')
+    expect(successRateCls(0)).toContain('vds-text-error')
   })
 })

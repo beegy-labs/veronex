@@ -448,42 +448,42 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       // Resolve the new turn's true job_id from S3 ConversationRecord. The
       // SSE chunk.id is a synthetic stream identifier (`chatcmpl-mcp-<v4>`),
       // not the inference_jobs row id, so we can't derive `job_id` from it
-      // (S23 v1 mistake — caused 404 on the `/internals` lazy-fetch and the
-      // test-panel "Failed to load data" symptom). Instead read the turn list
-      // from the conversation detail and pick the newest turn — that is the
-      // round we just persisted.
-      let resolvedJobId: string | undefined
-      let inlineToolCalls: ConversationMessage['toolCalls']
-      const finalConvId = (() => {
-        const row = (conversationSessions.find((s) => s.id === sid)
-          ?? (sid === activeConvSessionId ? activeConvSession : undefined))
-        return row?.conversationId
-      })()
-      if (hasMcpTools && finalConvId) {
-        try {
-          const detail = await api.conversation(finalConvId)
-          const lastTurn = detail.turns[detail.turns.length - 1]
-          if (lastTurn) {
-            resolvedJobId = lastTurn.job_id
-            const tcRaw = lastTurn.tool_calls
-            if (Array.isArray(tcRaw) && tcRaw.length > 0) {
-              const collected: { name: string; arguments: unknown }[] = []
-              for (const tc of tcRaw) {
-                const name = tc?.function?.name
-                if (!name) continue
-                collected.push({ name, arguments: tc.function?.arguments ?? null })
-              }
-              if (collected.length > 0) inlineToolCalls = collected
-            }
-          }
-        } catch {
-          // Soft-fail: the message still renders, just without the tool chain inline.
-        }
-      }
+ // (S23 v1 mistake — caused 404 on the `/internals` lazy-fetch and the
+ // test-panel "Failed to load data" symptom). Instead read the turn list
+ // from the conversation detail and pick the newest turn — that is the
+ // round we just persisted.
+ let resolvedJobId: string | undefined
+ let inlineToolCalls: ConversationMessage['toolCalls']
+ const finalConvId = (() => {
+ const row = (conversationSessions.find((s) => s.id === sid)
+ ?? (sid === activeConvSessionId ? activeConvSession : undefined))
+ return row?.conversationId
+ })()
+ if (hasMcpTools && finalConvId) {
+ try {
+ const detail = await api.conversation(finalConvId)
+ const lastTurn = detail.turns[detail.turns.length - 1]
+ if (lastTurn) {
+ resolvedJobId = lastTurn.job_id
+ const tcRaw = lastTurn.tool_calls
+ if (Array.isArray(tcRaw) && tcRaw.length > 0) {
+ const collected: { name: string; arguments: unknown }[] = []
+ for (const tc of tcRaw) {
+ const name = tc?.function?.name
+ if (!name) continue
+ collected.push({ name, arguments: tc.function?.arguments ?? null })
+ }
+ if (collected.length > 0) inlineToolCalls = collected
+ }
+ }
+ } catch {
+ // Soft-fail: the message still renders, just without the tool chain inline.
+ }
+ }
 
-      setConversationSessions((prev) => prev.map((s) =>
-        s.id === sid
-          ? { ...s, messages: [...s.messages, { role: 'assistant', content: fullText, model, jobId: resolvedJobId, hasMcpTools, toolCalls: inlineToolCalls }], streamingText: '', status: 'idle', mcpToolCall: undefined }
+ setConversationSessions((prev) => prev.map((s) =>
+ s.id === sid
+ ? { ...s, messages: [...s.messages, { role:'assistant', content: fullText, model, jobId: resolvedJobId, hasMcpTools, toolCalls: inlineToolCalls }], streamingText:'', status: 'idle', mcpToolCall: undefined }
           : s
       ))
       onTurnComplete?.()
@@ -572,10 +572,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
       let body: Record<string, unknown>
       if (p.endpoint === '/v1beta/models') {
-        // Gemini native: POST /v1beta/models/{model}:generateContent
-        url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
-        body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
-      } else if (p.endpoint === '/api/generate') {
+ // Gemini native: POST /v1beta/models/{model}:generateContent
+ url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
+ body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
+ } else if (p.endpoint ==='/api/generate') {
         body = {
           model: p.model,
           prompt: p.prompt.trim(),
@@ -704,7 +704,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
   return (
     <Card>
-      <CardContent className="p-5 space-y-0">
+      <CardContent className="vds-p-5 vds-space-y-0">
         <ApiTestForm
           mode={mode}
           providerType={providerType}

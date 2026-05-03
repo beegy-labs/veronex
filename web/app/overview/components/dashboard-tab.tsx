@@ -196,10 +196,10 @@ export function DashboardTab({
 
   /* ── render ─────────────────────────────────────────────── */
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
 
       {/* Section 1: System KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="vds-grid vds-grid-cols-1 vds-sm:grid-cols-3 vds-gap-4">
         {statsLoading ? (
           Array.from({ length: 3 }).map((_, i) => <StatSkeleton key={`stat-${i}`} />)
         ) : (
@@ -208,22 +208,22 @@ export function DashboardTab({
               title={t('overview.providerStatus')}
               value={providers ? `${onlineAll}/${totalProv}` : '—'}
               subtitle={t('common.online')}
-              icon={<Activity className="h-5 w-5" />}
+              icon={<Activity className="vds-h-5 vds-w-5" />}
               valueClassName={providers ? providerValueCls(onlineAll, totalProv) : ''}
             />
             <StatsCard
               title={t('overview.waiting')}
               value={stats ? (stats.jobs_by_status['pending'] ?? 0) : '—'}
               subtitle={t('overview.pendingJobs')}
-              icon={<Clock className="h-5 w-5" />}
+              icon={<Clock className="vds-h-5 vds-w-5" />}
               valueClassName={stats ? pendingValueCls(stats.jobs_by_status['pending'] ?? 0) : ''}
             />
             <StatsCard
               title={t('overview.running')}
               value={stats ? (stats.jobs_by_status['running'] ?? 0) : '—'}
               subtitle={t('overview.runningJobs')}
-              icon={<Activity className="h-5 w-5" />}
-              valueClassName={stats && (stats.jobs_by_status['running'] ?? 0) > 0 ? 'text-status-info-fg' : ''}
+              icon={<Activity className="vds-h-5 vds-w-5" />}
+              valueClassName={stats && (stats.jobs_by_status['running'] ?? 0) > 0 ? 'vds-text-info' : ''}
             />
           </>
         )}
@@ -231,38 +231,38 @@ export function DashboardTab({
 
       {/* Thermal Alert banner — only when ≥1 server ≥80°C */}
       {hotServers.length > 0 && (
-        <div className={`rounded-lg border px-4 py-3 ${hasCritical ? 'border-status-error/40 bg-status-error/5' : 'border-status-warning/40 bg-status-warning/5'}`}>
-          <div className="flex items-center justify-between gap-3 flex-wrap">
-            <div className="flex items-center gap-2">
-              <Thermometer className={`h-4 w-4 flex-shrink-0 ${hasCritical ? 'text-status-error-fg' : 'text-status-warning-fg'}`} />
-              <span className={`text-sm font-semibold ${hasCritical ? 'text-status-error-fg' : 'text-status-warning-fg'}`}>
+        <div className={`vds-rounded-lg vds-border-1 vds-px-4 vds-py-3 ${hasCritical ? 'vds-border-error/40 vds-bg-error/5' : 'vds-border-warning/40 vds-bg-warning/5'}`}>
+          <div className="vds-flex vds-items-center vds-justify-between vds-gap-3 vds-flex-wrap">
+            <div className="vds-flex vds-items-center vds-gap-2">
+              <Thermometer className={`vds-h-4 vds-w-4 vds-flex-shrink-0 ${hasCritical ? 'vds-text-error' : 'vds-text-warning'}`} />
+              <span className={`vds-text-sm vds-font-600 ${hasCritical ? 'vds-text-error' : 'vds-text-warning'}`}>
                 {t('overview.thermalAlert')}
               </span>
-              <span className="text-xs text-muted-foreground">
+              <span className="vds-text-xs vds-text-dim">
                 — {t('overview.thermalAlertDesc', { count: hotServers.length })}
               </span>
             </div>
             <Link
               href="/servers"
-              className={`text-xs font-medium flex items-center gap-1 transition-colors ${hasCritical ? 'text-status-error-fg hover:text-status-error-fg/80' : 'text-status-warning-fg hover:text-status-warning-fg/80'}`}
+              className={`vds-text-xs vds-font-500 vds-flex vds-items-center vds-gap-1 vds-transition-colors ${hasCritical ? 'vds-text-error vds-hover:text-error/80' : 'vds-text-warning vds-hover:text-warning/80'}`}
             >
-              {t('overview.checkServers')} <ArrowRight className="h-3 w-3" />
+              {t('overview.checkServers')} <ArrowRight className="vds-h-3 vds-w-3" />
             </Link>
           </div>
-          <div className="mt-2 flex flex-wrap gap-2">
+          <div className="vds-mt-2 vds-flex vds-flex-wrap vds-gap-2">
             {hotServers.map(s => (
               <div
                 key={s.id}
-                className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium border ${
-                  s.thermal === 'critical'
-                    ? 'bg-status-error/10 border-status-error/30 text-status-error-fg'
-                    : 'bg-status-warning/10 border-status-warning/30 text-status-warning-fg'
-                }`}
+                className={`vds-flex vds-items-center vds-gap-1.5 vds-rounded-md vds-px-2 vds-py-1 vds-text-xs vds-font-500 vds-border-1 ${
+ s.thermal === 'critical'
+ ? 'vds-bg-error-bg/10 vds-border-error/30 vds-text-error'
+ : 'vds-bg-warning-bg/10 vds-border-warning/30 vds-text-warning'
+ }`}
               >
-                <Thermometer className="h-3 w-3 flex-shrink-0" />
-                <span className="truncate max-w-[40%]">{s.name}</span>
-                {s.maxTemp != null && <span className="tabular-nums font-bold">{fmtTemp(s.maxTemp)}</span>}
-                <span className="opacity-70">
+                <Thermometer className="vds-h-3 vds-w-3 vds-flex-shrink-0" />
+                <span className="vds-truncate vds-max-w-[40%]">{s.name}</span>
+                {s.maxTemp != null && <span className="vds-tabular-nums vds-font-700">{fmtTemp(s.maxTemp)}</span>}
+                <span className="vds-opacity-70">
                   {s.thermal === 'critical' ? t('overview.tempCritical') : t('overview.tempWarning')}
                 </span>
               </div>
@@ -273,100 +273,100 @@ export function DashboardTab({
 
       {/* Section 2: Infrastructure */}
       <div>
-        <SectionLabel as="h2" className="text-xs">
+        <SectionLabel as="h2" className="vds-text-xs">
           {t('overview.infrastructure')}
         </SectionLabel>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="vds-grid vds-grid-cols-1 vds-md:grid-cols-3 vds-gap-4">
 
           {/* Server Health — per-server status list */}
           <Card>
-            <CardHeader className="pb-2">
-              <CardTitle className="text-sm font-medium flex items-center gap-2">
-                <HardDrive className="h-4 w-4 text-muted-foreground" />
+            <CardHeader className="vds-pb-2">
+              <CardTitle className="vds-text-sm vds-font-500 vds-flex vds-items-center vds-gap-2">
+                <HardDrive className="vds-h-4 vds-w-4 vds-text-dim" />
                 {t('overview.serverHealth')}
                 {serverStatus.length > 0 && (
-                  <span className="text-xs text-muted-foreground font-normal">({serverStatus.length})</span>
+                  <span className="vds-text-xs vds-text-dim vds-font-400">({serverStatus.length})</span>
                 )}
               </CardTitle>
               {serverStatus.length > 0 && (
-                <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+                <div className="vds-flex vds-flex-wrap vds-gap-x-3 vds-gap-y-1 vds-mt-1">
                   {/* Connection counts */}
-                  <span className="flex items-center gap-1 text-[11px] font-medium text-status-success-fg">
-                    <span className="h-1.5 w-1.5 rounded-full bg-status-success inline-block" />
+                  <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-success">
+                    <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-inline-block" />
                     {connectedCount} {t('overview.connected')}
                   </span>
                   {unreachableCount > 0 && (
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-status-error-fg">
-                      <span className="h-1.5 w-1.5 rounded-full bg-status-error inline-block" />
+                    <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-error">
+                      <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-error vds-inline-block" />
                       {unreachableCount} {t('overview.unreachable')}
                     </span>
                   )}
                   {/* Thermal counts — only show non-normal states + normal count */}
-                  <span className="flex items-center gap-1 text-[11px] font-medium text-status-success-fg">
-                    <CheckCircle2 className="h-3 w-3" />
+                  <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-success">
+                    <CheckCircle2 className="vds-h-3 vds-w-3" />
                     {normalCount} {t('overview.tempNormal')}
                   </span>
                   {warningCount > 0 && (
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-status-warning-fg">
-                      <AlertTriangle className="h-3 w-3" />
+                    <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-warning">
+                      <AlertTriangle className="vds-h-3 vds-w-3" />
                       {warningCount} {t('overview.tempWarning')}
                     </span>
                   )}
                   {criticalCount > 0 && (
-                    <span className="flex items-center gap-1 text-[11px] font-medium text-status-error-fg">
-                      <XCircle className="h-3 w-3" />
+                    <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-error">
+                      <XCircle className="vds-h-3 vds-w-3" />
                       {criticalCount} {t('overview.tempCritical')}
                     </span>
                   )}
                 </div>
               )}
             </CardHeader>
-            <CardContent className="pt-0">
+            <CardContent className="vds-pt-0">
               {serverStatus.length === 0 ? (
-                <p className="text-xs text-muted-foreground py-3">{t('overview.noServers')}</p>
+                <p className="vds-text-xs vds-text-dim vds-py-3">{t('overview.noServers')}</p>
               ) : (() => {
                 const abnormal = serverStatus.filter(s => !s.connected || s.thermal === 'warning' || s.thermal === 'critical')
                 return abnormal.length === 0 ? (
-                  <p className="text-xs text-status-success-fg py-3">{t('overview.allServersNormal')}</p>
+                  <p className="vds-text-xs vds-text-success vds-py-3">{t('overview.allServersNormal')}</p>
                 ) : (
-                  <div className="space-y-1">
+                  <div className="vds-space-y-1">
                     {abnormal.slice(0, 5).map(s => (
-                      <div key={s.id} className={`flex items-center justify-between py-2 px-2 gap-2 rounded-sm ${THERMAL_ROW_CLS[s.thermal]}`}>
-                        <span className={`text-sm font-medium truncate min-w-0 ${THERMAL_NAME_CLS[s.thermal]}`}>{s.name}</span>
-                        <div className="flex items-center gap-3 flex-shrink-0 whitespace-nowrap">
+                      <div key={s.id} className={`vds-flex vds-items-center vds-justify-between vds-py-2 vds-px-2 vds-gap-2 vds-rounded-sm ${THERMAL_ROW_CLS[s.thermal]}`}>
+                        <span className={`vds-text-sm vds-font-500 vds-truncate vds-min-w-0 ${THERMAL_NAME_CLS[s.thermal]}`}>{s.name}</span>
+                        <div className="vds-flex vds-items-center vds-gap-3 vds-flex-shrink-0 vds-whitespace-nowrap">
                           <ConnectionDot connected={s.connected} />
                           <ThermalLevelBadge level={s.thermal} temp={s.maxTemp} />
                         </div>
                       </div>
                     ))}
                     {abnormal.length > 5 && (
-                      <p className="text-xs text-muted-foreground text-center py-1">
+                      <p className="vds-text-xs vds-text-dim vds-text-center vds-py-1">
                         +{abnormal.length - 5} {t('overview.moreServers')}
                       </p>
                     )}
                   </div>
                 )
               })()}
-              <div className="mt-3 pt-2 border-t border-border">
-                <Link href="/servers" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-                  {t('overview.checkServers')} <ArrowRight className="h-3 w-3" />
+              <div className="vds-mt-3 vds-pt-2 vds-border-t-1 vds-border-subtle">
+                <Link href="/servers" className="vds-text-xs vds-text-dim vds-hover:text-primary vds-flex vds-items-center vds-gap-1 vds-transition-colors">
+                  {t('overview.checkServers')} <ArrowRight className="vds-h-3 vds-w-3" />
                 </Link>
               </div>
             </CardContent>
           </Card>
 
           {/* Power cards */}
-          <div className="md:col-span-2 grid grid-cols-1 sm:grid-cols-3 gap-4">
+          <div className="vds-md:col-span-2 vds-grid vds-grid-cols-1 vds-sm:grid-cols-3 vds-gap-4">
             <StatsCard
               title={t('overview.dailyPower')}
               value={(hasPowerData || hasHistory) ? fmtKwh(kwhToday) : '—'}
-              icon={<Zap className="h-5 w-5" />}
+              icon={<Zap className="vds-h-5 vds-w-5" />}
               subtitleNode={dailyDelta != null ? (
-                <span className={dailyDelta > 0 ? 'text-status-warning-fg' : 'text-status-success-fg'}>
+                <span className={dailyDelta > 0 ? 'vds-text-warning' : 'vds-text-success'}>
                   {dailyDelta > 0 ? '+' : ''}{fmtKwh(dailyDelta)} {t('overview.sameDayLastWeek')}
                 </span>
               ) : (
-                <span className="text-muted-foreground">
+                <span className="vds-text-dim">
                   {hasHistory ? t('overview.sameDayLastWeek') : t('overview.noServerPower')}
                 </span>
               )}
@@ -374,13 +374,13 @@ export function DashboardTab({
             <StatsCard
               title={t('overview.weeklyPower')}
               value={fmtKwh(kwhThisWeek)}
-              icon={<Zap className="h-5 w-5" />}
+              icon={<Zap className="vds-h-5 vds-w-5" />}
               subtitleNode={weekDelta != null ? (
-                <span className={weekDelta > 0 ? 'text-status-warning-fg' : weekDelta < 0 ? 'text-status-success-fg' : 'text-muted-foreground'}>
+                <span className={weekDelta > 0 ? 'vds-text-warning' : weekDelta < 0 ? 'vds-text-success' : 'vds-text-dim'}>
                   {weekDelta > 0 ? '+' : ''}{fmtKwh(weekDelta)} {t('overview.prevWeek')}
                 </span>
               ) : (
-                <span className="text-muted-foreground">
+                <span className="vds-text-dim">
                   {hasHistory && historySpanD < 7
                     ? t('overview.daysData', { n: fmtCompact(historySpanD) })
                     : t('overview.noServerPower')}
@@ -390,13 +390,13 @@ export function DashboardTab({
             <StatsCard
               title={t('overview.monthlyPower')}
               value={fmtKwh(kwhThisMonth)}
-              icon={<Zap className="h-5 w-5" />}
+              icon={<Zap className="vds-h-5 vds-w-5" />}
               subtitleNode={monthDelta != null ? (
-                <span className={monthDelta > 0 ? 'text-status-warning-fg' : monthDelta < 0 ? 'text-status-success-fg' : 'text-muted-foreground'}>
+                <span className={monthDelta > 0 ? 'vds-text-warning' : monthDelta < 0 ? 'vds-text-success' : 'vds-text-dim'}>
                   {monthDelta > 0 ? '+' : ''}{fmtKwh(monthDelta)} {t('overview.prevMonth')}
                 </span>
               ) : (
-                <span className="text-muted-foreground">
+                <span className="vds-text-dim">
                   {hasHistory && historySpanD < 30
                     ? t('overview.daysData', { n: fmtCompact(historySpanD) })
                     : t('overview.noServerPower')}
@@ -408,38 +408,38 @@ export function DashboardTab({
       </div>
 
       {/* Section 3: Workload + Latency Monitor */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="vds-grid vds-grid-cols-1 vds-md:grid-cols-2 vds-gap-4">
 
         {/* Workload — metric × time-period table */}
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">{t('overview.workload')}</CardTitle>
+          <CardHeader className="vds-pb-3">
+            <CardTitle className="vds-text-base">{t('overview.workload')}</CardTitle>
           </CardHeader>
-          <CardContent className="pt-0">
-            <Table className="text-sm">
+          <CardContent className="vds-pt-0">
+            <Table className="vds-text-sm">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-left text-xs text-muted-foreground font-medium pb-3 w-[38%]" />
-                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.daily')}</TableHead>
-                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.weekly')}</TableHead>
-                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.monthly')}</TableHead>
+                  <TableHead className="vds-text-left vds-text-xs vds-text-dim vds-font-500 vds-pb-3 vds-w-[38%]" />
+                  <TableHead className="vds-text-right vds-text-xs vds-text-dim vds-font-500 vds-pb-3">{t('overview.daily')}</TableHead>
+                  <TableHead className="vds-text-right vds-text-xs vds-text-dim vds-font-500 vds-pb-3">{t('overview.weekly')}</TableHead>
+                  <TableHead className="vds-text-right vds-text-xs vds-text-dim vds-font-500 vds-pb-3">{t('overview.monthly')}</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody className="divide-y divide-border">
+              <TableBody className="vds-divide-y vds-divide-border">
                 <TableRow>
-                  <TableCell className="py-3 text-xs text-muted-foreground">{t('overview.requests')}</TableCell>
-                  <TableCell className="py-3 text-right font-bold tabular-nums">{perf    ? fmtCompact(perf.total_requests)    : '—'}</TableCell>
-                  <TableCell className="py-3 text-right font-bold tabular-nums">{perf7d  ? fmtCompact(perf7d.total_requests)  : '—'}</TableCell>
-                  <TableCell className="py-3 text-right font-bold tabular-nums">{perf30d ? fmtCompact(perf30d.total_requests) : '—'}</TableCell>
+                  <TableCell className="vds-py-3 vds-text-xs vds-text-dim">{t('overview.requests')}</TableCell>
+                  <TableCell className="vds-py-3 vds-text-right vds-font-700 vds-tabular-nums">{perf    ? fmtCompact(perf.total_requests)    : '—'}</TableCell>
+                  <TableCell className="vds-py-3 vds-text-right vds-font-700 vds-tabular-nums">{perf7d  ? fmtCompact(perf7d.total_requests)  : '—'}</TableCell>
+                  <TableCell className="vds-py-3 vds-text-right vds-font-700 vds-tabular-nums">{perf30d ? fmtCompact(perf30d.total_requests) : '—'}</TableCell>
                 </TableRow>
                 <TableRow>
-                  <TableCell className="py-3 text-xs text-muted-foreground">{t('performance.successRate')}</TableCell>
+                  <TableCell className="vds-py-3 vds-text-xs vds-text-dim">{t('performance.successRate')}</TableCell>
                   {(['daily', 'weekly', 'monthly'] as const).map((period) => {
                     const d = perfMap[period]
                     return (
-                      <TableCell key={period} className="py-3 text-right">
+                      <TableCell key={period} className="vds-py-3 vds-text-right">
                         {d != null ? (
-                          <span className={`inline-flex items-center justify-center rounded px-1.5 py-0.5 text-xs font-bold tabular-nums ${successRateCls(d.success_rate)}`}>
+                          <span className={`vds-inline-flex vds-items-center vds-justify-center vds-rounded vds-px-1.5 vds-py-0.5 vds-text-xs vds-font-700 vds-tabular-nums ${successRateCls(d.success_rate)}`}>
                             {Math.round(d.success_rate)}%
                           </span>
                         ) : '—'}
@@ -454,27 +454,27 @@ export function DashboardTab({
 
         {/* Latency Monitor — P50/P95/P99 × time-period table + mini chart */}
         <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">{t('overview.latencyMonitor')}</CardTitle>
+          <CardHeader className="vds-pb-3">
+            <CardTitle className="vds-text-base">{t('overview.latencyMonitor')}</CardTitle>
           </CardHeader>
-          <CardContent className="pt-0">
-            <Table className="text-sm">
+          <CardContent className="vds-pt-0">
+            <Table className="vds-text-sm">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="text-left text-xs text-muted-foreground font-medium pb-3 w-[20%]" />
-                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.daily')}</TableHead>
-                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.weekly')}</TableHead>
-                  <TableHead className="text-right text-xs text-muted-foreground font-medium pb-3">{t('overview.monthly')}</TableHead>
+                  <TableHead className="vds-text-left vds-text-xs vds-text-dim vds-font-500 vds-pb-3 vds-w-[20%]" />
+                  <TableHead className="vds-text-right vds-text-xs vds-text-dim vds-font-500 vds-pb-3">{t('overview.daily')}</TableHead>
+                  <TableHead className="vds-text-right vds-text-xs vds-text-dim vds-font-500 vds-pb-3">{t('overview.weekly')}</TableHead>
+                  <TableHead className="vds-text-right vds-text-xs vds-text-dim vds-font-500 vds-pb-3">{t('overview.monthly')}</TableHead>
                 </TableRow>
               </TableHeader>
-              <TableBody className="divide-y divide-border">
+              <TableBody className="vds-divide-y vds-divide-border">
                 {LATENCY_THRESHOLDS.map(({ name, key, warnMs, errMs }) => (
                   <TableRow key={name}>
-                    <TableCell className="py-3 text-xs font-medium text-muted-foreground">{name}</TableCell>
+                    <TableCell className="vds-py-3 vds-text-xs vds-font-500 vds-text-dim">{name}</TableCell>
                     {(['daily', 'weekly', 'monthly'] as const).map((period) => {
                       const d = perfMap[period]
                       return (
-                        <TableCell key={period} className={`py-3 text-right font-bold tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
+                        <TableCell key={period} className={`vds-py-3 vds-text-right vds-font-700 vds-tabular-nums ${latencyColor(d?.[key], warnMs, errMs)}`}>
                           {d?.[key] != null ? fmtMs(d[key]) : '—'}
                         </TableCell>
                       )
@@ -485,8 +485,8 @@ export function DashboardTab({
             </Table>
             {/* Mini 24h avg latency sparkline */}
             {perf && perf.hourly.length > 0 && (
-              <div className="mt-4 pt-3 border-t border-border">
-                <p className="text-[11px] text-muted-foreground mb-2">{t('overview.daily')} — {t('overview.latencyAvgPerHour')}</p>
+              <div className="vds-mt-4 vds-pt-3 vds-border-t-1 vds-border-subtle">
+                <p className="vds-text-2xs vds-text-dim vds-mb-2">{t('overview.daily')} — {t('overview.latencyAvgPerHour')}</p>
                 <ResponsiveContainer width="100%" height={64}>
                   <AreaChart data={perf.hourly.map(h => ({ hour: fmtHourLabel(h.hour, tz), ms: h.avg_latency_ms }))}>
                     <XAxis dataKey="hour" tick={AXIS_TICK} axisLine={false} tickLine={false} />
@@ -506,45 +506,45 @@ export function DashboardTab({
       </div>
 
       {/* Section 4: Provider Status + API Keys */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="vds-grid vds-grid-cols-1 vds-md:grid-cols-2 vds-gap-4">
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t('overview.providerStatus')}</CardTitle>
+          <CardHeader className="vds-pb-2">
+            <CardTitle className="vds-text-base">{t('overview.providerStatus')}</CardTitle>
           </CardHeader>
-          <CardContent className="pt-0">
-            <div className="divide-y divide-border">
+          <CardContent className="vds-pt-0">
+            <div className="vds-divide-y vds-divide-border">
               <ProviderRow Icon={Server} label={t('overview.localProviders')} providers={localBs} />
               {geminiEnabled && (
                 <ProviderRow Icon={Globe} label={t('overview.apiProviders')} providers={apiBs} />
               )}
             </div>
-            <div className="mt-3 pt-2 border-t border-border">
-              <Link href="/providers" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-                {t('overview.goToProviders')} <ArrowRight className="h-3 w-3" />
+            <div className="vds-mt-3 vds-pt-2 vds-border-t-1 vds-border-subtle">
+              <Link href="/providers" className="vds-text-xs vds-text-dim vds-hover:text-primary vds-flex vds-items-center vds-gap-1 vds-transition-colors">
+                {t('overview.goToProviders')} <ArrowRight className="vds-h-3 vds-w-3" />
               </Link>
             </div>
           </CardContent>
         </Card>
 
         <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base">{t('keys.title')}</CardTitle>
+          <CardHeader className="vds-pb-2">
+            <CardTitle className="vds-text-base">{t('keys.title')}</CardTitle>
           </CardHeader>
-          <CardContent className="pt-0">
+          <CardContent className="vds-pt-0">
             {statsLoading ? (
-              <div className="h-12 rounded bg-muted animate-pulse" aria-busy="true" />
+              <div className="vds-h-12 vds-rounded vds-bg-muted vds-animate-pulse" aria-busy="true" />
             ) : stats ? (
               <>
-                <p className="text-3xl font-bold tabular-nums">{stats.active_keys}</p>
-                <p className="text-xs text-muted-foreground mt-0.5">{t('overview.activeKeysLabel')}</p>
-                <p className="text-xs text-muted-foreground mt-1">
+                <p className="vds-text-3xl vds-font-700 vds-tabular-nums">{stats.active_keys}</p>
+                <p className="vds-text-xs vds-text-dim vds-mt-0.5">{t('overview.activeKeysLabel')}</p>
+                <p className="vds-text-xs vds-text-dim vds-mt-1">
                   {t('overview.totalKeysSubtitle', { count: stats.total_keys })}
                 </p>
               </>
             ) : null}
-            <div className="mt-3 pt-2 border-t border-border">
-              <Link href="/keys" className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1 transition-colors">
-                {t('overview.goToKeys')} <ArrowRight className="h-3 w-3" />
+            <div className="vds-mt-3 vds-pt-2 vds-border-t-1 vds-border-subtle">
+              <Link href="/keys" className="vds-text-xs vds-text-dim vds-hover:text-primary vds-flex vds-items-center vds-gap-1 vds-transition-colors">
+                {t('overview.goToKeys')} <ArrowRight className="vds-h-3 vds-w-3" />
               </Link>
             </div>
           </CardContent>

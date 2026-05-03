@@ -52,11 +52,11 @@ export default function AuditPage() {
   const pageItems = useMemo(() => events.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE), [events, safePage])
 
   return (
-    <div className="flex flex-col gap-6">
-      <div className="flex items-center justify-between">
+    <div className="vds-flex vds-flex-col vds-gap-6">
+      <div className="vds-flex vds-items-center vds-justify-between">
         <div>
-          <h1 className="text-xl font-semibold">{t('audit.title')}</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">{t('audit.description')}</p>
+          <h1 className="vds-text-xl vds-font-600">{t('audit.title')}</h1>
+          <p className="vds-text-sm vds-text-dim vds-mt-0.5">{t('audit.description')}</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => refetch()}>
           {t('common.refresh')}
@@ -64,9 +64,9 @@ export default function AuditPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex items-center gap-3">
+      <div className="vds-flex vds-items-center vds-gap-3">
         <Select value={action} onValueChange={setAction}>
-          <SelectTrigger className="w-44">
+          <SelectTrigger className="vds-w-44">
             <SelectValue placeholder={t('audit.filterAction')} />
           </SelectTrigger>
           <SelectContent>
@@ -81,7 +81,7 @@ export default function AuditPage() {
         </Select>
 
         <Select value={resourceType} onValueChange={setResourceType}>
-          <SelectTrigger className="w-48">
+          <SelectTrigger className="vds-w-48">
             <SelectValue placeholder={t('audit.filterResource')} />
           </SelectTrigger>
           <SelectContent>
@@ -96,9 +96,9 @@ export default function AuditPage() {
       </div>
 
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+        <p className="vds-text-sm vds-text-dim">{t('common.loading')}</p>
       ) : isError ? (
-        <p className="text-sm text-destructive">{t('common.error')}</p>
+        <p className="vds-text-sm vds-text-destructive">{t('common.error')}</p>
       ) : events.length === 0 ? (
         <DataTableEmpty>{t('audit.noEvents')}</DataTableEmpty>
       ) : (
@@ -106,46 +106,46 @@ export default function AuditPage() {
         <DataTable minWidth="800px">
           <TableHeader>
             <TableRow>
-              <TableHead className="whitespace-nowrap">{t('audit.time')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('audit.account')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('audit.action')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('audit.resourceType')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('audit.resourceName')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('audit.ip')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('audit.time')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('audit.account')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('audit.action')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('audit.resourceType')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('audit.resourceName')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('audit.ip')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {pageItems.map((e: AuditEvent) => (
                 <TableRow key={`${e.event_time}-${e.account_id}-${e.action}-${e.resource_id}`}>
-                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                  <TableCell className="vds-text-xs vds-text-dim vds-whitespace-nowrap">
                     {fmtDatetime(e.event_time, tz)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs">{e.account_name}</TableCell>
+                  <TableCell className="vds-font-mono vds-text-xs">{e.account_name}</TableCell>
                   <TableCell>
-                    <Badge variant={ACTION_COLORS[e.action] ?? 'outline'} className="text-xs whitespace-nowrap">
+                    <Badge variant={ACTION_COLORS[e.action] ?? 'outline'} className="vds-text-xs vds-whitespace-nowrap">
                       {e.action}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-sm text-muted-foreground">{e.resource_type}</TableCell>
-                  <TableCell className="text-sm">{e.resource_name || e.resource_id}</TableCell>
-                  <TableCell className="text-xs text-muted-foreground">{e.ip_address || '—'}</TableCell>
+                  <TableCell className="vds-text-sm vds-text-dim">{e.resource_type}</TableCell>
+                  <TableCell className="vds-text-sm">{e.resource_name || e.resource_id}</TableCell>
+                  <TableCell className="vds-text-xs vds-text-dim">{e.ip_address || '—'}</TableCell>
                 </TableRow>
               ))
             }
           </TableBody>
         </DataTable>
         {totalPages > 1 && (
-          <div className="flex items-center justify-end gap-2">
-            <span className="text-xs text-muted-foreground tabular-nums">
+          <div className="vds-flex vds-items-center vds-justify-end vds-gap-2">
+            <span className="vds-text-xs vds-text-dim vds-tabular-nums">
               {safePage * PAGE_SIZE + 1}–{Math.min((safePage + 1) * PAGE_SIZE, events.length)} / {events.length}
             </span>
-            <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage <= 0}
+            <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={safePage <= 0}
               onClick={() => setPage(p => p - 1)}>
-              <ChevronLeft className="h-3.5 w-3.5" />
+              <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
             </Button>
-            <Button variant="outline" size="icon" className="h-7 w-7" disabled={safePage >= totalPages - 1}
+            <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={safePage >= totalPages - 1}
               onClick={() => setPage(p => p + 1)}>
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRight className="vds-h-3.5 vds-w-3.5" />
             </Button>
           </div>
         )}

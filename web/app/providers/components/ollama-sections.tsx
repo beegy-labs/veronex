@@ -95,53 +95,53 @@ export function OllamaSyncSection() {
   }
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
-        <RotateCcw className="h-4 w-4 text-accent-gpu" />
+    <div className="vds-space-y-3">
+      <h2 className="vds-text-base vds-font-600 vds-text-bright vds-flex vds-items-center vds-gap-2">
+        <RotateCcw className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
         {t('providers.ollama.ollamaSyncSection')}
       </h2>
 
       <Card>
-        <CardContent className="p-4 space-y-4">
-          <div className="flex items-center gap-3">
-            <Button size="sm" onClick={() => syncMutation.mutate()} disabled={isRunning} className="gap-1.5">
-              <RotateCcw className={isRunning ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+        <CardContent className="vds-p-4 vds-space-y-4">
+          <div className="vds-flex vds-items-center vds-gap-3">
+            <Button size="sm" onClick={() => syncMutation.mutate()} disabled={isRunning} className="vds-gap-1.5">
+              <RotateCcw className={isRunning ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
               {isRunning ? t('providers.ollama.ollamaSyncing') : t('providers.ollama.ollamaSyncAll')}
             </Button>
             {syncJob?.status === 'running' && (
-              <span className="text-xs text-muted-foreground">
+              <span className="vds-text-xs vds-text-dim">
                 {syncJob.done_providers}/{syncJob.total_providers}
               </span>
             )}
             {syncJob?.status === 'completed' && !syncMutation.isPending && (
-              <span className="text-xs text-status-success-fg">✓ {t('providers.ollama.ollamaSyncDone')}</span>
+              <span className="vds-text-xs vds-text-success">✓ {t('providers.ollama.ollamaSyncDone')}</span>
             )}
           </div>
 
           {total === 0 && !debouncedSearch && (
-            <p className="text-xs text-muted-foreground italic">{t('providers.ollama.ollamaNoSync')}</p>
+            <p className="vds-text-xs vds-text-dim vds-italic">{t('providers.ollama.ollamaNoSync')}</p>
           )}
 
           {(total > 0 || debouncedSearch) && (
-            <div className="space-y-3">
-              <div className="relative">
-                <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
+            <div className="vds-space-y-3">
+              <div className="vds-relative">
+                <Search className="vds-absolute vds-left-2.5 vds-top-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim/60 vds-pointer-events-none" />
                 <Input
-                  className="pl-8 h-8 text-sm"
+                  className="vds-pl-8 vds-h-8 vds-text-sm"
                   placeholder={t('providers.ollama.ollamaSearchModels')}
                   value={search}
                   onChange={(e) => handleSearch(e.target.value)}
                 />
               </div>
-              <div className="flex items-center justify-between">
-                <p className="text-xs font-medium text-muted-foreground">
+              <div className="vds-flex vds-items-center vds-justify-between">
+                <p className="vds-text-xs vds-font-500 vds-text-dim">
                   {t('providers.ollama.ollamaAvailableModels')}
                 </p>
-                <span className="text-xs text-muted-foreground tabular-nums">{total}</span>
+                <span className="vds-text-xs vds-text-dim vds-tabular-nums">{total}</span>
               </div>
-              <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
+              <div className="vds-divide-y vds-divide-border vds-rounded-md vds-border-1 vds-border-subtle vds-overflow-hidden">
                 {models.length === 0 && debouncedSearch && (
-                  <p className="text-xs text-muted-foreground italic py-3 px-3">
+                  <p className="vds-text-xs vds-text-dim vds-italic vds-py-3 vds-px-3">
                     {t('providers.ollama.noModelsMatch')} &ldquo;{debouncedSearch}&rdquo;
                   </p>
                 )}
@@ -150,21 +150,21 @@ export function OllamaSyncSection() {
                   return (
                     <div
                       key={m.model_name}
-                      className={`flex items-center gap-3 px-3 py-2.5 hover:bg-muted/40 transition-colors ${isDisabled ? 'opacity-50' : ''}`}
+                      className={`vds-flex vds-items-center vds-gap-3 vds-px-3 vds-py-2.5 vds-hover:bg-hover/40 vds-transition-colors ${isDisabled ? 'vds-opacity-50' : ''}`}
                     >
                       <button
-                        className="flex items-center gap-3 flex-1 text-left min-w-0"
+                        className="vds-flex vds-items-center vds-gap-3 vds-flex-1 vds-text-left vds-min-w-0"
                         onClick={() => setSelectedModel(m.model_name)}
                       >
-                        <Cpu className="h-3.5 w-3.5 text-accent-gpu/70 shrink-0" />
-                        <span className="font-mono text-sm text-text-bright flex-1 truncate">{m.model_name}</span>
+                        <Cpu className="vds-h-3.5 vds-w-3.5 vds-text-accent-gpu/70 vds-flex-shrink-0" />
+                        <span className="vds-font-mono vds-text-sm vds-text-bright vds-flex-1 vds-truncate">{m.model_name}</span>
                       </button>
-                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 shrink-0 gap-1 whitespace-nowrap">
-                        <Server className="h-2.5 w-2.5" />
+                      <Badge variant="secondary" className="vds-text-[10px] vds-px-1.5 vds-py-0 vds-flex-shrink-0 vds-gap-1 vds-whitespace-nowrap">
+                        <Server className="vds-h-2.5 vds-w-2.5" />
                         {m.provider_count}
                       </Badge>
                       {isDisabled && (
-                        <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-status-error-fg border-status-error/30 whitespace-nowrap">
+                        <Badge variant="outline" className="vds-text-[10px] vds-px-1.5 vds-py-0 vds-text-error vds-border-error/30 vds-whitespace-nowrap">
                           {t('common.disabled')}
                         </Badge>
                       )}
@@ -176,17 +176,17 @@ export function OllamaSyncSection() {
                 })}
               </div>
               {totalPages > 1 && (
-                <div className="flex items-center justify-end gap-1 mt-2">
-                  <span className="text-xs text-muted-foreground tabular-nums mr-2">
+                <div className="vds-flex vds-items-center vds-justify-end vds-gap-1 vds-mt-2">
+                  <span className="vds-text-xs vds-text-dim vds-tabular-nums vds-mr-2">
                     {(page - 1) * MODEL_LIMIT + 1}–{Math.min(page * MODEL_LIMIT, total)} / {total}
                   </span>
-                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={page <= 1}
+                  <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={page <= 1}
                     aria-label={t('common.prevPage')} onClick={() => setPage(p => p - 1)}>
-                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
                   </Button>
-                  <Button variant="outline" size="icon" className="h-7 w-7" disabled={page >= totalPages}
+                  <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={page >= totalPages}
                     aria-label={t('common.nextPage')} onClick={() => setPage(p => p + 1)}>
-                    <ChevronRight className="h-3.5 w-3.5" />
+                    <ChevronRight className="vds-h-3.5 vds-w-3.5" />
                   </Button>
                 </div>
               )}
