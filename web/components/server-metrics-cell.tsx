@@ -45,7 +45,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
     <div className="vds-space-y-1 vds-text-xs">
       {/* MEM */}
       <div className="vds-flex vds-items-center vds-gap-2">
-        <span className="vds-w-6 vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase vds-tracking-wide vds-flex-shrink-0">MEM</span>
+        <span className="vds-w-8 vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase vds-tracking-wide vds-flex-shrink-0 vds-whitespace-nowrap">MEM</span>
         <span className="vds-text-bright vds-font-mono vds-tabular-nums">
           {fmtMb(memUsed)}<span className="vds-text-dim/70"> / {fmtMb(data.mem_total_mb)}</span>
         </span>
@@ -57,7 +57,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
       {/* CPU */}
       {data.cpu_logical > 0 && (
         <div className="vds-flex vds-items-center vds-gap-2">
-          <span className="vds-w-6 vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase vds-tracking-wide vds-flex-shrink-0">CPU</span>
+          <span className="vds-w-8 vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase vds-tracking-wide vds-flex-shrink-0 vds-whitespace-nowrap">CPU</span>
           <span className="vds-text-dim vds-tabular-nums">
             {data.cpu_physical != null
               ? <>{data.cpu_physical}<span className="vds-text-dim/60">c</span> / {data.cpu_logical}<span className="vds-text-dim/60">t</span></>
@@ -76,7 +76,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
         const gpuT = gpu.temp_junction_c ?? gpu.temp_c
         return (
         <div key={gpu.card} className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap">
-          <span className="vds-w-6 vds-text-[10px] vds-font-600 vds-text-accent-gpu vds-uppercase vds-tracking-wide vds-flex-shrink-0">GPU</span>
+          <span className="vds-w-8 vds-text-[10px] vds-font-600 vds-text-accent-gpu vds-uppercase vds-tracking-wide vds-flex-shrink-0 vds-whitespace-nowrap">GPU</span>
           <span className="vds-text-dim vds-font-mono">{gpu.card}</span>
           {gpuT != null && (
               <span className={`vds-flex vds-items-center vds-gap-0.5 vds-tabular-nums ${gpuT >= GPU_TEMP_CRITICAL ? 'vds-text-error vds-font-bold' : 'vds-text-dim'}`}>
