@@ -109,23 +109,23 @@ export const ApiTestForm = memo(function ApiTestForm({
   return (
     <form
       onSubmit={(e) => { e.preventDefault(); onRun() }}
-      className="space-y-4 pb-4"
+      className="vds-space-y-4 vds-pb-4"
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
       {/* Mode toggle */}
-      <div className="flex items-center gap-1 p-0.5 rounded-md bg-muted w-fit">
+      <div className="vds-flex vds-items-center vds-gap-1 vds-p-0.5 vds-rounded-md vds-bg-muted vds-w-fit">
         {(['single', 'conversation'] as TestMode[]).map((m) => (
           <button
             key={m}
             type="button"
             onClick={() => onModeChange(m)}
-            className={`px-3 py-1 text-xs font-medium rounded transition-colors ${
-              mode === m
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            }`}
+            className={`vds-px-3 vds-py-1 vds-text-xs vds-font-500 vds-rounded vds-transition-colors ${
+ mode === m
+ ? 'vds-bg-page vds-text-primary vds-shadow-sm'
+ : 'vds-text-dim vds-hover:text-primary'
+ }`}
           >
             {t(m === 'single' ? 'test.modeSingle' : 'test.modeConversation')}
           </button>
@@ -133,8 +133,8 @@ export const ApiTestForm = memo(function ApiTestForm({
       </div>
 
       {/* Provider + Model */}
-      <div className="grid grid-cols-2 gap-4">
-        <div className="space-y-1.5">
+      <div className="vds-grid vds-grid-cols-2 vds-gap-4">
+        <div className="vds-space-y-1.5">
           <Label htmlFor="test-provider">{t('test.provider')}</Label>
           <Select
             value={providerType}
@@ -148,7 +148,7 @@ export const ApiTestForm = memo(function ApiTestForm({
             </SelectContent>
           </Select>
         </div>
-        <div className="space-y-1.5">
+        <div className="vds-space-y-1.5">
           <Label htmlFor="test-model">{t('test.model')}</Label>
           <Select
             value={model}
@@ -164,12 +164,12 @@ export const ApiTestForm = memo(function ApiTestForm({
             </SelectTrigger>
             <SelectContent>
               {availableModels.map((m) => (
-                <SelectItem key={m} value={m} className="text-xs font-mono">{m}</SelectItem>
+                <SelectItem key={m} value={m} className="vds-text-xs vds-font-mono">{m}</SelectItem>
               ))}
             </SelectContent>
           </Select>
           {multiturnWarnings.length > 0 && (
-            <div className="space-y-1 pt-0.5">
+            <div className="vds-space-y-1 vds-pt-0.5">
               {multiturnWarnings.map((w) => {
                 let msg: string
                 if (w.startsWith('model_too_small:')) {
@@ -184,8 +184,8 @@ export const ApiTestForm = memo(function ApiTestForm({
                   msg = w
                 }
                 return (
-                  <div key={w} className="flex items-start gap-1.5 text-[11px] text-status-warning-fg">
-                    <AlertTriangle className="h-3 w-3 shrink-0 mt-0.5" />
+                  <div key={w} className="vds-flex vds-items-start vds-gap-1.5 vds-text-2xs vds-text-warning">
+                    <AlertTriangle className="vds-h-3 vds-w-3 vds-flex-shrink-0 vds-mt-0.5" />
                     <span>{msg}</span>
                   </div>
                 )
@@ -196,7 +196,7 @@ export const ApiTestForm = memo(function ApiTestForm({
       </div>
 
       {/* Endpoint selector */}
-      <div className="space-y-1.5">
+      <div className="vds-space-y-1.5">
         <Label htmlFor="test-endpoint">{t('test.endpoint')}</Label>
         <Select
           value={endpoint}
@@ -204,11 +204,11 @@ export const ApiTestForm = memo(function ApiTestForm({
         >
           <SelectTrigger id="test-endpoint" aria-label={t('test.endpoint')}><SelectValue /></SelectTrigger>
           <SelectContent>
-            <SelectItem value="/v1/chat/completions" className="text-xs font-mono">/v1/chat/completions</SelectItem>
+            <SelectItem value="/v1/chat/completions" className="vds-text-xs vds-font-mono">/v1/chat/completions</SelectItem>
             {!isGeminiProvider && (
               <>
-                <SelectItem value="/api/chat" className="text-xs font-mono">/api/chat</SelectItem>
-                <SelectItem value="/api/generate" className="text-xs font-mono">/api/generate</SelectItem>
+                <SelectItem value="/api/chat" className="vds-text-xs vds-font-mono">/api/chat</SelectItem>
+                <SelectItem value="/api/generate" className="vds-text-xs vds-font-mono">/api/generate</SelectItem>
               </>
             )}
             {isGeminiProvider && (
@@ -219,16 +219,16 @@ export const ApiTestForm = memo(function ApiTestForm({
       </div>
 
       {/* API Key toggle + input */}
-      <div className="space-y-2">
-        <div className="flex items-center gap-3">
+      <div className="vds-space-y-2">
+        <div className="vds-flex vds-items-center vds-gap-3">
           <Switch
             id="test-use-api-key"
             checked={useApiKey}
             onCheckedChange={onUseApiKeyChange}
           />
-          <Label htmlFor="test-use-api-key" className="cursor-pointer">{t('test.apiKeyToggle')}</Label>
+          <Label htmlFor="test-use-api-key" className="vds-cursor-pointer">{t('test.apiKeyToggle')}</Label>
           {!useApiKey && (
-            <span className="text-xs text-muted-foreground">{t('test.noApiKey')}</span>
+            <span className="vds-text-xs vds-text-dim">{t('test.noApiKey')}</span>
           )}
         </div>
         {useApiKey && (
@@ -243,69 +243,69 @@ export const ApiTestForm = memo(function ApiTestForm({
 
       {/* Prompt + Image button + Run button — hidden in conversation mode (input moves to chat area) */}
       {mode !== 'conversation' && (
-        <div className={`border border-border rounded-md${isDragging ? ' ring-2 ring-ring ring-offset-2' : ''}`}>
+        <div className={`vds-border-1 vds-border-subtle vds-rounded-md${isDragging ? ' vds-ring-2 vds-ring-focus vds-ring-offset-2' : ''}`}>
           {/* Image thumbnails */}
           {images.length > 0 && (
-            <div className="px-4 pt-3 flex flex-wrap gap-2">
+            <div className="vds-px-4 vds-pt-3 vds-flex vds-flex-wrap vds-gap-2">
               {images.map((b64, i) => (
-                <div key={b64.slice(0, 16)} className="relative group">
+                <div key={b64.slice(0, 16)} className="vds-relative vds-group">
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={`data:image/jpeg;base64,${b64}`}
                     alt={`image-${i + 1}`}
-                    className="h-12 w-12 sm:h-16 sm:w-16 rounded-md object-cover border border-border"
+                    className="vds-h-12 vds-w-12 vds-sm:h-16 vds-sm:w-16 vds-rounded-md vds-object-cover vds-border-1 vds-border-subtle"
                   />
                   <button
                     type="button"
                     onClick={() => onImageRemove(i)}
                     aria-label={t('test.imageRemove')}
-                    className="absolute -top-1.5 -right-1.5 hidden group-hover:flex h-4 w-4 items-center justify-center rounded-full bg-destructive text-destructive-foreground"
+                    className="vds-absolute vds--top-1.5 vds--right-1.5 vds-hidden vds-group-hover:flex vds-h-4 vds-w-4 vds-items-center vds-justify-center vds-rounded-full vds-bg-destructive vds-text-destructive-fg"
                     title={t('test.imageRemove')}
                   >
-                    <X className="h-2.5 w-2.5" />
+                    <X className="vds-h-2.5 vds-w-2.5" />
                   </button>
                 </div>
               ))}
               {isCompressing && (
-                <div className="flex h-12 w-12 sm:h-16 sm:w-16 items-center justify-center rounded-md border border-dashed border-border">
-                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-label={t('test.imageCompressing')} />
+                <div className="vds-flex vds-h-12 vds-w-12 vds-sm:h-16 vds-sm:w-16 vds-items-center vds-justify-center vds-rounded-md vds-border-1 vds-border-dashed vds-border-subtle">
+                  <Loader2 className="vds-h-5 vds-w-5 vds-animate-spin vds-text-dim" aria-label={t('test.imageCompressing')} />
                 </div>
               )}
             </div>
           )}
 
           {/* Textarea */}
-          <div className="px-4 pt-3 pb-0">
+          <div className="vds-px-4 vds-pt-3 vds-pb-0">
             <textarea
               id="test-prompt"
               value={prompt}
               onChange={(e) => onPromptChange(e.target.value)}
               rows={3}
               placeholder={t('test.promptPlaceholder')}
-              className="w-full border-0 bg-transparent px-0 py-1 text-sm placeholder:text-muted-foreground focus-visible:outline-none resize-y"
+              className="vds-w-full vds-border-0 vds-bg-transparent vds-px-0 vds-py-1 vds-text-sm vds-placeholder:text-dim vds-focus-visible:outline-none"
             />
           </div>
 
           {/* Bottom toolbar */}
-          <div className="px-4 pb-3 flex items-center gap-2 pt-2 border-t border-border/50">
+          <div className="vds-px-4 vds-pb-3 vds-flex vds-items-center vds-gap-2 vds-pt-2 vds-border-t-1 vds-border-subtle/50">
             {isStreaming ? (
               <Button
                 type="button"
                 variant="destructive"
-                className="rounded-full px-5 h-8 text-sm font-medium"
+                className="vds-rounded-full vds-px-5 vds-h-8 vds-text-sm vds-font-500"
                 onClick={onStop}
               >
-                <Square className="h-3 w-3 mr-1.5" />
+                <Square className="vds-h-3 vds-w-3 vds-mr-1.5" />
                 {t('test.stop')}
               </Button>
             ) : (
               <Button
                 type="submit"
                 disabled={!canRun}
-                className="rounded-full px-5 h-8 text-sm font-medium"
+                className="vds-rounded-full vds-px-5 vds-h-8 vds-text-sm vds-font-500"
                 aria-label={t('test.run')}
               >
-                <Send className="h-3.5 w-3.5 mr-1.5" />
+                <Send className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
                 {t('test.run')}
               </Button>
             )}
@@ -322,8 +322,8 @@ export const ApiTestForm = memo(function ApiTestForm({
 
       {/* Auth indicator */}
       {authUsername && (
-        <p className="text-xs text-muted-foreground">
-          {t('test.runningAs')}: <span className="font-medium text-foreground">{authUsername}</span>
+        <p className="vds-text-xs vds-text-dim">
+          {t('test.runningAs')}: <span className="vds-font-500 vds-text-primary">{authUsername}</span>
         </p>
       )}
     </form>

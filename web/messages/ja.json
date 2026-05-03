@@ -18,7 +18,11 @@
     "audit": "監査ログ",
     "capacity": "同時実行制御",
     "health": "ヘルス",
-    "mcp": "MCP"
+    "mcp": "MCP",
+    "observe": "観測",
+    "operate": "運用",
+    "govern": "ガバナンス",
+    "system": "システム"
   },
   "common": {
     "all": "すべて",
@@ -117,7 +121,8 @@
     "activate": "有効化",
     "deactivate": "無効化",
     "deleting": "削除中…",
-    "model": "モデル"
+    "model": "モデル",
+    "skipToMain": "メインコンテンツへスキップ"
   },
   "conversations": {
     "title": "会話",

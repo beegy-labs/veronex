@@ -50,43 +50,41 @@ export interface ApiKey {
 // ── Re-exported generated enums (SSOT: Rust domain → ts-rs → here) ──────────
 export type { JobStatus, JobSource, ProviderType, LlmProviderStatus } from './generated'
 /** Re-export GpuServer as-is — API response shape matches domain entity 1:1. */
-export type { GpuServer } from './generated'
-
-/** Fields shared by both the list-level Job and the detail-level JobDetail. */
+export type { GpuServer } from './generated'/** Fields shared by both the list-level Job and the detail-level JobDetail. */
 export interface JobBase {
-  id: string
-  model_name: string
-  provider_type: string
-  status: JobStatus
-  source: JobSource
-  created_at: string
-  completed_at: string | null
-  latency_ms: number | null
-  ttft_ms: number | null
-  prompt_tokens: number | null
-  completion_tokens: number | null
-  cached_tokens: number | null
-  tps: number | null
-  api_key_name: string | null
-  /** For test run jobs: the account name of who ran it. */
-  account_name: string | null
-  /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
-  request_path: string | null
-  /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
-  estimated_cost_usd: number | null
+ id: string
+ model_name: string
+ provider_type: string
+ status: JobStatus
+ source: JobSource
+ created_at: string
+ completed_at: string | null
+ latency_ms: number | null
+ ttft_ms: number | null
+ prompt_tokens: number | null
+ completion_tokens: number | null
+ cached_tokens: number | null
+ tps: number | null
+ api_key_name: string | null
+ /** For test run jobs: the account name of who ran it. */
+ account_name: string | null
+ /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
+ request_path: string | null
+ /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
+ estimated_cost_usd: number | null
 }
 
 export interface Job extends JobBase {
-  /** True when the model responded with tool calls instead of text. */
-  has_tool_calls: boolean
-  /** Name of the provider (Ollama server) that processed this job. */
-  provider_name: string | null
-  /** Conversation this job belongs to (multi-turn), if any. */
-  conversation_id: string | null
+ /** True when the model responded with tool calls instead of text. */
+ has_tool_calls: boolean
+ /** Name of the provider (Ollama server) that processed this job. */
+ provider_name: string | null
+ /** Conversation this job belongs to (multi-turn), if any. */
+ conversation_id: string | null
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool'
+ role:'system' | 'user' | 'assistant' | 'tool'
   content: string | null
   /** For tool-role messages: the tool call id this is a response to. */
   tool_call_id?: string

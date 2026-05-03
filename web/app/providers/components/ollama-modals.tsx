@@ -91,18 +91,18 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
 
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
-          <DialogTitle className="font-mono text-base flex items-center gap-2">
-            <Cpu className="h-4 w-4 text-accent-gpu shrink-0" />
+          <DialogTitle className="vds-font-mono vds-text-base vds-flex vds-items-center vds-gap-2">
+            <Cpu className="vds-h-4 vds-w-4 vds-text-accent-gpu vds-flex-shrink-0" />
             {modelName}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="relative">
-          <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground/60 pointer-events-none" />
+        <div className="vds-relative">
+          <Search className="vds-absolute vds-left-2.5 vds-top-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim/60 vds-pointer-events-none" />
           <Input
-            className="pl-8 h-8 text-sm"
+            className="vds-pl-8 vds-h-8 vds-text-sm"
             placeholder={t('providers.ollama.searchServers')}
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
@@ -110,38 +110,38 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
         </div>
 
         {!isLoading && total > 0 && (
-          <p className="text-xs text-muted-foreground -mt-1">
+          <p className="vds-text-xs vds-text-dim vds--mt-1">
             {total} {t('providers.ollama.serversWithModel')}
             {debouncedSearch ? ` — "${debouncedSearch}"` : ''}
           </p>
         )}
 
         {isLoading && (
-          <p className="text-sm text-muted-foreground py-4 text-center animate-pulse">{t('common.loading')}</p>
+          <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center vds-animate-pulse">{t('common.loading')}</p>
         )}
 
         {!isLoading && total === 0 && !debouncedSearch && (
-          <p className="text-sm text-muted-foreground py-4 text-center italic">
+          <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center vds-italic">
             {t('providers.ollama.noProvidersSynced')}
           </p>
         )}
 
         {!isLoading && total === 0 && debouncedSearch && (
-          <p className="text-sm text-muted-foreground py-3 text-center italic">
+          <p className="vds-text-sm vds-text-dim vds-py-3 vds-text-center vds-italic">
             {t('providers.ollama.noServersMatch')} &ldquo;{debouncedSearch}&rdquo;
           </p>
         )}
 
         {!isLoading && providers.length > 0 && (
-          <div className="space-y-2">
+          <div className="vds-space-y-2">
             {providers.map((b) => (
-              <div key={b.provider_id} className="flex items-center gap-3 rounded-lg border border-border px-3 py-2.5">
+              <div key={b.provider_id} className="vds-flex vds-items-center vds-gap-3 vds-rounded-lg vds-border-1 vds-border-subtle vds-px-3 vds-py-2.5">
                 <span className={statusDot(b.status)} />
-                <div className="min-w-0 flex-1">
-                  <p className="text-sm font-medium text-text-bright truncate">{b.name}</p>
-                  <p className="text-xs font-mono text-muted-foreground truncate">{extractHost(b.url)}</p>
+                <div className="vds-min-w-0 vds-flex-1">
+                  <p className="vds-text-sm vds-font-500 vds-text-bright vds-truncate">{b.name}</p>
+                  <p className="vds-text-xs vds-font-mono vds-text-dim vds-truncate">{extractHost(b.url)}</p>
                 </div>
-                <Badge variant="outline" className={`whitespace-nowrap ${statusBadgeCls(b.status)}`}>
+                <Badge variant="outline" className={`vds-whitespace-nowrap ${statusBadgeCls(b.status)}`}>
                   {statusLabel(b.status)}
                 </Badge>
                 {canManage && (
@@ -153,25 +153,25 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
         )}
 
         {totalPages > 1 && (
-          <div className="flex items-center justify-between pt-1">
-            <span className="text-xs text-muted-foreground tabular-nums">
+          <div className="vds-flex vds-items-center vds-justify-between vds-pt-1">
+            <span className="vds-text-xs vds-text-dim vds-tabular-nums">
               {pageStart + 1}–{Math.min(pageStart + PROVIDERS_LIMIT, total)} / {total}
             </span>
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="icon" className="h-7 w-7"
+            <div className="vds-flex vds-items-center vds-gap-1">
+              <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                 aria-label={t('common.prevPage')}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
                 disabled={page <= 1}>
-                <ChevronLeft className="h-3.5 w-3.5" />
+                <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
               </Button>
-              <span className="text-xs text-muted-foreground px-1">
+              <span className="vds-text-xs vds-text-dim vds-px-1">
                 {page} / {totalPages}
               </span>
-              <Button variant="outline" size="icon" className="h-7 w-7"
+              <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                 aria-label={t('common.nextPage')}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
                 disabled={page >= totalPages}>
-                <ChevronRight className="h-3.5 w-3.5" />
+                <ChevronRight className="vds-h-3.5 vds-w-3.5" />
               </Button>
             </div>
           </div>
@@ -224,37 +224,37 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <ListFilter className="h-4 w-4 text-accent-gpu" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <ListFilter className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
             {t('providers.ollama.modelSelection')}
-            <span className="text-muted-foreground font-normal text-sm">— {provider.name}</span>
+            <span className="vds-text-dim vds-font-400 vds-text-sm">— {provider.name}</span>
           </DialogTitle>
         </DialogHeader>
 
-        <p className="text-xs text-muted-foreground -mt-1">
+        <p className="vds-text-xs vds-text-dim vds--mt-1">
           {t('providers.ollama.modelSelectionDesc')}
         </p>
 
         {isLoading && (
-          <div className="flex h-20 items-center justify-center text-muted-foreground text-sm animate-pulse">
+          <div className="vds-flex vds-h-20 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
             {t('common.loading')}
           </div>
         )}
 
         {!isLoading && models.length === 0 && (
-          <p className="text-sm text-muted-foreground py-4 text-center">
+          <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center">
             {t('providers.ollama.noProviderModels')}
           </p>
         )}
 
         {models.length > 0 && (
-          <div className="space-y-1 max-h-80 overflow-y-auto pr-1">
+          <div className="vds-space-y-1 vds-max-h-80 vds-overflow-y-auto vds-pr-1">
             {models.map((m) => (
               <div key={m.model_name}
-                className="flex items-center justify-between rounded-lg border border-border px-3 py-2">
-                <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
+                className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-3 vds-py-2">
+                <span className="vds-font-mono vds-text-sm vds-text-bright">{m.model_name}</span>
                 <OllamaProviderModelItemToggle providerId={provider.id} model={m} />
               </div>
             ))}
@@ -262,7 +262,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
         )}
 
         {models.length > 0 && (
-          <p className="text-xs text-muted-foreground text-right">
+          <p className="vds-text-xs vds-text-dim vds-text-right">
             {t('providers.ollama.enabledCount', { enabled: enabledCount, total: models.length })}
           </p>
         )}

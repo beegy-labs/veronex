@@ -36,15 +36,15 @@ export function SidebarFrame({
     <>
       {/* ── Brand + collapse toggle ─────────────────────────────────── */}
       <div className={cn(
-        'h-[60px] flex items-center border-b border-border flex-shrink-0',
-        collapsed ? 'justify-center px-0' : 'px-4 gap-2',
+        'vds-h-[60px] vds-flex vds-items-center vds-border-b-1 vds-border-subtle vds-flex-shrink-0',
+        collapsed ? 'vds-justify-center vds-px-0' : 'vds-px-4 vds-gap-2',
       )}>
         {collapsed ? (
           /* Collapsed: logo icon acts as expand button */
           <button
             type="button"
             onClick={onToggle}
-            className="flex items-center justify-center p-1 rounded-md hover:bg-accent transition-colors hidden md:flex"
+            className="vds-flex vds-items-center vds-justify-center vds-p-1 vds-rounded-md vds-hover:bg-hover vds-transition-colors vds-hidden vds-md:flex"
             title={t('common.expand')}
             aria-label={t('common.expand')}
           >
@@ -53,15 +53,15 @@ export function SidebarFrame({
         ) : (
           /* Expanded: full brand + collapse chevron */
           <>
-            <div className="flex-1 min-w-0">{brand}</div>
+            <div className="vds-flex-1 vds-min-w-0">{brand}</div>
             <button
               type="button"
               onClick={onToggle}
-              className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors shrink-0 hidden md:block"
+              className="vds-p-1.5 vds-rounded-md vds-text-dim vds-hover:text-primary vds-hover:bg-hover vds-transition-colors vds-flex-shrink-0 vds-hidden vds-md:block"
               title={t('common.collapse')}
               aria-label={t('common.collapse')}
             >
-              <ChevronLeft className="h-4 w-4" />
+              <ChevronLeft className="vds-h-4 vds-w-4" />
             </button>
           </>
         )}
@@ -70,21 +70,21 @@ export function SidebarFrame({
       {/* ── Context switcher (optional) ─────────────────────────────── */}
       {contextSwitcher && (
         <div className={cn(
-          'border-b border-border flex-shrink-0',
-          collapsed ? 'px-1.5 py-1.5' : 'px-2 pt-2 pb-1.5',
+          'vds-border-b-1 vds-border-subtle vds-flex-shrink-0',
+          collapsed ? 'vds-px-1.5 vds-py-1.5' : 'vds-px-2 vds-pt-2 vds-pb-1.5',
         )}>
           {contextSwitcher}
         </div>
       )}
 
       {/* ── Nav ─────────────────────────────────────────────────────── */}
-      <nav className="flex-1 py-3 px-2 overflow-y-auto">
+      <nav className="vds-flex-1 vds-py-3 vds-px-2 vds-overflow-y-auto">
         {nav}
       </nav>
 
       {/* ── Bottom ──────────────────────────────────────────────────── */}
       {bottom && (
-        <div className="border-t border-border flex-shrink-0">
+        <div className="vds-border-t-1 vds-border-subtle vds-flex-shrink-0">
           {bottom}
         </div>
       )}

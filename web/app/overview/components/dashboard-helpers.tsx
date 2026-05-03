@@ -12,35 +12,35 @@ export type ThermalLevel = 'normal' | 'warning' | 'critical' | 'unknown'
 
 export function providerValueCls(online: number, total: number): string {
   if (total === 0) return ''
-  if (online === total) return 'text-status-success-fg'
-  if (online > 0)       return 'text-status-warning-fg'
-  return 'text-status-error-fg'
+  if (online === total) return 'vds-text-success'
+  if (online > 0)       return 'vds-text-warning'
+  return 'vds-text-error'
 }
 
 export function pendingValueCls(count: number): string {
-  if (count === 0)  return 'text-status-success-fg'
-  if (count < 10)   return 'text-status-warning-fg'
-  return 'text-status-error-fg'
+  if (count === 0)  return 'vds-text-success'
+  if (count < 10)   return 'vds-text-warning'
+  return 'vds-text-error'
 }
 
 export function latencyColor(val: number | null | undefined, warnMs: number, errMs: number): string {
   if (val == null) return ''
-  if (val >= errMs)  return 'text-status-error-fg'
-  if (val >= warnMs) return 'text-status-warning-fg'
+  if (val >= errMs)  return 'vds-text-error'
+  if (val >= warnMs) return 'vds-text-warning'
   return ''
 }
 
 export const THERMAL_ROW_CLS: Record<ThermalLevel, string> = {
   normal:   '',
-  warning:  'bg-status-warning/5 border-l-2 border-status-warning/60',
-  critical: 'bg-status-error/5 border-l-2 border-status-error/60',
+  warning:  'vds-bg-warning/5 vds-border-l-2 vds-border-warning/60',
+  critical: 'vds-bg-error/5 vds-border-l-2 vds-border-error/60',
   unknown:  '',
 }
 
 export const THERMAL_NAME_CLS: Record<ThermalLevel, string> = {
   normal:   '',
-  warning:  'text-status-warning-fg',
-  critical: 'text-status-error-fg',
+  warning:  'vds-text-warning',
+  critical: 'vds-text-error',
   unknown:  '',
 }
 
@@ -48,10 +48,10 @@ export const THERMAL_NAME_CLS: Record<ThermalLevel, string> = {
 export function StatSkeleton() {
   return (
     <Card aria-busy="true">
-      <CardContent className="p-5">
-        <div className="h-3 w-24 rounded bg-muted animate-pulse mb-4" />
-        <div className="h-8 w-16 rounded bg-muted animate-pulse mb-2" />
-        <div className="h-2 w-20 rounded bg-muted animate-pulse" />
+      <CardContent className="vds-p-5">
+        <div className="vds-h-3 vds-w-24 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-4" />
+        <div className="vds-h-8 vds-w-16 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-2" />
+        <div className="vds-h-2 vds-w-20 vds-rounded vds-bg-muted vds-animate-pulse" />
       </CardContent>
     </Card>
   )
@@ -71,32 +71,32 @@ export const ProviderRow = memo(function ProviderRow({
   }), [providers])
 
   return (
-    <div className="flex items-center justify-between py-2">
-      <div className="flex items-center gap-2 text-sm font-medium">
-        <Icon className="h-4 w-4" />
+    <div className="vds-flex vds-items-center vds-justify-between vds-py-2">
+      <div className="vds-flex vds-items-center vds-gap-2 vds-text-sm vds-font-500">
+        <Icon className="vds-h-4 vds-w-4" />
         <span>{label}</span>
-        <span className="text-muted-foreground text-xs">({providers.length})</span>
+        <span className="vds-text-dim vds-text-xs">({providers.length})</span>
       </div>
-      <div className="flex items-center gap-3 text-xs">
+      <div className="vds-flex vds-items-center vds-gap-3 vds-text-xs">
         {online > 0 && (
-          <span className="flex items-center gap-1 text-status-success-fg">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-success inline-block" />
+          <span className="vds-flex vds-items-center vds-gap-1 vds-text-success">
+            <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-inline-block" />
             {online}
           </span>
         )}
         {degraded > 0 && (
-          <span className="flex items-center gap-1 text-status-warning-fg">
-            <span className="h-1.5 w-1.5 rounded-full bg-status-warning inline-block" />
+          <span className="vds-flex vds-items-center vds-gap-1 vds-text-warning">
+            <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-warning vds-inline-block" />
             {degraded}
           </span>
         )}
         {offline > 0 && (
-          <span className="flex items-center gap-1 text-muted-foreground">
-            <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground inline-block" />
+          <span className="vds-flex vds-items-center vds-gap-1 vds-text-dim">
+            <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-neutral vds-inline-block" />
             {offline}
           </span>
         )}
-        {providers.length === 0 && <span className="text-muted-foreground">—</span>}
+        {providers.length === 0 && <span className="vds-text-dim">—</span>}
       </div>
     </div>
   )
@@ -107,19 +107,19 @@ export const ThermalLevelBadge = memo(function ThermalLevelBadge({ level, temp }
   temp: number | null
 }) {
   const { t } = useTranslation()
-  if (level === 'unknown') return <span className="text-[11px] text-muted-foreground">—</span>
+  if (level === 'unknown') return <span className="vds-text-2xs vds-text-dim">—</span>
 
   const cfg = {
-    normal:   { cls: 'text-status-success-fg',  Icon: CheckCircle2,  key: 'overview.tempNormal' },
-    warning:  { cls: 'text-status-warning-fg',  Icon: AlertTriangle, key: 'overview.tempWarning' },
-    critical: { cls: 'text-status-error-fg',    Icon: XCircle,       key: 'overview.tempCritical' },
+    normal:   { cls: 'vds-text-success',  Icon: CheckCircle2,  key: 'overview.tempNormal' },
+    warning:  { cls: 'vds-text-warning',  Icon: AlertTriangle, key: 'overview.tempWarning' },
+    critical: { cls: 'vds-text-error',    Icon: XCircle,       key: 'overview.tempCritical' },
   }[level as Exclude<ThermalLevel, 'unknown'>]
 
   return (
-    <span className={`flex items-center gap-1 text-[11px] font-medium ${cfg.cls}`}>
-      <cfg.Icon className="h-3 w-3" />
+    <span className={`vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 ${cfg.cls}`}>
+      <cfg.Icon className="vds-h-3 vds-w-3" />
       <span>{t(cfg.key)}</span>
-      {temp != null && <span className="tabular-nums opacity-70">({fmtTemp(temp)})</span>}
+      {temp != null && <span className="vds-tabular-nums vds-opacity-70">({fmtTemp(temp)})</span>}
     </span>
   )
 })
@@ -127,13 +127,13 @@ export const ThermalLevelBadge = memo(function ThermalLevelBadge({ level, temp }
 export const ConnectionDot = memo(function ConnectionDot({ connected }: { connected: boolean }) {
   const { t } = useTranslation()
   return connected ? (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-status-success-fg">
-      <span className="h-1.5 w-1.5 rounded-full bg-status-success inline-block" />
+    <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-success">
+      <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-inline-block" />
       {t('overview.connected')}
     </span>
   ) : (
-    <span className="flex items-center gap-1 text-[11px] font-medium text-status-error-fg">
-      <span className="h-1.5 w-1.5 rounded-full bg-status-error inline-block" />
+    <span className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-font-500 vds-text-error">
+      <span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-error vds-inline-block" />
       {t('overview.unreachable')}
     </span>
   )

@@ -46,17 +46,17 @@ export function OllamaLabSection() {
   const disabled = labLoading || labSettings === null
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2">
-        <Sliders className="h-4 w-4 text-accent-gpu" />
-        <h2 className="text-base font-semibold text-text-bright">{t('providers.ollama.labTitle')}</h2>
+    <div className="vds-space-y-4">
+      <div className="vds-flex vds-items-center vds-gap-2">
+        <Sliders className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
+        <h2 className="vds-text-base vds-font-600 vds-text-bright">{t('providers.ollama.labTitle')}</h2>
       </div>
-      <p className="text-xs text-muted-foreground">{t('providers.ollama.labDesc')}</p>
+      <p className="vds-text-xs vds-text-dim">{t('providers.ollama.labDesc')}</p>
 
       {/* ── Image input ────────────────────────────────────────────────────── */}
       <Card>
-        <CardContent className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold">{t('providers.ollama.labImageSection')}</h3>
+        <CardContent className="vds-p-4 vds-space-y-4">
+          <h3 className="vds-text-sm vds-font-600">{t('providers.ollama.labImageSection')}</h3>
 
           <Row
             label={t('common.maxImagesPerRequest')}
@@ -64,7 +64,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={0} max={MAX_IMAGES_LIMIT}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.max_images_per_request ?? DEFAULT_MAX_IMAGES}
               disabled={disabled}
               onChange={(e) => {
@@ -82,7 +82,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={0.1} max={32} step={0.1}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={((labSettings?.max_image_b64_bytes ?? 2 * BYTES_PER_MB) / BYTES_PER_MB).toFixed(1)}
               disabled={disabled}
               onChange={(e) => {
@@ -93,9 +93,9 @@ export function OllamaLabSection() {
             />
           </Row>
 
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">{t('common.labVisionModel')}</p>
-            <p className="text-[11px] text-muted-foreground leading-snug">{t('common.labVisionModelDesc')}</p>
+          <div className="vds-space-y-1.5">
+            <p className="vds-text-xs vds-font-500">{t('common.labVisionModel')}</p>
+            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('common.labVisionModelDesc')}</p>
             <VisionModelSelector
               value={labSettings?.vision_model ?? null}
               disabled={disabled}
@@ -107,8 +107,8 @@ export function OllamaLabSection() {
 
       {/* ── Context compression ────────────────────────────────────────────── */}
       <Card>
-        <CardContent className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold">{t('common.labCompression')}</h3>
+        <CardContent className="vds-p-4 vds-space-y-4">
+          <h3 className="vds-text-sm vds-font-600">{t('common.labCompression')}</h3>
 
           <Row label={t('common.labCompressionEnabled')}>
             <Switch
@@ -123,9 +123,9 @@ export function OllamaLabSection() {
             />
           </Row>
 
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">{t('common.labCompressionModel')}</p>
-            <p className="text-[11px] text-muted-foreground leading-snug">{t('providers.ollama.labCompressionModelDesc')}</p>
+          <div className="vds-space-y-1.5">
+            <p className="vds-text-xs vds-font-500">{t('common.labCompressionModel')}</p>
+            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.ollama.labCompressionModelDesc')}</p>
             <CompressionModelSelector
               value={labSettings?.compression_model ?? null}
               disabled={disabled}
@@ -139,7 +139,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={0.1} max={1} step={0.05}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.context_budget_ratio ?? 0.6}
               disabled={disabled}
               onChange={(e) => {
@@ -156,7 +156,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={1} max={20}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.compression_trigger_turns ?? 1}
               disabled={disabled}
               onChange={(e) => {
@@ -173,7 +173,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={0} max={20}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.recent_verbatim_window ?? 1}
               disabled={disabled}
               onChange={(e) => {
@@ -191,7 +191,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={1} max={300}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.compression_timeout_secs ?? 10}
               disabled={disabled}
               onChange={(e) => {
@@ -202,7 +202,7 @@ export function OllamaLabSection() {
             />
           </Row>
 
-          <div className="pt-3 border-t border-border/50 space-y-4">
+          <div className="vds-pt-3 vds-border-t-1 vds-border-subtle/50 vds-space-y-4">
             <Row label={t('common.labHandoffEnabled')}>
               <Switch
                 checked={optHandoffEnabled}
@@ -222,7 +222,7 @@ export function OllamaLabSection() {
             >
               <Input
                 type="number" min={0.1} max={1} step={0.05}
-                className="w-24 h-8 text-xs text-center"
+                className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
                 value={labSettings?.handoff_threshold ?? 0.85}
                 disabled={disabled}
                 onChange={(e) => {
@@ -238,8 +238,8 @@ export function OllamaLabSection() {
 
       {/* ── Multi-turn requirements ────────────────────────────────────────── */}
       <Card>
-        <CardContent className="p-4 space-y-4">
-          <h3 className="text-sm font-semibold">{t('common.labMultiturnReqs')}</h3>
+        <CardContent className="vds-p-4 vds-space-y-4">
+          <h3 className="vds-text-sm vds-font-600">{t('common.labMultiturnReqs')}</h3>
 
           <Row
             label={t('common.labMultiturnMinParams')}
@@ -248,7 +248,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={0} max={1000}
-              className="w-24 h-8 text-xs text-center"
+              className="vds-w-24 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.multiturn_min_params ?? 7}
               disabled={disabled}
               onChange={(e) => {
@@ -265,7 +265,7 @@ export function OllamaLabSection() {
           >
             <Input
               type="number" min={0}
-              className="w-28 h-8 text-xs text-center"
+              className="vds-w-28 vds-h-8 vds-text-xs vds-text-center"
               value={labSettings?.multiturn_min_ctx ?? 16384}
               disabled={disabled}
               onChange={(e) => {
@@ -276,9 +276,9 @@ export function OllamaLabSection() {
             />
           </Row>
 
-          <div className="space-y-1.5">
-            <p className="text-xs font-medium">{t('common.labMultiturnAllowedModels')}</p>
-            <p className="text-[11px] text-muted-foreground leading-snug">{t('providers.ollama.labMultiturnAllowedModelsDesc')}</p>
+          <div className="vds-space-y-1.5">
+            <p className="vds-text-xs vds-font-500">{t('common.labMultiturnAllowedModels')}</p>
+            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.ollama.labMultiturnAllowedModelsDesc')}</p>
             <MultiturnAllowedModelsSelector
               selected={labSettings?.multiturn_allowed_models ?? []}
               disabled={disabled}
@@ -300,14 +300,14 @@ function Row({ label, desc, suffix, children }: {
   children: React.ReactNode
 }) {
   return (
-    <div className="flex items-start justify-between gap-3">
-      <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium">{label}</p>
-        {desc && <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{desc}</p>}
+    <div className="vds-flex vds-items-start vds-justify-between vds-gap-3">
+      <div className="vds-flex-1 vds-min-w-0">
+        <p className="vds-text-xs vds-font-500">{label}</p>
+        {desc && <p className="vds-text-2xs vds-text-dim vds-leading-snug vds-mt-0.5">{desc}</p>}
       </div>
-      <div className="flex items-center gap-1.5 shrink-0">
+      <div className="vds-flex vds-items-center vds-gap-1.5 vds-flex-shrink-0">
         {children}
-        {suffix && <span className="text-[11px] text-muted-foreground">{suffix}</span>}
+        {suffix && <span className="vds-text-2xs vds-text-dim">{suffix}</span>}
       </div>
     </div>
   )

@@ -24,132 +24,132 @@ export function TurnInternals({ convId, jobId, defaultOpen = false }: TurnIntern
   const hasData = data && (data.compressed || data.vision_analysis || hasToolCalls)
 
   return (
-    <div className="mt-1">
+    <div className="vds-mt-1">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-1 text-[11px] text-muted-foreground/60 hover:text-muted-foreground transition-colors"
+        className="vds-flex vds-items-center vds-gap-1 vds-text-2xs vds-text-dim/60 vds-hover:text-dim vds-transition-colors"
       >
-        {open ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
+        {open ? <ChevronDown className="vds-h-3 vds-w-3" /> : <ChevronRight className="vds-h-3 vds-w-3" />}
         {t('conversations.internals')}
       </button>
 
       {open && (
-        <div className="mt-1.5 pl-4 space-y-2">
+        <div className="vds-mt-1.5 vds-pl-4 vds-space-y-2">
           {isLoading && (
-            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-              <Loader2 className="h-3 w-3 animate-spin" />
+            <div className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-dim">
+              <Loader2 className="vds-h-3 vds-w-3 vds-animate-spin" />
               {t('common.loading')}
             </div>
           )}
           {isError && (
-            <p className="text-xs text-destructive">{t('common.error')}</p>
+            <p className="vds-text-xs vds-text-destructive">{t('common.error')}</p>
           )}
           {data && !hasData && (
-            <p className="text-xs text-muted-foreground/60">{t('conversations.internalsEmpty')}</p>
+            <p className="vds-text-xs vds-text-dim/60">{t('conversations.internalsEmpty')}</p>
           )}
 
           {data?.compressed && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5 text-xs font-medium">
-                <Zap className="h-3 w-3 text-accent-power" />
+            <div className="vds-space-y-1">
+              <div className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-font-500">
+                <Zap className="vds-h-3 vds-w-3 vds-text-accent-power" />
                 {t('conversations.compression')}
               </div>
-              <div className="pl-4 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground font-mono">
+              <div className="vds-pl-4 vds-grid vds-grid-cols-2 vds-gap-x-4 vds-gap-y-0.5 vds-text-2xs vds-text-dim vds-font-mono">
                 <span>{t('conversations.compressionModel')}</span>
-                <span className="text-foreground truncate">{data.compressed.compression_model}</span>
+                <span className="vds-text-primary vds-truncate">{data.compressed.compression_model}</span>
                 <span>{t('conversations.originalTokens')}</span>
-                <span className="text-foreground">{fmtCompact(data.compressed.original_tokens)}</span>
+                <span className="vds-text-primary">{fmtCompact(data.compressed.original_tokens)}</span>
                 <span>{t('conversations.compressedTokens')}</span>
-                <span className="text-foreground">{fmtCompact(data.compressed.compressed_tokens)}</span>
+                <span className="vds-text-primary">{fmtCompact(data.compressed.compressed_tokens)}</span>
               </div>
-              <div className="pl-4 mt-1 p-2 rounded bg-muted text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+              <div className="vds-pl-4 vds-mt-1 vds-p-2 vds-rounded vds-bg-muted vds-text-2xs vds-font-mono vds-leading-relaxed vds-whitespace-pre-wrap vds-break-words vds-max-h-32 vds-overflow-y-auto">
                 {data.compressed.summary}
               </div>
             </div>
           )}
 
           {data?.vision_analysis && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5 text-xs font-medium">
-                <Eye className="h-3 w-3 text-status-info-fg" />
+            <div className="vds-space-y-1">
+              <div className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-font-500">
+                <Eye className="vds-h-3 vds-w-3 vds-text-info" />
                 {t('conversations.visionAnalysis')}
               </div>
-              <div className="pl-4 grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px] text-muted-foreground font-mono">
+              <div className="vds-pl-4 vds-grid vds-grid-cols-2 vds-gap-x-4 vds-gap-y-0.5 vds-text-2xs vds-text-dim vds-font-mono">
                 <span>{t('conversations.visionModel')}</span>
-                <span className="text-foreground truncate">{data.vision_analysis.vision_model}</span>
+                <span className="vds-text-primary vds-truncate">{data.vision_analysis.vision_model}</span>
                 <span>{t('conversations.imageCount')}</span>
-                <span className="text-foreground">{data.vision_analysis.image_count}</span>
+                <span className="vds-text-primary">{data.vision_analysis.image_count}</span>
                 <span>{t('conversations.analysisTokens')}</span>
-                <span className="text-foreground">{fmtCompact(data.vision_analysis.analysis_tokens)}</span>
+                <span className="vds-text-primary">{fmtCompact(data.vision_analysis.analysis_tokens)}</span>
               </div>
-              <div className="pl-4 mt-1 p-2 rounded bg-muted text-[11px] font-mono leading-relaxed whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+              <div className="vds-pl-4 vds-mt-1 vds-p-2 vds-rounded vds-bg-muted vds-text-2xs vds-font-mono vds-leading-relaxed vds-whitespace-pre-wrap vds-break-words vds-max-h-32 vds-overflow-y-auto">
                 {data.vision_analysis.analysis}
               </div>
             </div>
           )}
 
           {hasToolCalls && (
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5 text-xs font-medium">
-                <Wrench className="h-3 w-3 text-status-info-fg" />
+            <div className="vds-space-y-1">
+              <div className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-font-500">
+                <Wrench className="vds-h-3 vds-w-3 vds-text-info" />
                 {t('conversations.toolCalls')}
-                <span className="text-muted-foreground/60 font-mono text-[10px]">
+                <span className="vds-text-dim/60 vds-font-mono vds-text-[10px]">
                   ({t('conversations.toolCallsBadge', { count: data!.tool_calls.length })})
                 </span>
               </div>
-              <div className="pl-4 space-y-1.5">
+              <div className="vds-pl-4 vds-space-y-1.5">
                 {data!.tool_calls.map((tc, i) => (
                   <div
                     key={`tc-${tc.round}-${i}-${tc.namespaced_name}`}
-                    className="rounded border border-border/50 bg-muted/30 px-2 py-1.5 text-[11px] font-mono"
+                    className="vds-rounded vds-border-1 vds-border-subtle/50 vds-bg-muted/30 vds-px-2 vds-py-1.5 vds-text-2xs vds-font-mono"
                   >
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="text-muted-foreground/70">
+                    <div className="vds-flex vds-items-center vds-gap-1.5 vds-flex-wrap">
+                      <span className="vds-text-dim/70">
                         {t('conversations.toolCallsRound', { round: tc.round })}
                       </span>
-                      <code className="font-semibold text-foreground">{tc.namespaced_name}</code>
+                      <code className="vds-font-600 vds-text-primary">{tc.namespaced_name}</code>
                       <span
                         className={
                           tc.outcome === 'success'
-                            ? 'text-status-success-fg'
+                            ? 'vds-text-success'
                             : tc.outcome === 'cache_hit'
-                              ? 'text-accent-power'
-                              : 'text-status-error-fg'
+                              ? 'vds-text-accent-power'
+                              : 'vds-text-error'
                         }
                       >
                         {tc.outcome}
                       </span>
                       {tc.cache_hit && (
-                        <span className="text-accent-power text-[10px]">
+                        <span className="vds-text-accent-power vds-text-[10px]">
                           {t('conversations.toolCallsCacheHit')}
                         </span>
                       )}
                       {tc.latency_ms != null && (
-                        <span className="text-muted-foreground/60 ml-auto">
+                        <span className="vds-text-dim/60 vds-ml-auto">
                           {t('conversations.toolCallsLatency', { ms: tc.latency_ms })}
                         </span>
                       )}
                     </div>
                     {tc.args !== null && tc.args !== undefined && (
-                      <details className="mt-1">
-                        <summary className="text-muted-foreground/60 cursor-pointer text-[10px] select-none">
+                      <details className="vds-mt-1">
+                        <summary className="vds-text-dim/60 vds-cursor-pointer vds-text-[10px] vds-select-none">
                           {t('conversations.toolCallsArgs')}
                         </summary>
-                        <pre className="mt-1 p-1 rounded bg-background text-[10px] leading-snug whitespace-pre-wrap break-words max-h-24 overflow-y-auto">
+                        <pre className="vds-mt-1 vds-p-1 vds-rounded vds-bg-page vds-text-[10px] vds-leading-snug vds-whitespace-pre-wrap vds-break-words vds-max-h-24 vds-overflow-y-auto">
                           {typeof tc.args === 'string' ? tc.args : JSON.stringify(tc.args, null, 2)}
                         </pre>
                       </details>
                     )}
-                    <details className="mt-1">
-                      <summary className="text-muted-foreground/60 cursor-pointer text-[10px] select-none">
+                    <details className="vds-mt-1">
+                      <summary className="vds-text-dim/60 vds-cursor-pointer vds-text-[10px] vds-select-none">
                         {t('conversations.toolCallsResult')}
                         {tc.result_bytes != null && (
-                          <span className="ml-1 text-muted-foreground/40">
+                          <span className="vds-ml-1 vds-text-dim/40">
                             ({fmtCompact(tc.result_bytes)} B)
                           </span>
                         )}
                       </summary>
-                      <pre className="mt-1 p-1 rounded bg-background text-[10px] leading-snug whitespace-pre-wrap break-words max-h-32 overflow-y-auto">
+                      <pre className="vds-mt-1 vds-p-1 vds-rounded vds-bg-page vds-text-[10px] vds-leading-snug vds-whitespace-pre-wrap vds-break-words vds-max-h-32 vds-overflow-y-auto">
                         {tc.result_text ?? t('conversations.toolCallsNoResult')}
                       </pre>
                     </details>

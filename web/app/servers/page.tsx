@@ -73,36 +73,36 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
           <DialogTitle>{t('providers.servers.registerTitle')}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="server-name">{t('providers.servers.name')} <span className="text-destructive">*</span></Label>
+        <div className="vds-space-y-4">
+          <div className="vds-space-y-1.5">
+            <Label htmlFor="server-name">{t('providers.servers.name')} <span className="vds-text-destructive">*</span></Label>
             <Input id="server-name" value={name} onChange={(e) => setName(e.target.value)}
               placeholder={t('providers.servers.namePlaceholder')} />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="vds-space-y-1.5">
             <Label htmlFor="server-ne-url">
-              {t('providers.servers.nodeExporterUrl')} <span className="text-destructive">*</span>
+              {t('providers.servers.nodeExporterUrl')} <span className="vds-text-destructive">*</span>
             </Label>
-            <div className="flex gap-2">
+            <div className="vds-flex vds-gap-2">
               <Input
                 id="server-ne-url"
                 type="url"
                 value={nodeExporterUrl}
                 onChange={(e) => handleUrlChange(e.target.value)}
                 placeholder={t('providers.servers.nodeExporterUrlPlaceholder')}
-                className={verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : ''}
+                className={verifyState === 'ok' ? 'vds-border-success' : verifyState === 'error' ? 'vds-border-destructive' : ''}
               />
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="shrink-0"
+                className="vds-flex-shrink-0"
                 disabled={!canVerify}
                 onClick={() => verify(nodeExporterUrl.trim())}
               >
@@ -112,30 +112,30 @@ function RegisterServerModal({ onClose }: { onClose: () => void }) {
               </Button>
             </div>
             {verifyState === 'ok' && (
-              <p className="flex items-center gap-1.5 text-xs text-status-success-fg">
-                <CheckCircle2 className="h-3.5 w-3.5" />
+              <p className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-success">
+                <CheckCircle2 className="vds-h-3.5 vds-w-3.5" />
                 {t('providers.servers.connected')}
               </p>
             )}
             {verifyState === 'error' && (
-              <p className="flex items-center gap-1.5 text-xs text-destructive">
-                <XCircle className="h-3.5 w-3.5" />
+              <p className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-destructive">
+                <XCircle className="vds-h-3.5 vds-w-3.5" />
                 {verifyError}
               </p>
             )}
             {verifyState === 'idle' && (
-              <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
+              <p className="vds-text-xs vds-text-dim">{t('providers.servers.nodeExporterHint')}</p>
             )}
           </div>
         </div>
 
         {registerMutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {registerMutation.error instanceof Error ? registerMutation.error.message : t('common.error')}
           </p>
         )}
 
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button
             onClick={() => registerMutation.mutate(undefined)}
@@ -183,53 +183,53 @@ function EditServerModal({ server, onClose }: { server: GpuServer; onClose: () =
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Pencil className="h-4 w-4 text-primary" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <Pencil className="vds-h-4 vds-w-4 vds-text-primary" />
             {t('providers.servers.editTitle')}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-server-name">{t('providers.servers.name')} <span className="text-destructive">*</span></Label>
+        <div className="vds-space-y-4">
+          <div className="vds-space-y-1.5">
+            <Label htmlFor="edit-server-name">{t('providers.servers.name')} <span className="vds-text-destructive">*</span></Label>
             <Input id="edit-server-name" value={name} onChange={(e) => setName(e.target.value)}
               placeholder={t('providers.servers.namePlaceholder')} />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="vds-space-y-1.5">
             <Label htmlFor="edit-server-ne-url">
-              {t('providers.servers.nodeExporterUrl')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
+              {t('providers.servers.nodeExporterUrl')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span>
             </Label>
-            <div className="flex gap-2">
+            <div className="vds-flex vds-gap-2">
               <Input id="edit-server-ne-url" type="url" value={nodeExporterUrl}
                 onChange={(e) => handleUrlChange(e.target.value)}
                 placeholder={t('providers.servers.nodeExporterUrlPlaceholder')}
-                className={verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : ''} />
+                className={verifyState === 'ok' ? 'vds-border-success' : verifyState === 'error' ? 'vds-border-destructive' : ''} />
               {urlChanged && (
-                <Button type="button" variant="outline" size="sm" className="shrink-0"
+                <Button type="button" variant="outline" size="sm" className="vds-flex-shrink-0"
                   disabled={!canVerify}
                   onClick={() => verify(nodeExporterUrl.trim())}>
                   {verifyState === 'checking' ? t('providers.servers.verifying')
-                    : verifyState === 'ok' ? <><CheckCircle2 className="h-3.5 w-3.5 mr-1 text-status-success-fg" />{t('providers.servers.connected')}</>
+                    : verifyState === 'ok' ? <><CheckCircle2 className="vds-h-3.5 vds-w-3.5 vds-mr-1 vds-text-success" />{t('providers.servers.connected')}</>
                     : t('providers.servers.verifyConnection')}
                 </Button>
               )}
             </div>
-            {verifyState === 'error' && <p className="text-xs text-destructive flex items-center gap-1"><XCircle className="h-3 w-3" />{verifyError}</p>}
-            {urlChanged && verifyState === 'idle' && <p className="text-xs text-muted-foreground">{t('providers.servers.verifyFirst')}</p>}
-            <p className="text-xs text-muted-foreground">{t('providers.servers.nodeExporterHint')}</p>
+            {verifyState === 'error' && <p className="vds-text-xs vds-text-destructive vds-flex vds-items-center vds-gap-1"><XCircle className="vds-h-3 vds-w-3" />{verifyError}</p>}
+            {urlChanged && verifyState === 'idle' && <p className="vds-text-xs vds-text-dim">{t('providers.servers.verifyFirst')}</p>}
+            <p className="vds-text-xs vds-text-dim">{t('providers.servers.nodeExporterHint')}</p>
           </div>
         </div>
 
         {mutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
           </p>
         )}
 
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate(undefined)} disabled={!canSave}>
             {mutation.isPending ? `${t('common.save')}…` : t('common.save')}
@@ -276,32 +276,32 @@ const ServersTable = memo(function ServersTable({
   }, [allServers, page])
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
       {/* ── Status pills + Register button ─────────────────────────── */}
-      <div className="flex items-center justify-between gap-3 flex-wrap">
+      <div className="vds-flex vds-items-center vds-justify-between vds-gap-3 vds-flex-wrap">
         {servers ? (
-          <div className="flex items-center gap-2 flex-wrap">
-            <StatusPill icon={<HardDrive className="h-3 w-3 shrink-0" />} count={servers.length} label={t('providers.servers.registered')} />
+          <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap">
+            <StatusPill icon={<HardDrive className="vds-h-3 vds-w-3 vds-flex-shrink-0" />} count={servers.length} label={t('providers.servers.registered')} />
             {configuredCount > 0 && (
               <StatusPill
-                icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-flex-shrink-0" />}
                 count={configuredCount} label={t('providers.servers.withMetrics')}
-                className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+                className="vds-bg-success/10 vds-border-1 vds-border-success/30 vds-text-success"
               />
             )}
             {servers.length - configuredCount > 0 && (
               <StatusPill
                 count={servers.length - configuredCount} label={t('providers.servers.noExporter')}
-                className="bg-muted/40 border border-border/60 text-muted-foreground/70"
+                className="vds-bg-muted/40 vds-border-1 vds-border-subtle/60 vds-text-dim/70"
               />
             )}
           </div>
         ) : (
-          <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+          <p className="vds-text-sm vds-text-dim vds-animate-pulse">{t('common.loading')}</p>
         )}
 
-        <Button onClick={onRegister} className="shrink-0">
-          <Plus className="h-4 w-4 mr-2" />{t('providers.servers.registerServer')}
+        <Button onClick={onRegister} className="vds-flex-shrink-0">
+          <Plus className="vds-h-4 vds-w-4 vds-mr-2" />{t('providers.servers.registerServer')}
         </Button>
       </div>
 
@@ -309,18 +309,18 @@ const ServersTable = memo(function ServersTable({
         <div
           aria-busy="true"
           aria-label={t('providers.servers.loadingServers')}
-          className="flex h-24 items-center justify-center text-muted-foreground text-sm animate-pulse"
+          className="vds-flex vds-h-24 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse"
         >
           {t('providers.servers.loadingServers')}
         </div>
       )}
 
       {allServers.length === 0 && !isLoading && (
-        <Card className="border-dashed">
-          <CardContent className="p-8 text-center text-muted-foreground">
-            <Server className="h-8 w-8 mx-auto mb-3 opacity-25" />
-            <p className="font-medium">{t('providers.servers.noServers')}</p>
-            <p className="text-sm mt-1">{t('providers.servers.noServersHint')}</p>
+        <Card className="vds-border-dashed">
+          <CardContent className="vds-p-8 vds-text-center vds-text-dim">
+            <Server className="vds-h-8 vds-w-8 vds-mx-auto vds-mb-3 vds-opacity-25" />
+            <p className="vds-font-500">{t('providers.servers.noServers')}</p>
+            <p className="vds-text-sm vds-mt-1">{t('providers.servers.noServersHint')}</p>
           </CardContent>
         </Card>
       )}
@@ -329,74 +329,74 @@ const ServersTable = memo(function ServersTable({
         <DataTable
           minWidth="700px"
           footer={totalPages > 1 ? (
-            <div className="flex items-center justify-between px-6 py-2">
-              <span className="text-xs text-muted-foreground">
+            <div className="vds-flex vds-items-center vds-justify-between vds-px-6 vds-py-2">
+              <span className="vds-text-xs vds-text-dim">
                 {pageStart + 1}–{Math.min(pageStart + PAGE_SIZE, allServers.length)} / {allServers.length}
               </span>
-              <div className="flex items-center gap-1">
-                <Button variant="outline" size="icon" className="h-7 w-7"
+              <div className="vds-flex vds-items-center vds-gap-1">
+                <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                   aria-label={t('common.prevPage')}
                   onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={safePage <= 1}>
-                  <ChevronLeft className="h-3.5 w-3.5" />
+                  <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
                 </Button>
-                <span className="text-xs text-muted-foreground px-1">{safePage} / {totalPages}</span>
-                <Button variant="outline" size="icon" className="h-7 w-7"
+                <span className="vds-text-xs vds-text-dim vds-px-1">{safePage} / {totalPages}</span>
+                <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                   aria-label={t('common.nextPage')}
                   onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={safePage >= totalPages}>
-                  <ChevronRight className="h-3.5 w-3.5" />
+                  <ChevronRight className="vds-h-3.5 vds-w-3.5" />
                 </Button>
               </div>
             </div>
           ) : undefined}
         >
           <TableHeader>
-            <TableRow className="hover:bg-transparent">
-              <TableHead className="w-48 whitespace-nowrap">{t('providers.servers.name')}</TableHead>
-              <TableHead className="whitespace-nowrap">{t('providers.servers.nodeExporterUrl')}</TableHead>
-              <TableHead className="min-w-64 whitespace-nowrap">{t('providers.servers.liveMetrics')}</TableHead>
-              <TableHead className="w-32 whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
-              <TableHead className="text-right w-24 whitespace-nowrap">{t('keys.actions')}</TableHead>
+            <TableRow className="vds-hover:bg-transparent">
+              <TableHead className="vds-w-48 vds-whitespace-nowrap">{t('providers.servers.name')}</TableHead>
+              <TableHead className="vds-whitespace-nowrap">{t('providers.servers.nodeExporterUrl')}</TableHead>
+              <TableHead className="vds-min-w-64 vds-whitespace-nowrap">{t('providers.servers.liveMetrics')}</TableHead>
+              <TableHead className="vds-w-32 vds-whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+              <TableHead className="vds-text-right vds-w-24 vds-whitespace-nowrap">{t('keys.actions')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {pageItems.map((s) => (
               <TableRow key={s.id}>
-                <TableCell className="font-semibold text-text-bright">{s.name}</TableCell>
+                <TableCell className="vds-font-600 vds-text-bright">{s.name}</TableCell>
                 <TableCell>
                   {s.node_exporter_url
-                    ? <span className="font-mono text-xs text-text-dim bg-surface-code px-2 py-1 rounded">{s.node_exporter_url}</span>
-                    : <span className="text-xs text-text-faint italic">{t('providers.servers.notConfigured')}</span>
+                    ? <span className="vds-font-mono vds-text-xs vds-text-dim vds-bg-surface-code vds-px-2 vds-py-1 vds-rounded">{s.node_exporter_url}</span>
+                    : <span className="vds-text-xs vds-text-faint vds-italic">{t('providers.servers.notConfigured')}</span>
                   }
                 </TableCell>
                 <TableCell>
                   {s.node_exporter_url
                     ? <ServerMetricsCell serverId={s.id} />
-                    : <span className="text-xs text-text-faint italic">—</span>
+                    : <span className="vds-text-xs vds-text-faint vds-italic">—</span>
                   }
                 </TableCell>
-                <TableCell className="text-muted-foreground text-xs whitespace-nowrap">
+                <TableCell className="vds-text-dim vds-text-xs vds-whitespace-nowrap">
                   {fmtDateOnly(s.registered_at, tz)}
                 </TableCell>
-                <TableCell className="text-right">
-                  <div className="flex items-center justify-end gap-1">
+                <TableCell className="vds-text-right">
+                  <div className="vds-flex vds-items-center vds-justify-end vds-gap-1">
                     <Button variant="ghost" size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                      className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-accent-gpu vds-hover:bg-hover-gpu/10"
                       aria-label={t('providers.servers.history')}
                       onClick={() => onHistory(s)} title={t('providers.servers.history')}>
-                      <BarChart2 className="h-4 w-4" />
+                      <BarChart2 className="vds-h-4 vds-w-4" />
                     </Button>
                     <Button variant="ghost" size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                      className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-primary vds-hover:bg-primary/10"
                       aria-label={t('providers.editProvider')}
                       onClick={() => onEdit(s)} title={t('providers.editProvider')}>
-                      <Pencil className="h-4 w-4" />
+                      <Pencil className="vds-h-4 vds-w-4" />
                     </Button>
                     <Button variant="ghost" size="icon"
-                      className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                      className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-error vds-hover:bg-error/10"
                       aria-label={t('providers.removeProvider')}
                       onClick={() => onDelete(s.id, s.name)}
                       disabled={deleteIsPending} title={t('providers.removeProvider')}>
-                      <Trash2 className="h-4 w-4" />
+                      <Trash2 className="vds-h-4 vds-w-4" />
                     </Button>
                   </div>
                 </TableCell>
@@ -436,10 +436,10 @@ export default function ServersPage() {
   }, [])
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('providers.servers.title')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('providers.servers.description')}</p>
+        <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('providers.servers.title')}</h1>
+        <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('providers.servers.description')}</p>
       </div>
 
       <ServersTable

@@ -27,13 +27,13 @@ export function DataTable({
 }) {
   return (
     <Card>
-      <div className="overflow-x-auto">
+      <div className="vds-overflow-x-auto">
         <Table style={{ minWidth }}>
           {children}
         </Table>
       </div>
       {footer && (
-        <div className="border-t border-border">
+        <div className="vds-border-t-1 vds-border-subtle">
           {footer}
         </div>
       )}
@@ -47,7 +47,7 @@ export function DataTable({
 export function DataTableEmpty({ children }: { children: React.ReactNode }) {
   return (
     <Card>
-      <div className="py-12 text-center text-sm text-muted-foreground">
+      <div className="vds-py-12 vds-text-center vds-text-sm vds-text-dim">
         {children}
       </div>
     </Card>

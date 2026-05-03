@@ -46,20 +46,20 @@ function KeyStatusPills({ keys }: { keys: ApiKey[] }) {
   const activeCount = useMemo(() => keys.filter(k => k.is_active).length, [keys])
   const inactiveCount = keys.length - activeCount
   return (
-    <div className="flex items-center gap-2 flex-wrap mt-2">
-      <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={keys.length} label={t('keys.registered')} />
+    <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap vds-mt-2">
+      <StatusPill icon={<Key className="vds-h-3 vds-w-3 vds-flex-shrink-0" />} count={keys.length} label={t('keys.registered')} />
       {activeCount > 0 && (
         <StatusPill
-          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+          icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-flex-shrink-0" />}
           count={activeCount} label={t('common.active')}
-          className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+          className="vds-bg-success/10 vds-border-1 vds-border-success/30 vds-text-success"
         />
       )}
       {inactiveCount > 0 && (
         <StatusPill
-          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+          icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-error vds-flex-shrink-0" />}
           count={inactiveCount} label={t('common.inactive')}
-          className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+          className="vds-bg-error/10 vds-border-1 vds-border-error/30 vds-text-error"
         />
       )}
     </div>
@@ -93,14 +93,14 @@ function CreateKeyModal({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
           <DialogTitle>{t('keys.createTitle')}</DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="key-name">{t('keys.keyName')} <span className="text-destructive">*</span></Label>
+        <div className="vds-space-y-4">
+          <div className="vds-space-y-1.5">
+            <Label htmlFor="key-name">{t('keys.keyName')} <span className="vds-text-destructive">*</span></Label>
             <Input
               id="key-name"
               value={name}
@@ -109,7 +109,7 @@ function CreateKeyModal({
             />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="vds-space-y-1.5">
             <Label htmlFor="key-tenant">{t('keys.tenantId')}</Label>
             <Input
               id="key-tenant"
@@ -119,7 +119,7 @@ function CreateKeyModal({
             />
           </div>
 
-          <div className="space-y-1.5">
+          <div className="vds-space-y-1.5">
             <Label htmlFor="key-tier">{t('keys.tier')}</Label>
             <Select value={tier} onValueChange={(v) => setTier(v as 'free' | 'paid')}>
               <SelectTrigger id="key-tier">
@@ -132,8 +132,8 @@ function CreateKeyModal({
             </Select>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="vds-grid vds-grid-cols-2 vds-gap-3">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="key-rpm">{t('keys.rateLimitRpm')}</Label>
               <Input
                 id="key-rpm"
@@ -143,7 +143,7 @@ function CreateKeyModal({
                 placeholder={t('keys.rateLimitPlaceholder')}
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="key-tpm">{t('keys.rateLimitTpm')}</Label>
               <Input
                 id="key-tpm"
@@ -157,12 +157,12 @@ function CreateKeyModal({
         </div>
 
         {mutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {mutation.error instanceof Error ? mutation.error.message : t('common.unknownError')}
           </p>
         )}
 
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate(undefined)} disabled={!name.trim() || mutation.isPending}>
             {mutation.isPending ? t('keys.creating') : t('keys.createKey')}
@@ -179,23 +179,23 @@ function KeyCreatedModal({ resp, onClose }: { resp: CreateKeyResponse; onClose: 
 
   return (
     <Dialog open onOpenChange={() => { /* block dismiss until ack */ }}>
-      <DialogContent className="max-w-lg" onPointerDownOutside={(e) => e.preventDefault()}>
+      <DialogContent className="vds-max-w-lg" showClose={false}>
         <DialogHeader>
           <DialogTitle>{t('keys.createdTitle')}</DialogTitle>
         </DialogHeader>
 
-        <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
+        <div className="vds-rounded-lg vds-border-1 vds-border-warning/30 vds-bg-warning/10 vds-p-4 vds-text-warning vds-text-sm">
           {t('keys.createdWarning')}
         </div>
 
-        <div className="rounded-lg bg-muted p-3 flex items-center gap-2">
-          <code className="flex-1 font-mono text-sm text-status-success-fg break-all select-all">{resp.key}</code>
+        <div className="vds-rounded-lg vds-bg-muted vds-p-3 vds-flex vds-items-center vds-gap-2">
+          <code className="vds-flex-1 vds-font-mono vds-text-sm vds-text-success vds-break-all vds-select-all">{resp.key}</code>
           <CopyButton text={resp.key} />
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="vds-flex vds-items-center vds-gap-2">
           <Checkbox id="key-ack" checked={ack} onCheckedChange={(v) => setAck(v === true)} />
-          <Label htmlFor="key-ack" className="text-sm cursor-pointer">{t('keys.keySavedAck')}</Label>
+          <Label htmlFor="key-ack" className="vds-text-sm vds-cursor-pointer">{t('keys.keySavedAck')}</Label>
         </div>
 
         <DialogFooter>
@@ -213,23 +213,23 @@ function KeyHistoryModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () => v
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-lg max-h-[70vh] flex flex-col">
+      <DialogContent className="vds-max-w-lg vds-max-h-[70vh] vds-flex vds-flex-col">
         <DialogHeader>
           <DialogTitle>{t('keys.historyTitle', { name: apiKey.name })}</DialogTitle>
         </DialogHeader>
-        <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
-          {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
+        <div className="vds-flex-1 vds-overflow-y-auto vds-space-y-2 vds-min-h-0">
+          {isLoading && <p className="vds-text-sm vds-text-dim">{t('common.loading')}</p>}
           {events && events.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t('common.empty')}</p>
+            <p className="vds-text-sm vds-text-dim">{t('common.empty')}</p>
           )}
           {events?.map((ev) => (
-            <div key={`${ev.event_time}-${ev.account_id}-${ev.action}-${ev.resource_id}`} className="rounded-lg border px-3 py-2 text-sm space-y-0.5">
-              <div className="flex items-center justify-between gap-2">
-                <Badge variant="outline" className="text-[10px] whitespace-nowrap">{ev.action}</Badge>
-                <span className="text-xs text-muted-foreground">{fmtDateOnly(ev.event_time, tz)}</span>
+            <div key={`${ev.event_time}-${ev.account_id}-${ev.action}-${ev.resource_id}`} className="vds-rounded-lg vds-border-1 vds-px-3 vds-py-2 vds-text-sm vds-space-y-0.5">
+              <div className="vds-flex vds-items-center vds-justify-between vds-gap-2">
+                <Badge variant="outline" className="vds-text-[10px] vds-whitespace-nowrap">{ev.action}</Badge>
+                <span className="vds-text-xs vds-text-dim">{fmtDateOnly(ev.event_time, tz)}</span>
               </div>
-              <p className="text-xs text-muted-foreground">{ev.details}</p>
-              <p className="text-[10px] text-muted-foreground/60">{ev.account_name}</p>
+              <p className="vds-text-xs vds-text-dim">{ev.details}</p>
+              <p className="vds-text-[10px] vds-text-dim/60">{ev.account_name}</p>
             </div>
           ))}
         </div>
@@ -277,26 +277,26 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
+      <DialogContent className="vds-max-w-lg vds-max-h-[80vh] vds-flex vds-flex-col">
         <DialogHeader>
           <DialogTitle>{t('keys.mcpAccessTitle', { name: apiKey.name })}</DialogTitle>
         </DialogHeader>
 
         {/* MCP Cap Points */}
-        <div className="rounded-lg border px-3 py-2.5 flex items-center gap-3">
-          <Label className="text-sm shrink-0">MCP Cap Points</Label>
+        <div className="vds-rounded-lg vds-border-1 vds-px-3 vds-py-2.5 vds-flex vds-items-center vds-gap-3">
+          <Label className="vds-text-sm vds-flex-shrink-0">MCP Cap Points</Label>
           <Input
             type="number"
             min={0}
             max={10}
             value={capPoints}
             onChange={(e) => setCapPoints(e.target.value)}
-            className="h-7 w-20 text-xs"
+            className="vds-h-7 vds-w-20 vds-text-xs"
           />
           <Button
             size="sm"
             variant="outline"
-            className="h-7 text-xs"
+            className="vds-h-7 vds-text-xs"
             disabled={capMutation.isPending}
             onClick={() => {
               const val = Math.max(0, Math.min(10, parseInt(capPoints, 10) || 0))
@@ -306,29 +306,29 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
           >
             {capMutation.isPending ? '…' : t('common.save', 'Save')}
           </Button>
-          <span className="text-xs text-muted-foreground">0–10</span>
+          <span className="vds-text-xs vds-text-dim">0–10</span>
         </div>
 
-        <p className="text-sm text-muted-foreground">{t('keys.mcpAccessDesc')}</p>
-        <div className="flex-1 overflow-y-auto space-y-2 min-h-0">
-          {isLoading && <p className="text-sm text-muted-foreground">{t('common.loading')}</p>}
-          {error && <p className="text-sm text-destructive">{t('keys.mcpLoadError')}</p>}
+        <p className="vds-text-sm vds-text-dim">{t('keys.mcpAccessDesc')}</p>
+        <div className="vds-flex-1 vds-overflow-y-auto vds-space-y-2 vds-min-h-0">
+          {isLoading && <p className="vds-text-sm vds-text-dim">{t('common.loading')}</p>}
+          {error && <p className="vds-text-sm vds-text-destructive">{t('keys.mcpLoadError')}</p>}
           {servers && servers.length === 0 && (
-            <p className="text-sm text-muted-foreground">{t('keys.mcpNoServers')}</p>
+            <p className="vds-text-sm vds-text-dim">{t('keys.mcpNoServers')}</p>
           )}
           {servers?.map((s: McpServerAccess) => (
-            <div key={s.server_id} className="flex items-center justify-between rounded-lg border px-3 py-2 gap-2">
-              <div className="flex items-center gap-2 min-w-0 flex-1">
-                <Server className="h-4 w-4 shrink-0 text-muted-foreground" />
-                <div className="min-w-0">
-                  <p className="text-sm font-medium truncate">{s.server_name}</p>
-                  <p className="text-xs text-muted-foreground font-mono">{s.slug}</p>
+            <div key={s.server_id} className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-px-3 vds-py-2 vds-gap-2">
+              <div className="vds-flex vds-items-center vds-gap-2 vds-min-w-0 vds-flex-1">
+                <Server className="vds-h-4 vds-w-4 vds-flex-shrink-0 vds-text-dim" />
+                <div className="vds-min-w-0">
+                  <p className="vds-text-sm vds-font-500 vds-truncate">{s.server_name}</p>
+                  <p className="vds-text-xs vds-text-dim vds-font-mono">{s.slug}</p>
                 </div>
               </div>
-              <div className="flex items-center gap-2 shrink-0">
+              <div className="vds-flex vds-items-center vds-gap-2 vds-flex-shrink-0">
                 {/* Top-K input */}
-                <div className="flex items-center gap-1">
-                  <Label className="text-xs text-muted-foreground shrink-0">Top-K</Label>
+                <div className="vds-flex vds-items-center vds-gap-1">
+                  <Label className="vds-text-xs vds-text-dim vds-flex-shrink-0">Top-K</Label>
                   <Input
                     type="number"
                     min={1}
@@ -336,14 +336,14 @@ function KeyMcpAccessModal({ apiKey, onClose }: { apiKey: ApiKey; onClose: () =>
                     placeholder="—"
                     value={topKMap[s.server_id] !== undefined ? topKMap[s.server_id] : (s.top_k ?? '')}
                     onChange={(e) => setTopKMap(prev => ({ ...prev, [s.server_id]: e.target.value }))}
-                    className="h-7 w-16 text-xs"
+                    className="vds-h-7 vds-w-16 vds-text-xs"
                   />
                 </div>
                 <Badge
                   variant="outline"
                   className={s.is_allowed
-                    ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
-                    : 'bg-muted text-muted-foreground'}
+                    ? 'vds-bg-success/15 vds-text-success vds-border-success/30'
+                    : 'vds-bg-muted vds-text-dim'}
                 >
                   {s.is_allowed ? t('keys.mcpGranted') : t('keys.mcpNotGranted')}
                 </Badge>
@@ -432,33 +432,33 @@ export default function KeysPage() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="vds-space-y-8">
       <div>
-        <div className="flex items-center justify-between">
-          <h1 className="text-2xl font-bold tracking-tight">{t('keys.title')}</h1>
-          <Button onClick={() => setShowCreate(true)} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />{t('keys.createKey')}
+        <div className="vds-flex vds-items-center vds-justify-between">
+          <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('keys.title')}</h1>
+          <Button onClick={() => setShowCreate(true)} className="vds-flex-shrink-0">
+            <Plus className="vds-h-4 vds-w-4 vds-mr-2" />{t('keys.createKey')}
           </Button>
         </div>
-        <p className="text-muted-foreground mt-1 text-sm">{t('keys.description')}</p>
+        <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('keys.description')}</p>
         {keys ? (
           <KeyStatusPills keys={keys} />
         ) : (
-          <p className="text-sm text-muted-foreground mt-2 animate-pulse">{t('common.loading')}</p>
+          <p className="vds-text-sm vds-text-dim vds-mt-2 vds-animate-pulse">{t('common.loading')}</p>
         )}
       </div>
 
       {isLoading && (
-        <div className="flex h-48 items-center justify-center text-muted-foreground">
+        <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim">
           {t('keys.loadingKeys')}
         </div>
       )}
 
       {error && (
-        <Card className="border-destructive/50 bg-destructive/10">
-          <CardContent className="p-6 text-destructive">
-            <p className="font-semibold">{t('keys.failedKeys')}</p>
-            <p className="text-sm mt-1 opacity-80">
+        <Card className="vds-border-destructive/50 vds-bg-destructive/10">
+          <CardContent className="vds-p-6 vds-text-destructive">
+            <p className="vds-font-600">{t('keys.failedKeys')}</p>
+            <p className="vds-text-sm vds-mt-1 vds-opacity-80">
               {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
           </CardContent>
@@ -472,24 +472,24 @@ export default function KeysPage() {
             <DataTable minWidth="720px">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="whitespace-nowrap">{t('keys.name')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('keys.prefix')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('keys.tenant')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('keys.tier')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('keys.status')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('keys.activeToggle')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('keys.rpmTpm')}</TableHead>
-                  {hasCreatedBy && <TableHead className="whitespace-nowrap">{t('keys.createdBy')}</TableHead>}
-                  <TableHead className="whitespace-nowrap">{t('keys.createdAt')}</TableHead>
-                  <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.name')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.prefix')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.tenant')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.tier')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.status')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.activeToggle')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.rpmTpm')}</TableHead>
+                  {hasCreatedBy && <TableHead className="vds-whitespace-nowrap">{t('keys.createdBy')}</TableHead>}
+                  <TableHead className="vds-whitespace-nowrap">{t('keys.createdAt')}</TableHead>
+                  <TableHead className="vds-text-right vds-whitespace-nowrap">{t('keys.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {keyPageItems.map((key) => (
-                  <TableRow key={key.id} className={!key.is_active ? 'opacity-50' : ''}>
-                    <TableCell className="font-medium">{key.name}</TableCell>
-                    <TableCell className="font-mono text-xs">{key.key_prefix}</TableCell>
-                    <TableCell className="text-muted-foreground">{key.tenant_id}</TableCell>
+                  <TableRow key={key.id} className={!key.is_active ? 'vds-opacity-50' : ''}>
+                    <TableCell className="vds-font-500">{key.name}</TableCell>
+                    <TableCell className="vds-font-mono vds-text-xs">{key.key_prefix}</TableCell>
+                    <TableCell className="vds-text-dim">{key.tenant_id}</TableCell>
                     <TableCell>
                       <Select
                         value={key.tier}
@@ -498,7 +498,7 @@ export default function KeysPage() {
                         }
                         disabled={tierMutation.isPending}
                       >
-                        <SelectTrigger className="h-7 w-24 text-xs">
+                        <SelectTrigger className="vds-h-7 vds-w-24 vds-text-xs">
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
@@ -510,11 +510,11 @@ export default function KeysPage() {
                     <TableCell>
                       <Badge
                         variant="outline"
-                        className={`whitespace-nowrap ${
-                          key.is_active
-                            ? 'bg-status-success/15 text-status-success-fg border-status-success/30'
-                            : 'bg-muted text-muted-foreground'
-                        }`}
+                        className={`vds-whitespace-nowrap ${
+ key.is_active
+ ? 'vds-bg-success-bg/15 vds-text-success vds-border-success/30'
+ : 'vds-bg-muted vds-text-dim'
+ }`}
                       >
                         {key.is_active ? t('common.active') : t('common.inactive')}
                       </Badge>
@@ -522,29 +522,29 @@ export default function KeysPage() {
                     <TableCell>
                       <KeyActiveSwitch keyId={key.id} isActive={key.is_active} />
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-xs tabular-nums">
+                    <TableCell className="vds-text-dim vds-text-xs vds-tabular-nums">
                       {key.rate_limit_rpm === 0 ? '∞' : key.rate_limit_rpm} /{' '}
                       {key.rate_limit_tpm === 0 ? '∞' : key.rate_limit_tpm}
                     </TableCell>
                     {hasCreatedBy && (
-                      <TableCell className="text-muted-foreground text-xs">
+                      <TableCell className="vds-text-dim vds-text-xs">
                         {key.created_by ?? '—'}
                       </TableCell>
                     )}
-                    <TableCell className="text-muted-foreground text-xs">
+                    <TableCell className="vds-text-dim vds-text-xs">
                       {fmtDateOnly(key.created_at, tz)}
                     </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex items-center justify-end gap-1">
+                    <TableCell className="vds-text-right">
+                      <div className="vds-flex vds-items-center vds-justify-end vds-gap-1">
                         <Button
                           variant="ghost"
                           size="icon"
                           aria-label={t('keys.viewUsage')}
                           onClick={() => setUsageKey(key)}
                           title={t('keys.viewUsage')}
-                          className="text-muted-foreground hover:text-primary"
+                          className="vds-text-dim vds-hover:text-primary"
                         >
-                          <BarChart2 className="h-4 w-4" />
+                          <BarChart2 className="vds-h-4 vds-w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -552,9 +552,9 @@ export default function KeysPage() {
                           aria-label={t('keys.viewHistory')}
                           onClick={() => setHistoryKey(key)}
                           title={t('keys.viewHistory')}
-                          className="text-muted-foreground hover:text-primary"
+                          className="vds-text-dim vds-hover:text-primary"
                         >
-                          <History className="h-4 w-4" />
+                          <History className="vds-h-4 vds-w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -562,9 +562,9 @@ export default function KeysPage() {
                           aria-label={t('keys.mcpAccess')}
                           onClick={() => setMcpAccessKey(key)}
                           title={t('keys.mcpAccess')}
-                          className="text-muted-foreground hover:text-primary"
+                          className="vds-text-dim vds-hover:text-primary"
                         >
-                          <Server className="h-4 w-4" />
+                          <Server className="vds-h-4 vds-w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -572,9 +572,9 @@ export default function KeysPage() {
                           aria-label={t('keys.regenerateKey')}
                           onClick={() => setRegenerateTarget(key)}
                           title={t('keys.regenerateKey')}
-                          className="text-muted-foreground hover:text-status-warning-fg"
+                          className="vds-text-dim vds-hover:text-warning"
                         >
-                          <RefreshCw className="h-4 w-4" />
+                          <RefreshCw className="vds-h-4 vds-w-4" />
                         </Button>
                         <Button
                           variant="ghost"
@@ -583,9 +583,9 @@ export default function KeysPage() {
                           onClick={() => setDeleteTarget(key)}
                           disabled={deleteMutation.isPending}
                           title={t('keys.deleteKey')}
-                          className="text-muted-foreground hover:text-destructive"
+                          className="vds-text-dim vds-hover:text-destructive"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <Trash2 className="vds-h-4 vds-w-4" />
                         </Button>
                       </div>
                     </TableCell>
@@ -596,17 +596,17 @@ export default function KeysPage() {
           )
       )}
       {keys && keys.length > 0 && keyTotalPages > 1 && (
-        <div className="flex items-center justify-end gap-2">
-          <span className="text-xs text-muted-foreground tabular-nums">
+        <div className="vds-flex vds-items-center vds-justify-end vds-gap-2">
+          <span className="vds-text-xs vds-text-dim vds-tabular-nums">
             {keySafePage * KEY_PAGE_SIZE + 1}–{Math.min((keySafePage + 1) * KEY_PAGE_SIZE, keys.length)} / {keys.length}
           </span>
-          <Button variant="outline" size="icon" className="h-7 w-7" disabled={keySafePage <= 0}
+          <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={keySafePage <= 0}
             onClick={() => setKeyPage(p => p - 1)}>
-            <ChevronLeft className="h-3.5 w-3.5" />
+            <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
           </Button>
-          <Button variant="outline" size="icon" className="h-7 w-7" disabled={keySafePage >= keyTotalPages - 1}
+          <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={keySafePage >= keyTotalPages - 1}
             onClick={() => setKeyPage(p => p + 1)}>
-            <ChevronRight className="h-3.5 w-3.5" />
+            <ChevronRight className="vds-h-3.5 vds-w-3.5" />
           </Button>
         </div>
       )}

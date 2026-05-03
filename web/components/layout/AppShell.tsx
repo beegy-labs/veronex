@@ -5,26 +5,15 @@ import { useTranslation } from '@/i18n'
 import { cn } from '@/lib/utils'
 
 interface AppShellProps {
-  /** Mobile topbar brand slot */
   mobileBrand: React.ReactNode
-  /** Mobile topbar right slot */
   mobileTopbarRight?: React.ReactNode
-  /** Whether mobile drawer is open */
   mobileOpen: boolean
-  /** Toggle mobile drawer */
   onMobileToggle: () => void
-  /** Close mobile drawer */
   onMobileClose: () => void
-  /**
-   * Desktop sidebar width — pass a responsive Tailwind class with md: prefix,
-   * e.g. 'md:w-56' or 'md:w-14'. Applied alongside mobile responsive classes.
-   */
-  sidebarWidth?: string
-  /** Sidebar content (use SidebarFrame) */
+  /** Whether the desktop sidebar is collapsed (icons-only). */
+  collapsed?: boolean
   sidebar: React.ReactNode
-  /** Sticky header rendered below topbar on desktop (optional) */
   desktopHeader?: React.ReactNode
-  /** Main content */
   children: React.ReactNode
 }
 
@@ -34,7 +23,7 @@ export function AppShell({
   mobileOpen,
   onMobileToggle,
   onMobileClose,
-  sidebarWidth = 'md:w-56',
+  collapsed = false,
   sidebar,
   desktopHeader,
   children,
@@ -42,17 +31,25 @@ export function AppShell({
   const { t } = useTranslation()
 
   return (
-    <div className="flex h-[100dvh] bg-background">
+    <div className="vds-flex vds-bg-page" style={{ height: '100dvh' }}>
       {/* ── Mobile top bar ───────────────────────────────────────────── */}
-      <div className="md:hidden fixed top-0 left-0 right-0 z-30 flex items-center justify-between h-12 px-4 bg-card border-b border-border flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <div
+        className={cn(
+          'vds-md:hidden vds-fixed vds-top-0 vds-left-0 vds-right-0 vds-z-sticky',
+          'vds-flex vds-items-center vds-justify-between vds-h-12 vds-px-4',
+          'vds-bg-card vds-border-b-1 vds-border-subtle vds-flex-shrink-0',
+        )}
+      >
+        <div className="vds-flex vds-items-center vds-gap-3">
           <button
             type="button"
             onClick={onMobileToggle}
-            className="p-1.5 rounded-md text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+            className="vds-p-2 vds-rounded-md vds-text-dim vds-hover:text-primary vds-hover:bg-hover vds-transition-colors"
             aria-label={t('common.menu')}
+            aria-expanded={mobileOpen}
+            aria-controls="primary-nav"
           >
-            <Menu className="h-5 w-5" />
+            <Menu className="vds-h-5 vds-w-5" aria-hidden />
           </button>
           {mobileBrand}
         </div>
@@ -62,35 +59,40 @@ export function AppShell({
       {/* ── Backdrop ─────────────────────────────────────────────────── */}
       {mobileOpen && (
         <div
-          className="md:hidden fixed inset-0 z-40 bg-foreground/30"
+          className="vds-md:hidden vds-fixed vds-inset-0 vds-z-overlay vds-bg-primary/30"
           onClick={onMobileClose}
           aria-hidden="true"
         />
       )}
 
-      {/* ── Sidebar (responsive: overlay on mobile, static on desktop) ─ */}
+      {/* ── Sidebar (responsive: overlay on mobile, static on desktop) ─
+       * NOTE: do NOT use inline `style` for transform/width — inline beats
+       * responsive `vds-md:*` classes by specificity and traps the sidebar
+       * offscreen on desktop. Use the `veronex-aside` helper classes from
+       * globals.css instead, which collapse the transform on desktop. */}
       <aside
+        id="primary-nav"
         className={cn(
-          'flex flex-col bg-card border-r border-border',
-          'fixed inset-y-0 left-0 z-50 w-[80vw] max-w-72',
-          'transition-all duration-200 ease-in-out',
-          mobileOpen ? 'translate-x-0' : '-translate-x-full',
-          'md:static md:z-auto md:translate-x-0 md:flex-shrink-0',
-          sidebarWidth,
+          'vds-flex vds-flex-col vds-bg-card vds-border-r-1 vds-border-subtle',
+          'vds-fixed vds-inset-y-0 vds-left-0 vds-z-modal vds-max-w-72',
+          'vds-transition-all vds-duration-medium vds-ease-ease-in-out',
+          'vds-md:static vds-md:z-base vds-md:flex-shrink-0',
+          collapsed ? 'vds-md:w-16' : 'vds-md:w-64',
+          mobileOpen ? 'veronex-aside-open' : 'veronex-aside-closed',
         )}
       >
         {sidebar}
       </aside>
 
       {/* ── Main ─────────────────────────────────────────────────────── */}
-      <main className="flex-1 overflow-auto">
+      <div className="vds-flex-1 vds-overflow-auto">
         {desktopHeader && (
-          <div className="hidden md:block">{desktopHeader}</div>
+          <div className="vds-hidden vds-md:block">{desktopHeader}</div>
         )}
-        <div className="p-4 pt-16 md:p-8 md:pt-8">
+        <div className="vds-p-4 vds-pt-16 vds-md:p-8 vds-md:pt-8">
           {children}
         </div>
-      </main>
+      </div>
     </div>
   )
 }

@@ -27,7 +27,7 @@ export function ImageAttachButton({ canAddMore, isCompressing, onImageAdd }: Ima
         type="file"
         accept="image/*"
         multiple
-        className="hidden"
+        className="vds-hidden"
         onChange={handleFileChange}
       />
       <Button
@@ -37,12 +37,12 @@ export function ImageAttachButton({ canAddMore, isCompressing, onImageAdd }: Ima
         disabled={!canAddMore || isCompressing}
         aria-label={t('test.imageAttach')}
         title={t('test.imageAttach')}
-        className="h-8 w-8 text-muted-foreground hover:text-foreground"
+        className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-primary"
         onClick={() => fileInputRef.current?.click()}
       >
         {isCompressing
-          ? <Loader2 className="h-4 w-4 animate-spin" />
-          : <ImagePlus className="h-4 w-4" />
+          ? <Loader2 className="vds-h-4 vds-w-4 vds-animate-spin" />
+          : <ImagePlus className="vds-h-4 vds-w-4" />
         }
       </Button>
     </>

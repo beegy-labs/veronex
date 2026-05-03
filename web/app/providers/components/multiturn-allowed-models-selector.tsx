@@ -46,31 +46,31 @@ export function MultiturnAllowedModelsSelector({
   const allSelected = selected.length === 0
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <div className="relative flex-1">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+    <div className="vds-space-y-2">
+      <div className="vds-flex vds-items-center vds-justify-between vds-gap-2">
+        <div className="vds-relative vds-flex-1">
+          <Search className="vds-absolute vds-left-2.5 vds-top-1/2 -translate-y-1/2 vds-h-3.5 vds-w-3.5 vds-text-dim vds-pointer-events-none" />
           <Input
-            className="h-8 text-xs pl-8"
+            className="vds-h-8 vds-text-xs vds-pl-8"
             placeholder={t('providers.ollama.ollamaSearchModels')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             disabled={disabled}
           />
         </div>
-        <span className="text-[11px] text-muted-foreground whitespace-nowrap">
+        <span className="vds-text-2xs vds-text-dim vds-whitespace-nowrap">
           {allSelected
             ? t('providers.ollama.labMultiturnAllModels')
             : `${selected.length} / ${models.length}`}
         </span>
       </div>
 
-      <div className="max-h-64 overflow-y-auto divide-y divide-border rounded-md border border-border">
+      <div className="vds-max-h-64 vds-overflow-y-auto vds-divide-y vds-divide-border vds-rounded-md vds-border-1 vds-border-subtle">
         {isLoading && (
-          <p className="px-3 py-3 text-xs text-muted-foreground">{t('common.loading')}</p>
+          <p className="vds-px-3 vds-py-3 vds-text-xs vds-text-dim">{t('common.loading')}</p>
         )}
         {!isLoading && filtered.length === 0 && (
-          <p className="px-3 py-3 text-xs text-muted-foreground italic">
+          <p className="vds-px-3 vds-py-3 vds-text-xs vds-text-dim vds-italic">
             {search ? `${t('providers.ollama.noModelsMatch')} "${search}"` : t('providers.ollama.ollamaNoSync')}
           </p>
         )}
@@ -83,21 +83,21 @@ export function MultiturnAllowedModelsSelector({
           return (
             <label
               key={m.model_name}
-              className="flex items-center gap-3 px-3 py-2 hover:bg-muted/40 transition-colors cursor-pointer"
+              className="vds-flex vds-items-center vds-gap-3 vds-px-3 vds-py-2 vds-hover:bg-hover/40 vds-transition-colors vds-cursor-pointer"
             >
-              <span className="font-mono text-xs flex-1 truncate">{m.model_name}</span>
+              <span className="vds-font-mono vds-text-xs vds-flex-1 vds-truncate">{m.model_name}</span>
               {params != null && (
-                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 tabular-nums ${paramsFail ? 'border-status-warning/50 text-status-warning-fg' : ''}`}>
+                <Badge variant="outline" className={`vds-text-[10px] vds-px-1.5 vds-py-0 vds-tabular-nums ${paramsFail ? 'vds-border-warning/50 vds-text-warning' : ''}`}>
                   {params}B
                 </Badge>
               )}
               {m.max_ctx != null && m.max_ctx > 0 && (
-                <Badge variant="outline" className={`text-[10px] px-1.5 py-0 tabular-nums ${ctxFail ? 'border-status-warning/50 text-status-warning-fg' : ''}`}>
+                <Badge variant="outline" className={`vds-text-[10px] vds-px-1.5 vds-py-0 vds-tabular-nums ${ctxFail ? 'vds-border-warning/50 vds-text-warning' : ''}`}>
                   {Math.floor(m.max_ctx / 1024)}k
                 </Badge>
               )}
               {gateFail && (
-                <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-status-warning/50 text-status-warning-fg">
+                <Badge variant="outline" className="vds-text-[10px] vds-px-1.5 vds-py-0 vds-border-warning/50 vds-text-warning">
                   {t('providers.ollama.labMultiturnGateFail')}
                 </Badge>
               )}

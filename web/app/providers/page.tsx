@@ -57,12 +57,12 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   })
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">
+        <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">
           {section === 'gemini' ? t('providers.gemini.title') : t('providers.ollama.title')}
         </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
+        <p className="vds-text-dim vds-mt-1 vds-text-sm">
           {section === 'gemini' ? t('providers.gemini.description') : t('providers.ollama.description')}
         </p>
       </div>
@@ -133,7 +133,7 @@ export default function ProvidersPage() {
   usePageGuard('provider_manage')
   const { t } = useTranslation()
   return (
-    <Suspense fallback={<div className="p-2 text-sm text-muted-foreground">{t('common.loading')}</div>}>
+    <Suspense fallback={<div className="vds-p-2 vds-text-sm vds-text-dim">{t('common.loading')}</div>}>
       <ProvidersSectionReader />
     </Suspense>
   )

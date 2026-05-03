@@ -43,70 +43,70 @@ export default function JobTable({
       <DataTable minWidth="1000px">
         <TableHeader>
           <TableRow>
-            <TableHead className="whitespace-nowrap">{t('jobs.id')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.conversationId')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.model')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.provider')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.providerName')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.apiKey')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.endpoint')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.source')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.status')}</TableHead>
-            <TableHead className="whitespace-nowrap">{t('jobs.createdAt')}</TableHead>
-            <TableHead className="text-right whitespace-nowrap">{t('jobs.ttft')}</TableHead>
-            <TableHead className="text-right whitespace-nowrap">{t('jobs.latency')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.id')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.conversationId')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.model')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.provider')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.providerName')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.apiKey')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.endpoint')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.source')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.status')}</TableHead>
+            <TableHead className="vds-whitespace-nowrap">{t('jobs.createdAt')}</TableHead>
+            <TableHead className="vds-text-right vds-whitespace-nowrap">{t('jobs.ttft')}</TableHead>
+            <TableHead className="vds-text-right vds-whitespace-nowrap">{t('jobs.latency')}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {jobs.map((job) => (
             <TableRow
               key={job.id}
-              className="cursor-pointer hover:bg-accent/50"
+              className="vds-cursor-pointer vds-hover:bg-hover/50"
               onClick={() => setSelectedId(job.id)}
             >
-              <TableCell className="font-mono text-xs text-muted-foreground">
+              <TableCell className="vds-font-mono vds-text-xs vds-text-dim">
                 <span title={job.id}>{truncateId(job.id)}</span>
               </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground">
+              <TableCell className="vds-font-mono vds-text-xs vds-text-dim">
                 {job.conversation_id
                   ? <span title={job.conversation_id}>{truncateId(job.conversation_id)}</span>
-                  : <span className="opacity-40">—</span>}
+                  : <span className="vds-opacity-40">—</span>}
               </TableCell>
-              <TableCell>{job.model_name}</TableCell>
-              <TableCell className="text-muted-foreground capitalize">
+              <TableCell className="vds-max-w-[160px] vds-truncate" title={job.model_name}>{job.model_name}</TableCell>
+              <TableCell className="vds-text-dim vds-capitalize">
                 {job.provider_type}
               </TableCell>
-              <TableCell className="text-muted-foreground text-sm">
-                {job.provider_name ?? <span className="opacity-40">—</span>}
+              <TableCell className="vds-text-dim vds-text-sm vds-max-w-[160px] vds-truncate" title={job.provider_name ?? undefined}>
+                {job.provider_name ?? <span className="vds-opacity-40">—</span>}
               </TableCell>
-              <TableCell className="text-xs text-primary/80">
+              <TableCell className="vds-text-xs vds-text-primary/80 vds-max-w-[160px] vds-truncate" title={(job.source === 'test' ? job.account_name : job.api_key_name) ?? undefined}>
                 {job.source === 'test'
-                  ? (job.account_name ?? <span className="text-muted-foreground">—</span>)
-                  : (job.api_key_name ?? <span className="text-muted-foreground">—</span>)}
+                  ? (job.account_name ?? <span className="vds-text-dim">—</span>)
+                  : (job.api_key_name ?? <span className="vds-text-dim">—</span>)}
               </TableCell>
-              <TableCell className="font-mono text-xs text-muted-foreground max-w-[160px] truncate" title={job.request_path ?? undefined}>
-                {job.request_path ?? <span className="opacity-40">—</span>}
-              </TableCell>
-              <TableCell>
-                <span className={`px-1.5 py-0.5 rounded text-[10px] font-mono ${SOURCE_STYLES[job.source] ?? SOURCE_STYLES.api}`}>{job.source}</span>
+              <TableCell className="vds-font-mono vds-text-xs vds-text-dim vds-max-w-[160px] vds-truncate" title={job.request_path ?? undefined}>
+                {job.request_path ?? <span className="vds-opacity-40">—</span>}
               </TableCell>
               <TableCell>
-                <div className="flex items-center gap-1.5">
+                <span className={`vds-px-1.5 vds-py-0.5 vds-rounded vds-text-[10px] vds-font-mono ${SOURCE_STYLES[job.source] ?? SOURCE_STYLES.api}`}>{job.source}</span>
+              </TableCell>
+              <TableCell>
+                <div className="vds-flex vds-items-center vds-gap-1.5">
                   <StatusBadge status={job.status} />
                   {job.has_tool_calls && (
                     <span title={t('jobs.toolCalls')}>
-                      <Wrench className="h-3 w-3 text-status-info-fg shrink-0" />
+                      <Wrench className="vds-h-3 vds-w-3 vds-text-info vds-flex-shrink-0" />
                     </span>
                   )}
                 </div>
               </TableCell>
-              <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+              <TableCell className="vds-text-xs vds-text-dim vds-whitespace-nowrap">
                 {fmtDatetime(job.created_at, tz)}
               </TableCell>
-              <TableCell className="text-right tabular-nums text-muted-foreground text-xs">
+              <TableCell className="vds-text-right vds-tabular-nums vds-text-dim vds-text-xs">
                 {formatDuration(job.ttft_ms)}
               </TableCell>
-              <TableCell className="text-right tabular-nums text-muted-foreground">
+              <TableCell className="vds-text-right vds-tabular-nums vds-text-dim">
                 {formatDuration(job.latency_ms)}
               </TableCell>
             </TableRow>

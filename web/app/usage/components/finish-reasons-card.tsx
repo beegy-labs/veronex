@@ -29,12 +29,12 @@ export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
   if (donutData.length === 0) return null
 
   return (
-    <Card className="h-full">
+    <Card className="vds-h-full">
       <CardHeader>
-        <CardTitle className="text-base">{t('usage.finishReasonTitle')}</CardTitle>
+        <CardTitle className="vds-text-base">{t('usage.finishReasonTitle')}</CardTitle>
       </CardHeader>
       <CardContent>
-        <div className="flex items-center gap-6">
+        <div className="vds-flex vds-items-center vds-gap-6">
           <DonutChart
             data={donutData.map((d) => ({
               name: t(FINISH_REASON_LABEL_KEY[d.name] ?? 'usage.finishStop'),
@@ -46,19 +46,19 @@ export function FinishReasonsCard({ data }: { data: AnalyticsStats }) {
             outerRadius={50}
             formatter={(v) => String(v)}
           />
-          <div className="flex-1 space-y-2">
+          <div className="vds-flex-1 vds-space-y-2">
             {donutData.map((d) => (
-              <div key={d.name} className="flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="h-2 w-2 rounded-full shrink-0"
+              <div key={d.name} className="vds-flex vds-items-center vds-justify-between vds-gap-2">
+                <div className="vds-flex vds-items-center vds-gap-2">
+                  <span className="vds-h-2 vds-w-2 vds-rounded-full vds-flex-shrink-0"
                     style={{ background: FINISH_COLORS[d.name] ?? tokens.text.faint }} />
-                  <span className={`text-xs font-medium px-1.5 py-0.5 rounded border ${FINISH_BG[d.name] ?? 'bg-muted text-muted-foreground border-border'}`}>
+                  <span className={`vds-text-xs vds-font-500 vds-px-1.5 vds-py-0.5 vds-rounded vds-border-1 ${FINISH_BG[d.name] ?? 'vds-bg-muted vds-text-dim vds-border-default'}`}>
                     {t(FINISH_REASON_LABEL_KEY[d.name] ?? 'usage.finishStop')}
                   </span>
                 </div>
-                <div className="text-right">
-                  <span className="text-sm font-mono tabular-nums font-bold">{d.value}</span>
-                  <span className="text-xs text-muted-foreground ml-1">({d.pct}%)</span>
+                <div className="vds-text-right">
+                  <span className="vds-text-sm vds-font-mono vds-tabular-nums vds-font-700">{d.value}</span>
+                  <span className="vds-text-xs vds-text-dim vds-ml-1">({d.pct}%)</span>
                 </div>
               </div>
             ))}

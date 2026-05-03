@@ -22,7 +22,7 @@ export const NetworkFlowTab = memo(function NetworkFlowTab({ providers }: Props)
   const reqPerMin = stats?.incoming_60s ?? 0
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
       <ProviderFlowPanel
         providers={providers}
         events={events}

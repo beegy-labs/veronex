@@ -85,46 +85,46 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
             {provider.provider_type === PROVIDER_OLLAMA
-              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.editTitle')}</>
-              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.editTitle')}</>}
+              ? <><Server className="vds-h-4 vds-w-4 vds-text-info" /> {t('providers.ollama.editTitle')}</>
+              : <><Key className="vds-h-4 vds-w-4 vds-text-accent-gpu" /> {t('providers.gemini.editTitle')}</>}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="edit-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
+        <div className="vds-space-y-4">
+          <div className="vds-space-y-1.5">
+            <Label htmlFor="edit-name">{t('providers.ollama.name')} <span className="vds-text-destructive">*</span></Label>
             <Input id="edit-name" value={name} onChange={(e) => setName(e.target.value)} />
           </div>
 
           {provider.provider_type === PROVIDER_OLLAMA && (
             <>
-              <div className="space-y-1.5">
+              <div className="vds-space-y-1.5">
                 <Label htmlFor="edit-url">{t('providers.ollama.ollamaUrl')}</Label>
-                <div className="flex gap-2">
+                <div className="vds-flex vds-gap-2">
                   <Input id="edit-url" type="url" value={url}
                     onChange={(e) => handleUrlChange(e.target.value)}
-                    className={urlChanged ? (verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : '') : ''} />
+                    className={urlChanged ? (verifyState === 'ok' ? 'vds-border-success' : verifyState === 'error' ? 'vds-border-destructive' : '') : ''} />
                   {urlChanged && (
-                    <Button type="button" variant="outline" size="sm" className="shrink-0"
+                    <Button type="button" variant="outline" size="sm" className="vds-flex-shrink-0"
                       disabled={!url.trim() || verifyState === 'checking'}
                       onClick={() => verify(url.trim())}>
                       {verifyState === 'checking' ? t('providers.ollama.verifying')
-                        : verifyState === 'ok' ? <><CheckCircle2 className="h-3.5 w-3.5 mr-1 text-status-success-fg" />{t('providers.ollama.connected')}</>
+                        : verifyState === 'ok' ? <><CheckCircle2 className="vds-h-3.5 vds-w-3.5 vds-mr-1 vds-text-success" />{t('providers.ollama.connected')}</>
                         : t('providers.ollama.verifyConnection')}
                     </Button>
                   )}
                 </div>
-                {verifyState === 'error' && <p className="text-xs text-destructive flex items-center gap-1"><XCircle className="h-3 w-3" />{verifyError}</p>}
-                {urlChanged && verifyState === 'idle' && <p className="text-xs text-muted-foreground">{t('providers.ollama.verifyFirst')}</p>}
+                {verifyState === 'error' && <p className="vds-text-xs vds-text-destructive vds-flex vds-items-center vds-gap-1"><XCircle className="vds-h-3 vds-w-3" />{verifyError}</p>}
+                {urlChanged && verifyState === 'idle' && <p className="vds-text-xs vds-text-dim">{t('providers.ollama.verifyFirst')}</p>}
               </div>
 
-              <div className="space-y-1.5">
+              <div className="vds-space-y-1.5">
                 <Label htmlFor="edit-server">
-                  {t('providers.ollama.gpuServer')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
+                  {t('providers.ollama.gpuServer')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span>
                 </Label>
                 <Select value={serverId} onValueChange={setServerId}>
                   <SelectTrigger id="edit-server"><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
@@ -139,8 +139,8 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                 </Select>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="edit-gpu-index">{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
+              <div className="vds-space-y-1.5">
+                <Label htmlFor="edit-gpu-index">{t('providers.ollama.gpuIndex')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                 {gpuCards.length > 0 ? (
                   <Select value={gpuIndex} onValueChange={setGpuIndex}>
                     <SelectTrigger aria-label={t('providers.ollama.gpuIndex')}><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
@@ -163,22 +163,22 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label>{t('providers.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
+              <div className="vds-space-y-1.5">
+                <div className="vds-flex vds-items-center vds-justify-between">
+                  <Label>{t('providers.ollama.maxVram')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                   {serverMemTotalMb != null && serverMemTotalMb > 0 && (
-                    <span className="text-[11px] text-muted-foreground tabular-nums">
-                      {t('providers.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
+                    <span className="vds-text-2xs vds-text-dim vds-tabular-nums">
+                      {t('providers.ollama.serverRam')}: <span className="vds-font-600 vds-text-dim">{fmtMb(serverMemTotalMb)}</span>
                     </span>
                   )}
                 </div>
                 <VramInput valueMb={vram} onChange={setVram} aria-label={t('providers.ollama.maxVram')} />
               </div>
 
-              <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+              <div className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-4 vds-py-3">
                 <div>
-                  <p className="text-sm font-medium">{t('providers.ollama.freeTier')}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('providers.ollama.freeTierDesc')}</p>
+                  <p className="vds-text-sm vds-font-500">{t('providers.ollama.freeTier')}</p>
+                  <p className="vds-text-xs vds-text-dim vds-mt-0.5">{t('providers.ollama.freeTierDesc')}</p>
                 </div>
                 <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} aria-label={t('providers.ollama.freeTier')} />
               </div>
@@ -186,20 +186,20 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
           )}
 
           {provider.provider_type === PROVIDER_GEMINI && (
-            <div className="space-y-4">
-              <div className="space-y-1.5">
+            <div className="vds-space-y-4">
+              <div className="vds-space-y-1.5">
                 <Label htmlFor="edit-apikey">
-                  {t('providers.gemini.apiKey')} <span className="text-muted-foreground font-normal">— {t('providers.gemini.keepExistingKey')}</span>
+                  {t('providers.gemini.apiKey')} <span className="vds-text-dim vds-font-400">— {t('providers.gemini.keepExistingKey')}</span>
                 </Label>
                 <Input id="edit-apikey" type="password" value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)} placeholder={t('providers.gemini.apiKeyPlaceholder')} />
-                <p className="text-xs text-muted-foreground">{t('providers.gemini.apiKeyHint')}</p>
+                <p className="vds-text-xs vds-text-dim">{t('providers.gemini.apiKeyHint')}</p>
               </div>
 
-              <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+              <div className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-4 vds-py-3">
                 <div>
-                  <p className="text-sm font-medium">{t('providers.gemini.freeTier')}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
+                  <p className="vds-text-sm vds-font-500">{t('providers.gemini.freeTier')}</p>
+                  <p className="vds-text-xs vds-text-dim vds-mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
                 </div>
                 <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} aria-label={t('providers.gemini.freeTier')} />
               </div>
@@ -208,12 +208,12 @@ export function EditModal({ provider, servers, onClose }: { provider: Provider; 
         </div>
 
         {mutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
           </p>
         )}
 
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button onClick={() => mutation.mutate()} disabled={!name.trim() || (provider.provider_type === PROVIDER_OLLAMA && !isOllamaUrlVerified) || mutation.isPending}>
             {mutation.isPending ? t('common.saving') : t('common.save')}
@@ -292,40 +292,40 @@ export function RegisterModal({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="vds-max-w-md">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
             {initialType === 'ollama'
-              ? <><Server className="h-4 w-4 text-status-info-fg" /> {t('providers.ollama.registerTitle')}</>
-              : <><Key className="h-4 w-4 text-accent-gpu" /> {t('providers.gemini.registerTitle')}</>}
+              ? <><Server className="vds-h-4 vds-w-4 vds-text-info" /> {t('providers.ollama.registerTitle')}</>
+              : <><Key className="vds-h-4 vds-w-4 vds-text-accent-gpu" /> {t('providers.gemini.registerTitle')}</>}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="provider-name">{t('providers.ollama.name')} <span className="text-destructive">*</span></Label>
+        <div className="vds-space-y-4">
+          <div className="vds-space-y-1.5">
+            <Label htmlFor="provider-name">{t('providers.ollama.name')} <span className="vds-text-destructive">*</span></Label>
             <Input id="provider-name" value={name} onChange={(e) => setName(e.target.value)}
               placeholder={initialType === 'ollama' ? t('providers.ollama.namePlaceholder') : t('providers.gemini.namePlaceholder')} />
           </div>
 
           {initialType === 'ollama' && (
             <>
-              <div className="space-y-1.5">
-                <Label htmlFor="provider-url">{t('providers.ollama.ollamaUrl')} <span className="text-destructive">*</span></Label>
-                <div className="flex gap-2">
+              <div className="vds-space-y-1.5">
+                <Label htmlFor="provider-url">{t('providers.ollama.ollamaUrl')} <span className="vds-text-destructive">*</span></Label>
+                <div className="vds-flex vds-gap-2">
                   <Input
                     id="provider-url"
                     type="url"
                     value={url}
                     onChange={(e) => handleUrlChange(e.target.value)}
                     placeholder={t('providers.ollama.urlPlaceholder')}
-                    className={verifyState === 'ok' ? 'border-status-success' : verifyState === 'error' ? 'border-destructive' : ''}
+                    className={verifyState === 'ok' ? 'vds-border-success' : verifyState === 'error' ? 'vds-border-destructive' : ''}
                   />
                   <Button
                     type="button"
                     variant="outline"
                     size="sm"
-                    className="shrink-0"
+                    className="vds-flex-shrink-0"
                     disabled={!url.trim() || verifyState === 'checking'}
                     onClick={() => verify(url.trim())}
                   >
@@ -335,22 +335,22 @@ export function RegisterModal({
                   </Button>
                 </div>
                 {verifyState === 'ok' && (
-                  <p className="flex items-center gap-1.5 text-xs text-status-success-fg">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
+                  <p className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-success">
+                    <CheckCircle2 className="vds-h-3.5 vds-w-3.5" />
                     {t('providers.ollama.connected')}
                   </p>
                 )}
                 {verifyState === 'error' && (
-                  <p className="flex items-center gap-1.5 text-xs text-destructive">
-                    <XCircle className="h-3.5 w-3.5" />
+                  <p className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-destructive">
+                    <XCircle className="vds-h-3.5 vds-w-3.5" />
                     {verifyError}
                   </p>
                 )}
               </div>
 
-              <div className="space-y-1.5">
+              <div className="vds-space-y-1.5">
                 <Label htmlFor="provider-server">
-                  {t('providers.ollama.gpuServer')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span>
+                  {t('providers.ollama.gpuServer')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span>
                 </Label>
                 <Select value={serverId} onValueChange={setServerId}>
                   <SelectTrigger id="provider-server"><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
@@ -363,11 +363,11 @@ export function RegisterModal({
                     ))}
                   </SelectContent>
                 </Select>
-                <p className="text-xs text-muted-foreground">{t('providers.ollama.gpuServerHint')}</p>
+                <p className="vds-text-xs vds-text-dim">{t('providers.ollama.gpuServerHint')}</p>
               </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="provider-gpu-index">{t('providers.ollama.gpuIndex')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
+              <div className="vds-space-y-1.5">
+                <Label htmlFor="provider-gpu-index">{t('providers.ollama.gpuIndex')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                 {gpuCards.length > 0 ? (
                   <Select value={gpuIndex} onValueChange={setGpuIndex}>
                     <SelectTrigger aria-label={t('providers.ollama.gpuIndex')}><SelectValue placeholder={t('providers.ollama.noneOption')} /></SelectTrigger>
@@ -390,12 +390,12 @@ export function RegisterModal({
                 )}
               </div>
 
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label>{t('providers.ollama.maxVram')} <span className="text-muted-foreground font-normal">— {t('providers.servers.nodeExporterOptional')}</span></Label>
+              <div className="vds-space-y-1.5">
+                <div className="vds-flex vds-items-center vds-justify-between">
+                  <Label>{t('providers.ollama.maxVram')} <span className="vds-text-dim vds-font-400">— {t('providers.servers.nodeExporterOptional')}</span></Label>
                   {serverMemTotalMb != null && serverMemTotalMb > 0 && (
-                    <span className="text-[11px] text-muted-foreground tabular-nums">
-                      {t('providers.ollama.serverRam')}: <span className="font-semibold text-text-dim">{fmtMb(serverMemTotalMb)}</span>
+                    <span className="vds-text-2xs vds-text-dim vds-tabular-nums">
+                      {t('providers.ollama.serverRam')}: <span className="vds-font-600 vds-text-dim">{fmtMb(serverMemTotalMb)}</span>
                     </span>
                   )}
                 </div>
@@ -405,18 +405,18 @@ export function RegisterModal({
           )}
 
           {initialType === 'gemini' && (
-            <div className="space-y-4">
-              <div className="space-y-1.5">
-                <Label htmlFor="provider-apikey">{t('providers.gemini.apiKey')} <span className="text-destructive">*</span></Label>
+            <div className="vds-space-y-4">
+              <div className="vds-space-y-1.5">
+                <Label htmlFor="provider-apikey">{t('providers.gemini.apiKey')} <span className="vds-text-destructive">*</span></Label>
                 <Input id="provider-apikey" type="password" value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)} placeholder={t('providers.gemini.apiKeyPlaceholder')} />
-                <p className="text-xs text-muted-foreground">{t('providers.gemini.apiKeyHint')}</p>
+                <p className="vds-text-xs vds-text-dim">{t('providers.gemini.apiKeyHint')}</p>
               </div>
 
-              <div className="flex items-center justify-between rounded-lg border border-border px-4 py-3">
+              <div className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-4 vds-py-3">
                 <div>
-                  <p className="text-sm font-medium">{t('providers.gemini.freeTier')}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
+                  <p className="vds-text-sm vds-font-500">{t('providers.gemini.freeTier')}</p>
+                  <p className="vds-text-xs vds-text-dim vds-mt-0.5">{t('providers.gemini.freeTierDesc')}</p>
                 </div>
                 <Switch checked={isFreeTier} onCheckedChange={setIsFreeTier} aria-label={t('providers.gemini.freeTier')} />
               </div>
@@ -425,12 +425,12 @@ export function RegisterModal({
         </div>
 
         {mutation.error && (
-          <p className="text-sm text-destructive">
+          <p className="vds-text-sm vds-text-destructive">
             {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
           </p>
         )}
 
-        <DialogFooter className="gap-3 flex-wrap">
+        <DialogFooter className="vds-gap-3 vds-flex-wrap">
           <Button variant="outline" onClick={onClose}>{t('common.cancel')}</Button>
           <Button
             onClick={() => mutation.mutate()}

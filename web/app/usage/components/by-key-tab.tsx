@@ -64,20 +64,20 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
   )
 
   return (
-    <div className="space-y-6 mt-4">
+    <div className="vds-space-y-6 vds-mt-4">
       {!breakdown && (
-        <div className="flex h-32 items-center justify-center text-muted-foreground text-sm">{t('common.loading')}</div>
+        <div className="vds-flex vds-h-32 vds-items-center vds-justify-center vds-text-dim vds-text-sm">{t('common.loading')}</div>
       )}
       {breakdown && (
         <>
           {/* Key breakdown table */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Key className="h-4 w-4 text-primary" />
+              <CardTitle className="vds-text-base vds-flex vds-items-center vds-gap-2">
+                <Key className="vds-h-4 vds-w-4 vds-text-primary" />
                 {t('usage.byKey')}
               </CardTitle>
-              <p className="text-xs text-muted-foreground">{t('usage.breakdownDesc')}</p>
+              <p className="vds-text-xs vds-text-dim">{t('usage.breakdownDesc')}</p>
             </CardHeader>
             <CardContent>
               <KeyBreakdownTable
@@ -94,10 +94,10 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
           {keys && keys.length > 0 && (
             <Card>
               <CardHeader>
-                <div className="flex items-center justify-between flex-wrap gap-3">
-                  <CardTitle className="text-base">{t('usage.keyDetail')}</CardTitle>
+                <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-3">
+                  <CardTitle className="vds-text-base">{t('usage.keyDetail')}</CardTitle>
                   <Select value={activeKeyId ?? ''} onValueChange={setSelectedKeyId}>
-                    <SelectTrigger className="w-60">
+                    <SelectTrigger className="vds-w-60">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -110,14 +110,14 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                   </Select>
                 </div>
               </CardHeader>
-              <CardContent className="space-y-8">
+              <CardContent className="vds-space-y-8">
                 {hourlyLoading && (
-                  <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+                  <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim vds-text-sm">
                     {t('common.loading')}
                   </div>
                 )}
                 {!hourlyLoading && chartData.length === 0 && (
-                  <div className="flex h-48 items-center justify-center text-muted-foreground text-sm">
+                  <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim vds-text-sm">
                     {t('usage.noKeyData')}
                   </div>
                 )}
@@ -172,13 +172,13 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                     <SectionLabel>{t('usage.modelCallRatio')}</SectionLabel>
                     <DataTable minWidth="600px">
                       <TableHeader>
-                        <TableRow className="hover:bg-transparent">
+                        <TableRow className="vds-hover:bg-transparent">
                           <TableHead>{t('usage.modelCol')}</TableHead>
-                          <TableHead className="w-28">{t('usage.providerCol')}</TableHead>
-                          <TableHead className="text-right w-24">{t('usage.reqCount')}</TableHead>
-                          <TableHead className="w-36">{t('usage.share')}</TableHead>
-                          <TableHead className="text-right w-32">{t('usage.avgLatency')}</TableHead>
-                          <TableHead className="text-right w-28">{t('jobs.tokens')}</TableHead>
+                          <TableHead className="vds-w-28">{t('usage.providerCol')}</TableHead>
+                          <TableHead className="vds-text-right vds-w-24">{t('usage.reqCount')}</TableHead>
+                          <TableHead className="vds-w-36">{t('usage.share')}</TableHead>
+                          <TableHead className="vds-text-right vds-w-32">{t('usage.avgLatency')}</TableHead>
+                          <TableHead className="vds-text-right vds-w-28">{t('jobs.tokens')}</TableHead>
                         </TableRow>
                       </TableHeader>
                       <TableBody>
@@ -187,25 +187,25 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
                           const color = PROVIDER_COLORS[m.provider_type] ?? tokens.brand.primary
                           return (
                             <TableRow key={`${m.model_name}-${i}`}>
-                              <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
+                              <TableCell className="vds-font-mono vds-font-500 vds-text-sm">{m.model_name}</TableCell>
                               <TableCell>
-                                <Badge variant="outline" className={`text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
+                                <Badge variant="outline" className={`vds-text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
                                   {m.provider_type}
                                 </Badge>
                               </TableCell>
-                              <TableCell className="text-right tabular-nums font-semibold">{fmtCompact(m.request_count)}</TableCell>
+                              <TableCell className="vds-text-right vds-tabular-nums vds-font-600">{fmtCompact(m.request_count)}</TableCell>
                               <TableCell>
-                                <div className="flex items-center gap-2">
-                                  <ProgressBar pct={m.call_pct} colorStyle={color} className="flex-1" />
-                                  <span className="text-xs tabular-nums w-10 text-right font-semibold" style={{ color }}>
+                                <div className="vds-flex vds-items-center vds-gap-2">
+                                  <ProgressBar pct={m.call_pct} colorStyle={color} className="vds-flex-1" />
+                                  <span className="vds-text-xs vds-tabular-nums vds-w-10 vds-text-right vds-font-600" style={{ color }}>
                                     {fmtPct1(m.call_pct)}
                                   </span>
                                 </div>
                               </TableCell>
-                              <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                              <TableCell className="vds-text-right vds-tabular-nums vds-text-dim vds-text-sm">
                                 {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
                               </TableCell>
-                              <TableCell className="text-right tabular-nums text-muted-foreground text-sm">
+                              <TableCell className="vds-text-right vds-tabular-nums vds-text-dim vds-text-sm">
                                 {fmtCompact(totalTok)}
                               </TableCell>
                             </TableRow>
@@ -221,7 +221,7 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
 
           {(!keys || keys.length === 0) && (
             <Card>
-              <CardContent className="p-6 text-center text-muted-foreground text-sm">
+              <CardContent className="vds-p-6 vds-text-center vds-text-dim vds-text-sm">
                 {t('usage.noKeysMsg')}
               </CardContent>
             </Card>

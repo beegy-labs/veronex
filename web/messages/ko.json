@@ -18,7 +18,11 @@
     "audit": "감사 로그",
     "capacity": "동시성 제어",
     "health": "헬스",
-    "mcp": "MCP"
+    "mcp": "MCP",
+    "observe": "관측",
+    "operate": "운영",
+    "govern": "통제",
+    "system": "시스템"
   },
   "common": {
     "all": "전체",
@@ -117,7 +121,8 @@
     "activate": "활성화",
     "deactivate": "비활성화",
     "deleting": "삭제 중…",
-    "model": "모델"
+    "model": "모델",
+    "skipToMain": "메인 콘텐츠로 건너뛰기"
   },
   "conversations": {
     "title": "대화",

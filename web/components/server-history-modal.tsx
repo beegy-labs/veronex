@@ -44,52 +44,52 @@ export function ServerHistoryModal({
 
   return (
     <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="max-w-[95vw] sm:max-w-2xl">
+      <DialogContent className="vds-max-w-[95vw] vds-sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <BarChart2 className="h-4 w-4 text-accent-gpu" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <BarChart2 className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
             {server.name}
-            <span className="text-muted-foreground font-normal text-sm">— {t('providers.clickhouseHistory')}</span>
+            <span className="vds-text-dim vds-font-400 vds-text-sm">— {t('providers.clickhouseHistory')}</span>
           </DialogTitle>
         </DialogHeader>
 
-        <div className="flex items-center gap-2 border-b border-border pb-3">
-          <div className="flex items-center gap-1 bg-muted rounded-md p-0.5">
+        <div className="vds-flex vds-items-center vds-gap-2 vds-border-b-1 vds-border-subtle vds-pb-3">
+          <div className="vds-flex vds-items-center vds-gap-1 vds-bg-muted vds-rounded-md vds-p-0.5">
             {HIST_HOUR_OPTIONS.map((h) => (
               <Button key={h} size="sm" variant={hours === h ? 'default' : 'ghost'}
                 onClick={() => setHours(h as typeof hours)}
-                className="h-6 px-3 text-xs rounded">
+                className="vds-h-6 vds-px-3 vds-text-xs vds-rounded">
                 {h}h
               </Button>
             ))}
           </div>
           <Button size="sm" variant="ghost" onClick={() => refetch()} disabled={isFetching}
-            className="h-7 px-2 ml-auto gap-1.5 text-xs text-muted-foreground hover:text-foreground">
-            <RefreshCw className={isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+            className="vds-h-7 vds-px-2 vds-ml-auto vds-gap-1.5 vds-text-xs vds-text-dim vds-hover:text-primary">
+            <RefreshCw className={isFetching ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
             {t('common.sync')}
           </Button>
         </div>
 
         {isLoading && (
-          <div className="flex h-32 items-center justify-center text-muted-foreground text-sm animate-pulse">
+          <div className="vds-flex vds-h-32 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
             {t('common.loading')}
           </div>
         )}
         {isError && (
-          <p className="text-sm text-destructive py-2">{t('providers.checkOtel')}</p>
+          <p className="vds-text-sm vds-text-destructive vds-py-2">{t('providers.checkOtel')}</p>
         )}
         {data && data.length === 0 && (
-          <p className="text-sm text-muted-foreground py-6 text-center">
+          <p className="vds-text-sm vds-text-dim vds-py-6 vds-text-center">
             {t('providers.noClickhouseData', { hours })}
             <br />
-            <span className="text-xs opacity-60">{t('providers.checkOtel')}</span>
+            <span className="vds-text-xs vds-opacity-60">{t('providers.checkOtel')}</span>
           </p>
         )}
 
         {data && data.length > 0 && (
-          <div className="space-y-5">
+          <div className="vds-space-y-5">
             <div>
-              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('providers.memUsedPct')}</p>
+              <p className="vds-text-xs vds-font-600 vds-text-dim vds-uppercase vds-tracking-wide vds-mb-2">{t('providers.memUsedPct')}</p>
               <ResponsiveContainer width="100%" height={110}>
                 <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                   <XAxis dataKey="ts" tick={AXIS_TICK_SM} interval="preserveStartEnd" />
@@ -102,7 +102,7 @@ export function ServerHistoryModal({
             {hasGpu && (
               <>
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('providers.gpuTempC')}</p>
+                  <p className="vds-text-xs vds-font-600 vds-text-dim vds-uppercase vds-tracking-wide vds-mb-2">{t('providers.gpuTempC')}</p>
                   <ResponsiveContainer width="100%" height={110}>
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={AXIS_TICK_SM} interval="preserveStartEnd" />
@@ -113,7 +113,7 @@ export function ServerHistoryModal({
                   </ResponsiveContainer>
                 </div>
                 <div>
-                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">{t('providers.gpuPowerW')}</p>
+                  <p className="vds-text-xs vds-font-600 vds-text-dim vds-uppercase vds-tracking-wide vds-mb-2">{t('providers.gpuPowerW')}</p>
                   <ResponsiveContainer width="100%" height={110}>
                     <LineChart data={chartData} margin={{ top: 4, right: 8, bottom: 0, left: -20 }}>
                       <XAxis dataKey="ts" tick={AXIS_TICK_SM} interval="preserveStartEnd" />

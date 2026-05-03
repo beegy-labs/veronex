@@ -18,7 +18,11 @@
     "audit": "Audit Log",
     "capacity": "Concurrency",
     "health": "Health",
-    "mcp": "MCP"
+    "mcp": "MCP",
+    "observe": "Observe",
+    "operate": "Operate",
+    "govern": "Govern",
+    "system": "System"
   },
   "common": {
     "all": "All",
@@ -117,7 +121,8 @@
     "activate": "Activate",
     "deactivate": "Deactivate",
     "deleting": "Deleting…",
-    "model": "Model"
+    "model": "Model",
+    "skipToMain": "Skip to main content"
   },
   "conversations": {
     "title": "Conversations",

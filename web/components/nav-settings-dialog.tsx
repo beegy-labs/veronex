@@ -79,26 +79,26 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
 
   return (
     <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose() }}>
-      <DialogContent className="max-w-xs">
+      <DialogContent className="vds-max-w-xs">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <Settings2 className="h-4 w-4 text-primary" />
+          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
+            <Settings2 className="vds-h-4 vds-w-4 vds-text-primary" />
             {t('common.settings')}
           </DialogTitle>
         </DialogHeader>
 
-        <div className="space-y-4 pt-1">
+        <div className="vds-space-y-4 vds-pt-1">
           {/* Language row */}
-          <div className="flex items-center gap-3">
-            <Languages className="h-4 w-4 text-muted-foreground shrink-0" />
-            <span className="text-sm text-muted-foreground flex-1">{t('common.language')}</span>
+          <div className="vds-flex vds-items-center vds-gap-3">
+            <Languages className="vds-h-4 vds-w-4 vds-text-dim vds-flex-shrink-0" />
+            <span className="vds-text-sm vds-text-dim vds-flex-1">{t('common.language')}</span>
             <Select value={locale} onValueChange={(v) => changeLocale(v as Locale)}>
-              <SelectTrigger className="h-8 w-36 text-xs">
+              <SelectTrigger className="vds-h-8 vds-w-36 vds-text-xs">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 {locales.map((loc) => (
-                  <SelectItem key={loc} value={loc} className="text-xs">
+                  <SelectItem key={loc} value={loc} className="vds-text-xs">
                     {localeLabels[loc]}
                   </SelectItem>
                 ))}
@@ -107,9 +107,9 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
           </div>
 
           {/* Timezone row */}
-          <div className="flex items-center gap-3">
-            <Clock className="h-4 w-4 text-muted-foreground shrink-0" />
-            <span className="text-sm text-muted-foreground flex-1">{t('common.timezone')}</span>
+          <div className="vds-flex vds-items-center vds-gap-3">
+            <Clock className="vds-h-4 vds-w-4 vds-text-dim vds-flex-shrink-0" />
+            <span className="vds-text-sm vds-text-dim vds-flex-1">{t('common.timezone')}</span>
             <Select
               value={tzSelectValue}
               onValueChange={(v) => {
@@ -123,46 +123,46 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
                 }
               }}
             >
-              <SelectTrigger className="h-8 w-36 text-xs">
+              <SelectTrigger className="vds-h-8 vds-w-36 vds-text-xs">
                 {isPresetTz
                   ? <SelectValue />
-                  : <span className="truncate">{tz.split('/').pop()}</span>
+                  : <span className="vds-truncate">{tz.split('/').pop()}</span>
                 }
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="UTC" className="text-xs">{t('common.utc')}</SelectItem>
-                <SelectItem value="America/New_York" className="text-xs">{t('common.eastern')}</SelectItem>
-                <SelectItem value="America/Chicago" className="text-xs">{t('common.central')}</SelectItem>
-                <SelectItem value="America/Denver" className="text-xs">{t('common.mountain')}</SelectItem>
-                <SelectItem value="America/Los_Angeles" className="text-xs">{t('common.pacific')}</SelectItem>
-                <SelectItem value="Europe/London" className="text-xs">{t('common.london')}</SelectItem>
-                <SelectItem value="Africa/Johannesburg" className="text-xs">{t('common.johannesburg')}</SelectItem>
-                <SelectItem value="Asia/Seoul" className="text-xs">{t('common.kst')}</SelectItem>
-                <SelectItem value="Asia/Tokyo" className="text-xs">{t('common.jst')}</SelectItem>
-                <SelectItem value="Australia/Sydney" className="text-xs">{t('common.sydney')}</SelectItem>
-                <SelectItem value="Pacific/Auckland" className="text-xs">{t('common.auckland')}</SelectItem>
-                <SelectItem value="__custom__" className="text-xs">{t('common.custom')}</SelectItem>
+                <SelectItem value="UTC" className="vds-text-xs">{t('common.utc')}</SelectItem>
+                <SelectItem value="America/New_York" className="vds-text-xs">{t('common.eastern')}</SelectItem>
+                <SelectItem value="America/Chicago" className="vds-text-xs">{t('common.central')}</SelectItem>
+                <SelectItem value="America/Denver" className="vds-text-xs">{t('common.mountain')}</SelectItem>
+                <SelectItem value="America/Los_Angeles" className="vds-text-xs">{t('common.pacific')}</SelectItem>
+                <SelectItem value="Europe/London" className="vds-text-xs">{t('common.london')}</SelectItem>
+                <SelectItem value="Africa/Johannesburg" className="vds-text-xs">{t('common.johannesburg')}</SelectItem>
+                <SelectItem value="Asia/Seoul" className="vds-text-xs">{t('common.kst')}</SelectItem>
+                <SelectItem value="Asia/Tokyo" className="vds-text-xs">{t('common.jst')}</SelectItem>
+                <SelectItem value="Australia/Sydney" className="vds-text-xs">{t('common.sydney')}</SelectItem>
+                <SelectItem value="Pacific/Auckland" className="vds-text-xs">{t('common.auckland')}</SelectItem>
+                <SelectItem value="__custom__" className="vds-text-xs">{t('common.custom')}</SelectItem>
               </SelectContent>
             </Select>
           </div>
 
           {/* Lab features section */}
-          <div className="border-t pt-3 mt-1">
-            <div className="flex items-center gap-2 mb-2">
-              <FlaskConical className="h-4 w-4 text-accent-power shrink-0" />
-              <span className="text-sm font-medium flex-1">{t('common.labFeatures')}</span>
-              <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning-fg border border-status-warning/30 uppercase tracking-wide">
+          <div className="vds-border-t-1 vds-pt-3 vds-mt-1">
+            <div className="vds-flex vds-items-center vds-gap-2 vds-mb-2">
+              <FlaskConical className="vds-h-4 vds-w-4 vds-text-accent-power vds-flex-shrink-0" />
+              <span className="vds-text-sm vds-font-500 vds-flex-1">{t('common.labFeatures')}</span>
+              <span className="vds-text-[10px] vds-font-600 vds-px-1.5 vds-py-0.5 vds-rounded vds-bg-warning/15 vds-text-warning vds-border-1 vds-border-warning/30 vds-uppercase vds-tracking-wide">
                 Lab
               </span>
             </div>
-            <p className="text-xs text-muted-foreground mb-3 pl-6">{t('common.labFeaturesDesc')}</p>
+            <p className="vds-text-xs vds-text-dim vds-mb-3 vds-pl-6">{t('common.labFeaturesDesc')}</p>
 
             {/* Gemini function calling (only truly global flag — Ollama-scoped features moved to /providers → Ollama tab → Lab) */}
-            <div className="pl-6 space-y-3">
-              <div className="flex items-center justify-between gap-2">
-                <div className="flex-1 min-w-0">
-                  <p className="text-xs font-medium">{t('common.labGeminiFunctionCalling')}</p>
-                  <p className="text-[11px] text-muted-foreground leading-snug mt-0.5">{t('common.labGeminiFunctionCallingDesc')}</p>
+            <div className="vds-pl-6 vds-space-y-3">
+              <div className="vds-flex vds-items-center vds-justify-between vds-gap-2">
+                <div className="vds-flex-1 vds-min-w-0">
+                  <p className="vds-text-xs vds-font-500">{t('common.labGeminiFunctionCalling')}</p>
+                  <p className="vds-text-2xs vds-text-dim vds-leading-snug vds-mt-0.5">{t('common.labGeminiFunctionCallingDesc')}</p>
                 </div>
                 <Switch
                   checked={optFunctionCalling}
@@ -189,30 +189,30 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
 
           {/* Custom IANA input */}
           {showCustomTzInline && (
-            <div className="pl-7 space-y-2">
+            <div className="vds-pl-7 vds-space-y-2">
               <Input
                 value={customTzInput}
                 onChange={(e) => { setCustomTzInput(e.target.value); setCustomTzError(false) }}
                 placeholder={t('common.customTimezonePlaceholder')}
-                className="font-mono text-xs h-8"
+                className="vds-font-mono vds-text-xs vds-h-8"
                 onKeyDown={(e) => { if (e.key === 'Enter') applyCustomTz() }}
               />
-              <p className="text-xs text-muted-foreground">{t('common.customTimezoneHint')}</p>
+              <p className="vds-text-xs vds-text-dim">{t('common.customTimezoneHint')}</p>
               {customTzError && (
-                <p className="text-xs text-destructive">{t('common.customTimezoneInvalid')}</p>
+                <p className="vds-text-xs vds-text-destructive">{t('common.customTimezoneInvalid')}</p>
               )}
-              <div className="flex gap-2">
+              <div className="vds-flex vds-gap-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  className="h-7 text-xs flex-1"
+                  className="vds-h-7 vds-text-xs vds-flex-1"
                   onClick={() => { setShowCustomTzInline(false); setCustomTzError(false) }}
                 >
                   {t('common.cancel')}
                 </Button>
                 <Button
                   size="sm"
-                  className="h-7 text-xs flex-1"
+                  className="vds-h-7 vds-text-xs vds-flex-1"
                   onClick={applyCustomTz}
                 >
                   {t('common.save')}

@@ -17,8 +17,8 @@ describe('PROVIDER_BADGE', () => {
 
 describe('PROVIDER_COLORS', () => {
   it('has CSS variable values for ollama and gemini', () => {
-    expect(PROVIDER_COLORS.ollama).toContain('--theme-')
-    expect(PROVIDER_COLORS.gemini).toContain('--theme-')
+    expect(PROVIDER_COLORS.ollama).toContain('--vds-theme-')
+    expect(PROVIDER_COLORS.gemini).toContain('--vds-theme-')
   })
 })
 

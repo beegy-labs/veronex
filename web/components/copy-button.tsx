@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { COPY_FEEDBACK_MS } from '@/lib/constants'
 import { useTranslation } from '@/i18n'
 
-export function CopyButton({ text, className = 'h-7 w-7' }: { text: string; className?: string }) {
+export function CopyButton({ text, className = 'vds-h-7 vds-w-7' }: { text: string; className?: string }) {
   const { t } = useTranslation()
   const [copied, setCopied] = useState(false)
 
@@ -18,7 +18,7 @@ export function CopyButton({ text, className = 'h-7 w-7' }: { text: string; clas
 
   return (
     <Button variant="ghost" size="icon" className={className} aria-label={copied ? t('common.copied') : t('common.copy')} onClick={handleCopy} title={t('common.copy')}>
-      {copied ? <Check className="h-3.5 w-3.5 text-status-success-fg" /> : <Copy className="h-3.5 w-3.5" />}
+      {copied ? <Check className="vds-h-3.5 vds-w-3.5 vds-text-success" /> : <Copy className="vds-h-3.5 vds-w-3.5" />}
     </Button>
   )
 }

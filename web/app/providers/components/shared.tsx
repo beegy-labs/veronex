@@ -23,18 +23,18 @@ export function extractHost(url: string): string {
 export function StatusBadge({ status }: { status: Provider['status'] }) {
   const { t } = useTranslation()
   if (status === 'online') return (
-    <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 font-medium whitespace-nowrap">
-      <Wifi className="h-3 w-3 mr-1.5 shrink-0" />{t('common.online')}
+    <Badge variant="outline" className="vds-bg-success/15 vds-text-success vds-border-success/30 vds-font-500 vds-whitespace-nowrap">
+      <Wifi className="vds-h-3 vds-w-3 vds-mr-1.5 vds-flex-shrink-0" />{t('common.online')}
     </Badge>
   )
   if (status === 'degraded') return (
-    <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 font-medium whitespace-nowrap">
-      <AlertCircle className="h-3 w-3 mr-1.5 shrink-0" />{t('common.degraded')}
+    <Badge variant="outline" className="vds-bg-warning/15 vds-text-warning vds-border-warning/30 vds-font-500 vds-whitespace-nowrap">
+      <AlertCircle className="vds-h-3 vds-w-3 vds-mr-1.5 vds-flex-shrink-0" />{t('common.degraded')}
     </Badge>
   )
   return (
-    <Badge variant="outline" className="bg-surface-code text-muted-foreground border-border font-medium whitespace-nowrap">
-      <WifiOff className="h-3 w-3 mr-1.5 shrink-0" />{t('common.offline')}
+    <Badge variant="outline" className="vds-bg-surface-code vds-text-dim vds-border-subtle vds-font-500 vds-whitespace-nowrap">
+      <WifiOff className="vds-h-3 vds-w-3 vds-mr-1.5 vds-flex-shrink-0" />{t('common.offline')}
     </Badge>
   )
 }
@@ -57,18 +57,18 @@ export function VramInput({ valueMb, onChange, 'aria-label': ariaLabel }: { valu
   }
 
   return (
-    <div className="flex">
+    <div className="vds-flex">
       <Input type="number" min={0} step={unit === 'gb' ? 0.5 : 256}
         value={display} onChange={(e) => handleInput(e.target.value)}
         placeholder={unit === 'gb' ? 'e.g. 24' : 'e.g. 24576'}
         aria-label={ariaLabel}
-        className="rounded-r-none" />
+        className="vds-rounded-r-none" />
       <Button type="button" variant={unit === 'mb' ? 'secondary' : 'outline'}
         onClick={() => setUnit('mb')}
-        className="h-9 px-2 text-xs rounded-none border-l-0 border-r-0 shrink-0">MiB</Button>
+        className="vds-h-9 vds-px-2 vds-text-xs vds-rounded-none vds-border-l-0 vds-border-r-0 vds-flex-shrink-0">MiB</Button>
       <Button type="button" variant={unit === 'gb' ? 'secondary' : 'outline'}
         onClick={() => setUnit('gb')}
-        className="h-9 px-2 text-xs rounded-l-none shrink-0">GiB</Button>
+        className="vds-h-9 vds-px-2 vds-text-xs vds-rounded-l-none vds-flex-shrink-0">GiB</Button>
     </div>
   )
 }

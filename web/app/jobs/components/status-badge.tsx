@@ -10,7 +10,7 @@ export function StatusBadge({ status }: { status: string }) {
   return (
     <Badge
       variant="outline"
-      className={`whitespace-nowrap ${STATUS_STYLES[status] ?? 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30'}`}
+      className={`vds-whitespace-nowrap ${STATUS_STYLES[status] ?? 'vds-bg-neutral-bg/15 vds-text-dim vds-border-neutral/30'}`}
     >
       {t(key)}
     </Badge>

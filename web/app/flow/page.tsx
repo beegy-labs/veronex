@@ -14,10 +14,10 @@ export default function FlowPage() {
   const providers = providersData?.providers
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('nav.flow')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('overview.networkFlowDesc')}</p>
+        <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('nav.flow')}</h1>
+        <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('overview.networkFlowDesc')}</p>
       </div>
 
       <NetworkFlowTab providers={providers ?? []} />
