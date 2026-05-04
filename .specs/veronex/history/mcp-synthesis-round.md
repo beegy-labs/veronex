@@ -1,6 +1,11 @@
 # SDD: MCP synthesis round (degenerate-loop final guarantee)
 
-> Status: planned | Change type: **Feature** (forced-text safety net) | Created: 2026-04-30 | Owner: TBD
+> **Status: SUPERSEDED 2026-05-04** — S24 synthesis fallback was deleted in
+> favour of constrained-decoding round-0 tool enforcement, which prevents
+> the degenerate state structurally rather than recovering from it.
+> See `.specs/veronex/mcp-constrained-decoding-unification.md`.
+>
+> Status: superseded | Change type: **Feature** (forced-text safety net) | Created: 2026-04-30 | Owner: TBD
 > CDD basis: `docs/llm/inference/mcp.md` · `docs/llm/flows/mcp.md` · `docs/llm/inference/job-lifecycle.md`
 > Predecessor: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` (S23) — convergence boundary + tools-omission
 

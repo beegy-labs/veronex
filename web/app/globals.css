@@ -42,6 +42,25 @@
    * use `vds-text-info` (blue accent) or `style={{ color: tokens.brand.primary }}`. */
   .vds-text-primary { color: var(--vds-theme-text-primary); }
 
+  /* ── Mobile optimizations ─────────────────────────────────────────────
+     These complement the verodesign reset layer (tap-highlight, touch-action,
+     iOS zoom prevention). App-level concerns: scroll isolation, body scroll
+     lock when drawer is open, and safe-area insets for notched devices. */
+
+  /* Prevent pull-to-refresh and overscroll glow on the body. Individual
+     scrollable panels use vds-overscroll-contain instead. */
+  body {
+    overscroll-behavior: none;
+  }
+
+  /* Safe-area padding for notched/dynamic-island devices (viewport-fit=cover
+     is already set in layout.tsx). Apply to the mobile top bar and any fixed
+     bottom bar via these utility classes. */
+  .vds-safe-top    { padding-top:    env(safe-area-inset-top); }
+  .vds-safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+  .vds-safe-left   { padding-left:   env(safe-area-inset-left); }
+  .vds-safe-right  { padding-right:  env(safe-area-inset-right); }
+
   /* ── Sidebar drawer (mobile overlay, desktop static) ───────────────── */
   /* verodesign has no negative translate-x utility; provide our own so the
    * mobile drawer state can be expressed as a class. The desktop media query

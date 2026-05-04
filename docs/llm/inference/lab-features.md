@@ -36,10 +36,10 @@ The gateway's product promise (per `.ai/README.md`): feature-richness depends on
 | Capability | Shim mechanism | Trigger |
 |---|---|---|
 | Vision | `inference_helpers.rs::analyze_images_for_context` delegates the image to `lab_settings.vision_model` (default `qwen3-vl:8b`) and prepends the resulting text description to the user prompt | Non-vision model (per `is_vision_model` heuristic) + image input |
-| Tool calling | `mcp::forced_json` builds an `oneOf` JSON schema over available tools and routes it through Ollama's `format` parameter (GBNF constrained decoding); `mcp::bridge::run_loop_forced_json` parses the grammar-constrained JSON and dispatches via the same `execute_calls` machinery the native path uses | Non-native-tool-calling model (per `ollama::capability::heuristic_supports_native`) + active MCP session. Constrained decoding is deterministic — even qwen3:8b reliably drives MCP. |
+| Tool calling | `mcp::forced_json` builds a `oneOf` JSON schema over available tools and routes it through Ollama's `format` parameter (GBNF constrained decoding); `mcp::bridge::run_loop` (delegates to `run_loop_forced_json`) parses the grammar-constrained JSON and dispatches via `execute_calls` | **Universal MCP path since 2026-05-04** — every Ollama model regardless of native fine-tuning. Round-0 schema omits `final` and `refuse` branches so the model is logit-masked into a tool. SDD `.specs/veronex/mcp-constrained-decoding-unification.md`. |
 | Context budget | `context_pruner::prune_to_budget` trims oldest messages in-memory before LLM submission, preserving system + last 5 turns + a placeholder marker | Accumulated `messages[]` token count exceeds `configured_ctx × context_budget_ratio − 1024`. SDD: `.specs/veronex/history/conversation-context-compression.md`. |
 
-All three shims preserve the canonical flow's invariants — circuit breaker, ACL, S3 ConversationRecord, observability spans apply uniformly across native and shim paths.
+All three shims preserve the canonical flow's invariants — circuit breaker, ACL, S3 ConversationRecord, observability spans apply uniformly. The MCP path no longer has a "native vs shim" split — see `mcp.md` Architecture diagram.
 
 ---
 

@@ -1,6 +1,6 @@
 # MCP Agentic Loop Flow
 
-> **Last Updated**: 2026-05-02
+> **Last Updated**: 2026-05-04 (constrained-decoding unification)
 
 ---
 
@@ -20,7 +20,13 @@ openai_handlers::chat_completions()
 
 ---
 
-## `run_loop()` — Agentic Loop
+## `run_loop()` — Unified Constrained-Decoding Loop
+
+The legacy native path (model self-decides via OpenAI `tools[]`) was removed
+2026-05-04. Every MCP-routed request now runs through GBNF logit masking;
+the `heuristic_supports_native` model allow-list and the S23/S24 reactive
+patches it required no longer apply. SDD
+`.specs/veronex/mcp-constrained-decoding-unification.md`.
 
 ```
 run_loop(state, caller, model, messages, base_tools, conversation_id, stop, seed,
@@ -34,68 +40,49 @@ run_loop(state, caller, model, messages, base_tools, conversation_id, stop, seed
   │               top_k     → Vespa ANN limit override (None = global default)
   │     JWT     → None / MAX_ROUNDS / None (bypass all)
   │
-  ├── 2. Build tool list
-  │     tool_cache.get_all(allowed_servers)
-  │       └── merge base_tools + MCP tools (cap: MAX_TOOLS_PER_REQUEST=32)
+  ├── 2. Context-budget gate (S17 Tier C/D)
+  │     prune accumulated messages to fit smallest configured_ctx
   │
-  └── 3. Loop (max MAX_ROUNDS=5):
+  ├── 3. Build tool list (Vespa ANN top-K or get_all fallback)
+  │     merge base_tools + MCP tools (cap: MAX_TOOLS_PER_REQUEST=32)
+  │     all_tools.is_empty() → return None
+  │
+  └── 4. Delegate → run_loop_forced_json(...):
         │
-        ├── [round + 1 == max_rounds && rounds > 0 && content.is_empty()]?
-        │     └── (1) inject system message: "final response step — tools
-        │             are no longer available — produce final answer now"
-        │     └── (2) submit with `tools: None` (omit schema entirely)
-        │         Ollama drops `tool_choice` silently (#8421/#11171), so
-        │         schema-removal is the only reliable text-forcing knob.
-        │         Tool *results* stay in messages → model can synthesize.
+        ├── insert system prompt at messages[0]
+        │     (build_forced_json_system_prompt — tool catalogue + tool-first directive)
         │
-        ├── submit job (use_case.submit)    ← enqueues to inference queue
-        │
-        ├── [sse_tap_tx.is_some() && rounds > 0]?
-        │     └── tap text tokens straight into the SSE stream while still
-        │         running collect_round to drive the loop
-        │
-        ├── collect_round(job_id)           ← consume token stream
-        │     └── RoundResult { content, tool_calls, tokens, finish_reason }
-        │
-        ├── filter tool_calls for MCP names (prefix "mcp_")
-        │
-        ├── mcp_calls empty?
-        │     └── YES → break (model answered with text or non-MCP tools)
-        │
-        ├── loop detection: (tool_name, args_hash) × LOOP_DETECT_THRESHOLD=3
-        │     └── repeated → break early
-        │
-        ├── append assistant message { tool_calls } to messages
-        │
-        ├── execute_calls(mcp_calls)        ← buffered(MAX_CONCURRENT=8)
-        │     └── for each call → execute_one() → (result_text, ToolCallRecord)
-        │
-        ├── batch_insert_tool_calls()       ← single unnest INSERT for all N calls
-        │
-        ├── append tool result messages { role: "tool", content }
-        │
-        ├── [rounds >= 2]? prune_tool_messages(keep_last=2)
-        │     └── compress tool messages older than 2 rounds to placeholder
-        │         → bounds context window growth across deep loops
-        │
-        └── rounds += 1 → GOTO submit
-
-  └── 4. Synthesis fallback (S24, post-loop):
-        │
-        ├── [content.is_empty() && rounds > 0]?
-        │     └── extract_tool_results(messages)  (concat role:"tool" entries)
-        │           ├── None → no results, surface degenerate state
-        │           └── Some(text) → continue
-        │
-        ├── build_synthesis_messages(prompt, results)
-        │     → [system_directive, user_prompt, system_with_results]
-        │       (NO assistant.tool_calls history, NO tools schema)
-        │
-        ├── submit synthesis job  (tools=None, fresh messages)
-        │
-        └── collect_round → text content
-              ├── non-empty → replace `content`, clear `final_tool_calls`
-              └── still empty → fall through to degenerate result
+        └── for round in 0..max_rounds:
+              │
+              ├── allow_final = allow_final_for_round(prior_tool_calls.len())
+              │     └── round 0 → false → schema has tool branches ONLY
+              │     └── after ≥1 tool result → true → schema also has
+              │           {action:"final", answer:string} and
+              │           {action:"refuse", reason:string(minLength=8)}
+              │
+              ├── schema = build_forced_json_schema(all_tools, allow_final)
+              │     └── oneOf [tool_branches..., final?, refuse?]
+              │
+              ├── submit job:
+              │     tools = None
+              │     response_format = {type:"json_schema",
+              │                        json_schema:{schema}}
+              │     → Ollama adapter forwards as `format` → llama.cpp GBNF mask
+              │
+              ├── collect_round(job_id) → RoundResult { content, tokens, ... }
+              │     content is grammar-bound JSON
+              │
+              ├── parse_forced_action(content):
+              │     ├── Tool { name, args }    → execute_calls (buffered MAX=8)
+              │     │                             append assistant action +
+              │     │                             user observation to messages
+              │     │                             continue loop
+              │     ├── Final { answer }       → content = answer; break
+              │     └── Refuse { reason }      → content = REFUSAL_PREFIX + reason
+              │                                  break
+              │
+              └── loop detection: (name, args_hash) × LOOP_DETECT_THRESHOLD=3
+                    → break early with synthetic loop-detected content
 ```
 
 ---
@@ -168,11 +155,12 @@ JWT session    │  None                   │  All active servers accessible
 |-----------|-------|----------|
 | Max rounds | 5 | Hard loop limit |
 | Loop detect threshold | 3 | Same (tool, args_hash) ×3 → break |
-| Convergence boundary | last round | At `round + 1 == max_rounds`, if `rounds > 0` and no text yet → (a) inject system message + (b) omit `tools` schema from the final-round submit. Ollama silently drops `tool_choice` (issue #8421/#11171), so schema-removal is the only reliable text-forcing knob. Tool results stay in messages so the model can synthesize. (S23) |
-| Synthesis round | post-loop | If the loop exhausts with no text content, dispatch one extra inference call on a fresh messages array `[system_directive, user_prompt, system_with_tool_results]` — no `assistant.tool_calls` history, no `tools` schema. Qwen3-Coder mimics prior tool_call patterns from history even with no schemas (Qwen #475); the synth round removes that signal entirely. Final guarantee that an MCP-routed inference returns text. (S24) |
-| First-token timeout | 240s | `FIRST_TOKEN_TIMEOUT` — covers 200K-context cold load (PR #90) |
-| Stream-idle timeout | 45s | `STREAM_IDLE_TIMEOUT` — token-to-token gap on warm model |
-| Round total timeout | 360s | `ROUND_TOTAL_TIMEOUT` — aligned with `INFERENCE_ROUTER_TIMEOUT` |
+| Round-0 tool enforcement | schema | `allow_final_for_round(0) == false` → schema has tool branches only. Logit-mask prevents pre-tool disclaimer prose. Replaces legacy reactive S23 convergence boundary. |
+| Final-answer constraint | schema | `final.answer` generated under GBNF — model cannot escape JSON envelope; disclaimer-after-tools is auditable (parses back as `Final { answer }` with the failed citation visible alongside `tool_calls[]`). Replaces legacy S24 synthesis fallback. |
+| Structured refusal exit | schema | `{action:"refuse", reason:string(minLength=8)}` branch (gated by `allow_final`) — the only structurally-valid non-tool exit when no tool fits. UI sentinel: `forced_json::REFUSAL_PREFIX = "REFUSED: "`. |
+| First-token timeout | `MCP_TOKEN_FIRST_TIMEOUT=300s` | After Phase 1 lifecycle completes |
+| Stream-idle timeout | `MCP_STREAM_IDLE_TIMEOUT=45s` | Token-to-token gap on warm model |
+| Round total timeout | `MCP_ROUND_TOTAL_TIMEOUT=1500s` | Strictly under Cilium HTTPRoute 1800s |
 | Max concurrent tool calls | 8 | `buffered(8)` in execute_calls |
 | Max tool result size | 32 KB | Truncated before injection |
 | Max tools per request | 32 | Context window protection |
@@ -205,7 +193,7 @@ GET /v1/conversations/{id}/turns/{job_id}/internals
 
 UI: `web/components/turn-internals.tsx` renders the timeline below each
 assistant bubble in the test panel. Empty array when no MCP tools were
-invoked. SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
+invoked. SDD: `.specs/veronex/history/mcp-tool-audit-exposure-and-loop-convergence.md` (superseded for loop-convergence by `.specs/veronex/mcp-constrained-decoding-unification.md`; audit half remains canonical).
 
 ---
 

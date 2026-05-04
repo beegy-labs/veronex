@@ -85,7 +85,7 @@ export function AppShell({
       </aside>
 
       {/* ── Main ─────────────────────────────────────────────────────── */}
-      <div className="vds-flex-1 vds-overflow-auto">
+      <div className="vds-flex-1 vds-overflow-auto vds-overscroll-contain">
         {desktopHeader && (
           <div className="vds-hidden vds-md:block">{desktopHeader}</div>
         )}

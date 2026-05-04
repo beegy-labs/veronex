@@ -1,6 +1,6 @@
 # MCP (Model Context Protocol) Integration
 
-> SSOT | **Last Updated**: 2026-05-01
+> SSOT | **Last Updated**: 2026-05-04
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
@@ -8,7 +8,7 @@ MCP servers do NOT call Ollama; the API server (veronex) handles all Ollama call
 
 ---
 
-## Architecture
+## Architecture — Single Constrained-Decoding Path (2026-05-04)
 
 ```
 Client → POST /v1/chat/completions
@@ -21,22 +21,45 @@ Client → POST /v1/chat/completions
     mcp_ollama_chat()
            │
            ▼
-    McpBridgeAdapter.run_loop()
+    McpBridgeAdapter.run_loop()              ← unified entry point
            │
-           ├── Round 1: POST Ollama /api/chat (orchestrator model)
-           │     model response → tool_calls: [mcp_server_slug_tool_name, ...]
+           ├── Prelude: ACL + cap_points + top_k (parallel)
+           │            context-budget gate
+           │            tool-list build (Vespa ANN or get_all)
            │
-           ├── execute_calls() → buffered(8) per tool call
-           │     └── execute_one() → circuit breaker → result cache → session_manager.call_tool()
-           │           └── HTTP call to MCP server
-           │
-           ├── Append tool results → messages[]
-           │
-           └── Round N: repeat until model produces text (no tool_calls) or MAX_ROUNDS
+           └── run_loop_forced_json()        ← constrained-decoding driver
+                  │
+                  ├── Round 0: build oneOf schema
+                  │     allow_final_for_round(0) == false → tool branches only
+                  │     POST Ollama /api/chat with `format: <schema>` → GBNF mask
+                  │     model output is grammar-bound JSON: {"action":"tool",...}
+                  │
+                  ├── execute_calls() → buffered(8) per tool call
+                  │     └── execute_one() → circuit breaker → result cache → session_manager.call_tool()
+                  │           └── HTTP call to MCP server
+                  │
+                  ├── Append model action + observation → messages[]
+                  │
+                  └── Round N: rebuild schema with allow_final=true
+                              model emits one of:
+                                {"action":"tool", ...}      — keep gathering
+                                {"action":"final","answer":"..."}  — synthesise
+                                {"action":"refuse","reason":"..."} — no tool fits
+                              → break on final / refuse / loop-detect / MAX_ROUNDS
 ```
 
-**Key invariant**: Ollama is always called from `run_loop()` inside `openai_handlers.rs`.
-MCP servers receive only tool invocations — they never receive inference requests.
+The legacy native path (model self-decides via OpenAI `tools[]`) was removed
+2026-05-04. SDD `.specs/veronex/mcp-constrained-decoding-unification.md`
+collapsed S23 (convergence boundary) and S24 (synthesis fallback) — both were
+reactive workarounds for the native path's failure modes
+(conv_33AfPaddqdXSiqIHX081T) that constrained decoding prevents structurally.
+
+**Key invariants**:
+- Ollama is always called from `run_loop()` inside `openai_handlers.rs`.
+- MCP servers receive only tool invocations — they never receive inference requests.
+- Every MCP-routed request runs through GBNF logit masking — the model literally
+  cannot emit non-JSON or invalid arguments. The dispatch contract is enforced,
+  not hoped-for.
 
 ---
 
@@ -161,7 +184,7 @@ When `should_intercept()` selects the MCP path (`openai_handlers.rs::chat_comple
 
 Long-stream public access uses CF-bypass direct hostname (`*.girok.dev` DNS-only CNAME → `home-gw.girok.dev` → `cilium-gateway-web-gateway` with HTTPRoute `timeouts.request=1800s`); see `.add/domain-integration.md`. The legacy CF-proxied path (`*.verobee.com`, 100 s edge idle) is no longer the primary inference route.
 
-The SSE wrapper in `infrastructure/inbound/http/handlers.rs::with_sse_timeout` enforces `SSE_TIMEOUT=1700s` — strictly less than the Cilium gateway 1800s — so the client always sees a clean `event: error data: stream timeout` rather than an opaque gateway 504. `INFERENCE_ROUTER_TIMEOUT=1750s` covers non-streaming requests and is held above SSE_TIMEOUT so streaming uses its inner wrapper first. The 1700s headroom accommodates worst-case multi-round MCP loops (`MAX_ROUNDS=5 × MCP_ROUND_TOTAL_TIMEOUT=1500s` per round, capped to a single full round in practice for any one client wait) plus the optional S24 synthesis round on top. Invariants pinned by `infrastructure::inbound::http::constants::timeout_invariants` tests.
+The SSE wrapper in `infrastructure/inbound/http/handlers.rs::with_sse_timeout` enforces `SSE_TIMEOUT=1700s` — strictly less than the Cilium gateway 1800s — so the client always sees a clean `event: error data: stream timeout` rather than an opaque gateway 504. `INFERENCE_ROUTER_TIMEOUT=1750s` covers non-streaming requests and is held above SSE_TIMEOUT so streaming uses its inner wrapper first. The 1700s headroom accommodates worst-case multi-round MCP loops (`MAX_ROUNDS=5 × MCP_ROUND_TOTAL_TIMEOUT=1500s` per round, capped to a single full round in practice for any one client wait). Invariants pinned by `infrastructure::inbound::http::constants::timeout_invariants` tests.
 
 Implementation:
 
@@ -179,25 +202,26 @@ Implementation:
 
 Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/history/inference-mcp-per-round-persist.md` §8.
 
-### Shim path — forced-JSON gateway shim for non-native models
+### Constrained-decoding loop — universal MCP path (2026-05-04)
 
-The veronex gateway pattern (vision shim is the canonical example: `inference_helpers.rs::analyze_images_for_context`) provides capability adapters so any underlying Ollama model can use a feature regardless of native fine-tuning. The MCP equivalent is the **forced-JSON shim** — replaces the prior text-template ReAct shim, which was best-effort and routinely produced zero tool calls on weak models (qwen3:8b, llama3:7b, mistral:7b-v0.2).
+The veronex gateway promise (`docs/llm/inference/lab-features.md`) — "feature-richness depends on the gateway's shims, not on each underlying model's intrinsic capabilities" — is honored uniformly. There is no per-model branching for MCP. Every MCP-routed request runs through constrained decoding regardless of whether the model has native tool-calling fine-tuning.
 
 | Stage | Mechanism |
 |---|---|
-| Capability gate | `ollama::capability::heuristic_supports_native(model)` — known native-tool-calling families (Qwen3-Coder, Qwen2.5-Instruct/Coder, Llama 3.1+, Mistral-instruct-v0.3+, Hermes/Nous, Command-R, Gemma 4) → native path. Default unknown → forced-JSON path. Future: cache `/api/show` template inspection. |
-| System prompt | `mcp::forced_json::build_forced_json_system_prompt(tools)` — pushes tool-first behaviour ("tools have real-time access; do NOT respond 'I don't have access to real-time data' — that statement is FALSE") plus a tool catalogue (name + description). Schema does the bulk of enforcement; this prompt is the semantic guide. |
-| Schema | `mcp::forced_json::build_forced_json_schema(tools, allow_final)` — `oneOf` over per-tool branches (`{action: "tool", tool: <const tool_name>, args: <tool.parameters>}`); the terminator branch (`{action: "final", answer: string}`) is only emitted when `allow_final = true`. **Round 0 sets `allow_final = false`** so the model is logit-masked into calling a tool — defends against weak models (qwen3:8b, llama3:7b) that emit "I don't have access to real-time data" before even trying a tool. Once any tool result is in context, `allow_final = true`. |
-| Submission | Job submitted WITHOUT `tools[]` and WITH `response_format = {type: "json_schema", json_schema: {schema}}`. The Ollama adapter (`adapter.rs:594`) extracts `.json_schema.schema` and forwards it as Ollama's `format` parameter — llama.cpp's GBNF grammar masks logits at every decoding step. |
+| System prompt | `mcp::forced_json::build_forced_json_system_prompt(tools)` — pushes tool-first behaviour ("tools have real-time access; do NOT claim 'I don't have access to real-time data' or 'web search is disabled' — those statements are FALSE"); demands `final.answer` to cite tool results that have been gathered; explains when `refuse` is the correct action. Schema does the bulk of enforcement; this prompt is the semantic guide. |
+| Schema | `mcp::forced_json::build_forced_json_schema(tools, allow_final)` — `oneOf` over per-tool branches (`{action: "tool", tool: <const tool_name>, args: <tool.parameters>}`); the terminator branches `{action: "final", answer: string}` and `{action: "refuse", reason: string(minLength=8)}` are only emitted when `allow_final = true`. `allow_final_for_round(prior_tool_calls)` returns `true` iff `prior_tool_calls > 0`. **Round 0 sets `allow_final = false`** so the model is logit-masked into a tool branch — defends against weak-model and even native-tool-calling-model "I don't have access to real-time data" disclaimers emitted before a tool is even tried (conv_33AfPaddqdXSiqIHX081T Turn 2/4). |
+| Submission | Job submitted WITHOUT OpenAI `tools[]` and WITH `response_format = {type: "json_schema", json_schema: {schema}}`. The Ollama adapter extracts `.json_schema.schema` and forwards it as Ollama's `format` parameter — llama.cpp's GBNF grammar masks logits at every decoding step. |
 | Output parsing | `mcp::forced_json::parse_forced_action(text)` — single `serde_json::from_str`. Constrained decoding guarantees valid JSON; defensive fail-open returns the raw text as `Final` if parse fails (older Ollama, schema bypass). |
-| Action execution | Reuses the native path's `execute_calls` machinery — circuit breaker, ACL, result cache, analytics, observability spans all apply uniformly. |
+| Action execution | `execute_calls` machinery — circuit breaker, ACL, result cache, analytics, observability spans. |
 | Observation feedback | Tool result appended back into `messages[]` as `{"role":"user","content":"Observation: ..."}` along with the assistant's serialized JSON action. |
-| Loop detection | Same `(name, args_hash)` × `LOOP_DETECT_THRESHOLD` rule as native — terminates loop on repeated identical calls. |
-| Termination | `action: "final"` payload becomes `McpLoopResult.content`. Token totals roll up to `first_job_id`; intermediate-round DB rows cleaned up identically to native. |
+| Loop detection | `(name, args_hash)` × `LOOP_DETECT_THRESHOLD=3` — terminates loop on repeated identical calls. |
+| Termination | `action: "final"` → `McpLoopResult.content = answer`. `action: "refuse"` → `McpLoopResult.content = "REFUSED: " + reason` (sentinel `forced_json::REFUSAL_PREFIX`). Token totals roll up to `first_job_id`; intermediate-round DB rows cleaned up. |
 
-**Why this honors the gateway promise**: prior ReAct shim was honestly described as "an infrastructure hook, not a model-capability lift" — 8B agents ignored the template and returned prose. With constrained decoding the gateway *enforces* the dispatch contract: the model literally cannot emit non-JSON or invalid arguments. Tool dispatch is deterministic across every Ollama-served model regardless of fine-tuning. ACL 2025 reported JSON validity errors 38.2% → 0% under constrained decoding; same lift applies here.
+**Why this honors the gateway promise**: with constrained decoding the gateway *enforces* the dispatch contract — the model literally cannot emit non-JSON or invalid arguments. Tool dispatch is deterministic across every Ollama-served model regardless of fine-tuning. ACL 2025 reported JSON validity errors 38.2% → 0% under constrained decoding.
 
-Module: `infrastructure/outbound/mcp/forced_json.rs`. Loop driver: `bridge::run_loop_forced_json`.
+**Why the legacy native path was deleted**: Qwen3-Coder + Llama 3.1 (in the prior `heuristic_supports_native` allow-list) demonstrably failed the dispatch contract — conv_33AfPaddqdXSiqIHX081T showed all four turns either emitting "실시간 데이터 접근 권한 없음" disclaimer prose after running 5 successful tool rounds (Turn 1/3) or skipping tools entirely on round 0 (Turn 2/4). S23 convergence boundary (PR #128) and S24 synthesis fallback (PR #129) only triggered on `content.is_empty()`; non-empty disclaimer prose passed the gates. The patches were post-failure detectors; constrained decoding is pre-generation prevention. SDD `.specs/veronex/mcp-constrained-decoding-unification.md`.
+
+Module: `infrastructure/outbound/mcp/forced_json.rs`. Loop driver: `bridge::run_loop` (delegates to `run_loop_forced_json`).
 
 ### Phase 1 Lifecycle / Phase 2 Inference
 
@@ -245,9 +269,10 @@ End-to-end ReAct verified on `veronex-api-dev.verobee.com` after YQL fix (#88):
 | Max rounds | `MAX_ROUNDS = 5` — prevents infinite tool-call loops |
 | Concurrent calls | `buffered(8)` — max 8 tool calls in-flight per round |
 | Max tools per request | `MAX_TOOLS_PER_REQUEST = 32` — context window cap |
-| Loop detection | Same `(tool, args_hash)` ×3 triggers early break |
-| Convergence boundary | At `round + 1 == MAX_ROUNDS`, if `rounds > 0` and no text content yet, `run_loop` (a) injects a system message instructing text-only output AND (b) **omits the `tools` schema** from that final-round submit. Both halves are required because Ollama's OpenAI-compat endpoint silently drops `tool_choice` (Ollama issue [#8421](https://github.com/ollama/ollama/issues/8421), open request [#11171](https://github.com/ollama/ollama/issues/11171)) — removing schemas entirely is the only reliable way to suppress tool emission on Ollama. The system-message-only variant fails on tool-eager models like qwen3-coder (Qwen [#475](https://github.com/QwenLM/Qwen3-Coder/issues/475)). Tool *results* (`role:"tool"`) remain in the messages array so the model can still synthesize. |
-| Synthesis round (S24) | If the round-loop exhausts with `content` still empty and `rounds > 0`, `run_loop` dispatches one extra **synthesis round** on a fresh messages array `[system_directive, user_prompt, system_with_tool_results]` — no `assistant.tool_calls` history, no `tools` schema. The boundary's tools-omission alone is insufficient because Qwen3-Coder learns the `<tool_call>` token pattern from prior `assistant.tool_calls` entries left in history (kept intact for OpenAI `tool_call_id` ↔ tool-result invariant) and reproduces them from training; the synthesis round eliminates that signal by giving the model nothing to mimic. SDD `.specs/veronex/mcp-synthesis-round.md`. |
+| Loop detection | `(tool, args_hash)` ×3 triggers early break |
+| Round-0 tool enforcement | `allow_final_for_round(0) == false` → schema omits `final` and `refuse` branches. Model logit-masked into a tool branch. Defends against pre-tool disclaimer prose ("I don't have access to real-time data" / "웹검색 비활성화"). Replaces the legacy native path's reactive S23 convergence boundary — that protection only fired on `content.is_empty()` at `MAX_ROUNDS-1`, which Qwen3-Coder bypassed by emitting non-empty disclaimer text on earlier rounds (conv_33Af Turn 1/3). |
+| Structured refusal exit | `{action:"refuse", reason:string}` schema branch (gated by `allow_final`) gives the model a non-tool exit when no available tool can answer the question. Reason is auditable (`minLength=8`); UI renders with `REFUSED:` sentinel prefix. Replaces the legacy "model emits prose admitting it can't answer" failure mode that was indistinguishable from disclaimer-after-tools (no audit signal). |
+| Final-answer constraint | `final.answer` is generated under GBNF grammar. The model cannot escape the JSON envelope, so even if `answer` carries disclaimer prose the audit trail attributes it: assistant bubble shows the answer alongside the `tool_calls[]` timeline that the model failed to cite. Replaces legacy S24 synthesis fallback, which fired only on `content.is_empty()` and missed the disclaimer-with-prose case. |
 | Session self-heal | `reconcile_mcp_sessions()` reconnects missing sessions every 25 s — see Session Lifecycle |
 
 ---
@@ -273,14 +298,14 @@ Why split into S3 + CH (no PG)?
 2. CH already owns aggregations (cardinality, percentiles, time-series); PG audit was duplicating the rare per-row lookup case.
 3. UI gets one round trip (`/v1/conversations/{id}`) instead of two (`+ /internals` for tool body) — Valkey-cached for 300 s.
 
-SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` (S3-single-source revision).
+SDD: `.specs/veronex/history/mcp-tool-audit-exposure-and-loop-convergence.md` (S3-single-source revision; superseded by `.specs/veronex/mcp-constrained-decoding-unification.md` for the loop-convergence half).
 
 ### Single-writer policy + audit consolidation (PR #134/#135, 2026-05-01)
 
 Three drift points reconciled:
 
 1. **FK CASCADE → DROP** (PR #134, superseded): the original audit-row durability fix flipped `mcp_loop_tool_calls.job_id` to `ON DELETE SET NULL`. PR #135 follow-up dropped the table entirely once S3 took over.
-2. **Single S3 writer**: runner skips S3 turn write + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge owns one consolidated `TurnRecord` write at loop end (covers both native `run_loop` and forced-JSON `run_loop_forced_json`). Result: 1 user question with N rounds → `turn_count = 1`, `turn.tool_calls.length = N`.
+2. **Single S3 writer**: runner skips S3 turn write + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge owns one consolidated `TurnRecord` write at loop end. Result: 1 user question with N rounds → `turn_count = 1`, `turn.tool_calls.length = N`.
 3. **Audit body relocation**: bridge no longer batches inserts into `mcp_loop_tool_calls`; per-round `(result_text, ToolCallRecord)` is rewritten into the enriched `all_mcp_tool_calls` array that lands on the S3 turn. PG `mcp_loop_tool_calls` table dropped via idempotent `DROP TABLE IF EXISTS` at the top of `init.sql`.
 
 Migration: helm `pre-upgrade` hook applies the DROP block on every install/upgrade. Dev DB dropped manually 2026-05-01 to verify.
