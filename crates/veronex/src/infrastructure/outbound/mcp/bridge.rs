@@ -337,7 +337,7 @@ impl McpBridgeAdapter {
         max_rounds: u8,
     ) -> Option<McpLoopResult> {
         use super::forced_json::{
-            allow_final_for_round, build_forced_json_schema,
+            allow_final_for_round, build_forced_json_schema, build_terminal_schema,
             build_forced_json_system_prompt, parse_forced_action,
             schema_to_response_format, ForcedAction,
         };
@@ -374,14 +374,34 @@ impl McpBridgeAdapter {
             // either keep gathering, terminate via `final`, or — if no
             // available tool can answer — refuse with a structured reason.
             // SDD: `.specs/veronex/mcp-constrained-decoding-unification.md` §3.6.
-            let allow_final = allow_final_for_round(all_mcp_tool_calls.len());
-            let schema = match build_forced_json_schema(&all_tools, allow_final) {
-                Some(s) => s,
-                None => {
-                    warn!("MCP forced-JSON: schema construction failed on round {round}");
-                    return None;
+            // On the last available round with prior tool results, strip all
+            // tool branches so the GBNF grammar forces a `final` or `refuse`
+            // answer. Without this, a tool-happy model exhausts MAX_ROUNDS
+            // without ever selecting `final`, leaving content empty.
+            let is_last_round = (round + 1) as u8 == max_rounds && !all_mcp_tool_calls.is_empty();
+            let schema = if is_last_round {
+                build_terminal_schema()
+            } else {
+                let allow_final = allow_final_for_round(all_mcp_tool_calls.len());
+                match build_forced_json_schema(&all_tools, allow_final) {
+                    Some(s) => s,
+                    None => {
+                        warn!("MCP forced-JSON: schema construction failed on round {round}");
+                        return None;
+                    }
                 }
             };
+            if is_last_round {
+                messages.push(serde_json::json!({
+                    "role": "system",
+                    "content": "This is your final synthesis round. \
+                        You have gathered all the tool results you need. \
+                        Now produce a complete, well-structured answer in \
+                        the user's language. Output \
+                        {\"action\":\"final\",\"answer\":\"...\"}."
+                }));
+                info!(round, "forced-JSON: last round — terminal schema (final/refuse only)");
+            }
             let forced_response_format = Some(schema_to_response_format(schema));
 
             // ── Submit job WITHOUT native `tools[]` but WITH forced JSON format ─

@@ -185,6 +185,38 @@ pub fn allow_final_for_round(prior_tool_calls: usize) -> bool {
     prior_tool_calls > 0
 }
 
+/// Build a terminal-only schema with only `final` and `refuse` branches.
+///
+/// Used on the last available round when the model has gathered tool results
+/// but has not yet produced a `final` answer. Strips all tool branches from
+/// the oneOf so the GBNF grammar gives the model zero logit space to call
+/// another tool — it MUST synthesise an answer or refuse. SDD:
+/// `.specs/veronex/mcp-constrained-decoding-unification.md` §3.6.
+pub fn build_terminal_schema() -> Value {
+    json!({
+        "oneOf": [
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "final"},
+                    "answer": {"type": "string"},
+                },
+                "required": ["action", "answer"],
+                "additionalProperties": false,
+            },
+            {
+                "type": "object",
+                "properties": {
+                    "action": {"const": "refuse"},
+                    "reason": {"type": "string", "minLength": 8},
+                },
+                "required": ["action", "reason"],
+                "additionalProperties": false,
+            },
+        ]
+    })
+}
+
 /// Wrap a forced-JSON schema in the OpenAI `response_format` envelope so the
 /// existing Ollama adapter (`adapter.rs:594`) routes it through to Ollama's
 /// `format` field.
@@ -571,6 +603,42 @@ mod tests {
                 assert!(reason.len() >= 8);
                 assert!(reason.contains("market-data"));
             }
+            other => panic!("expected Refuse, got {other:?}"),
+        }
+    }
+
+    /// `build_terminal_schema` produces exactly two branches — `final` and
+    /// `refuse` — with no tool branches. The last round in the loop uses this
+    /// schema so the model is logit-masked into synthesising an answer rather
+    /// than calling yet another tool when max_rounds would be exceeded.
+    #[test]
+    fn terminal_schema_has_only_final_and_refuse() {
+        let schema = build_terminal_schema();
+        let one_of = schema["oneOf"].as_array().unwrap();
+        assert_eq!(one_of.len(), 2, "terminal schema: exactly final + refuse");
+        assert_eq!(one_of[0]["properties"]["action"]["const"], "final");
+        assert_eq!(one_of[1]["properties"]["action"]["const"], "refuse");
+        // No tool branch present.
+        let serialized = serde_json::to_string(&schema).unwrap();
+        assert!(
+            !serialized.contains(r#""const":"tool""#),
+            "terminal schema must not contain tool branch: {serialized}"
+        );
+    }
+
+    /// `parse_forced_action` handles terminal-schema output correctly — both
+    /// `final` and `refuse` parse without regression.
+    #[test]
+    fn terminal_schema_actions_parse_correctly() {
+        let final_json = r#"{"action":"final","answer":"마이크론 주가는 오늘 기준 $95입니다."}"#;
+        match parse_forced_action(final_json) {
+            ForcedAction::Final { answer } => assert!(answer.contains("마이크론")),
+            other => panic!("expected Final, got {other:?}"),
+        }
+
+        let refuse_json = r#"{"action":"refuse","reason":"no stock-price tool registered"}"#;
+        match parse_forced_action(refuse_json) {
+            ForcedAction::Refuse { reason } => assert!(reason.len() >= 8),
             other => panic!("expected Refuse, got {other:?}"),
         }
     }
