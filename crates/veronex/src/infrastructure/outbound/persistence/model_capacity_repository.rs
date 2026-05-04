@@ -184,6 +184,46 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
             }
         }))
     }
+
+    async fn min_configured_ctx_for_model(&self, model: &str) -> Result<Option<u32>> {
+        // Min across providers serving this model — request-entry prune budget
+        // must fit even on the smallest-ctx provider that the dispatcher
+        // might select. Uses the partial-index hint
+        // `WHERE configured_ctx >= 4096` to skip corrupt / unprobed rows.
+        // SDD: `.specs/veronex/history/conversation-context-compression.md` §3.
+        let min: Option<i64> = sqlx::query_scalar(
+            "SELECT MIN(configured_ctx)::int8
+             FROM model_vram_profiles
+             WHERE model_name = $1 AND configured_ctx >= 4096",
+        )
+        .bind(model)
+        .fetch_one(&self.pool)
+        .await
+        .context("min_configured_ctx_for_model")?;
+        Ok(min.map(|n| n.max(0) as u32))
+    }
+
+    async fn has_unprofiled_selected_models(&self) -> Result<bool> {
+        // Returns true when any (provider_id, model_name) pair in
+        // `provider_selected_models` lacks a row in `model_vram_profiles`.
+        // The analyzer uses this to bypass the demand-skip gate so a freshly
+        // selected model still gets its first probe even before any user
+        // traffic arrives.
+        let exists: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+                 SELECT 1
+                 FROM provider_selected_models psm
+                 LEFT JOIN model_vram_profiles mvp
+                   ON mvp.provider_id = psm.provider_id
+                  AND mvp.model_name  = psm.model_name
+                 WHERE mvp.model_name IS NULL
+             )",
+        )
+        .fetch_one(&self.pool)
+        .await
+        .context("failed to check for unprofiled selected models")?;
+        Ok(exists)
+    }
 }
 
 // ── Internal row type for sqlx ────────────────────────────────────────────────

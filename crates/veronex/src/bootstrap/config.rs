@@ -24,14 +24,44 @@ pub struct AppConfig {
     pub clickhouse_user: Option<String>,
     pub clickhouse_password: Option<String>,
     pub clickhouse_db: Option<String>,
-    /// Vespa deployment isolation key — injected via `VESPA_DEPLOYMENT_ID`.
-    /// Partitions a shared Vespa instance per deployment (prod, staging, dev, ...).
+    /// Vespa environment isolation key — injected via `VESPA_ENVIRONMENT`.
+    /// Partitions a shared Vespa instance per environment (prod, dev, local-dev, ...).
+    /// Defaults to `"local-dev"` when unset.
+    pub vespa_environment: String,
+    /// Vespa tenant isolation key — injected via `VESPA_TENANT_ID`.
+    /// Sub-partitions a deployment's documents by logical tenant (e.g. org, team, workspace).
     /// Defaults to `"default"` when unset.
-    pub vespa_deployment_id: String,
+    pub vespa_tenant_id: String,
     /// Optional Valkey key prefix — injected via `VALKEY_KEY_PREFIX`.
     /// Namespaces all Valkey keys for multi-tenant / multi-deployment shared instances.
     /// Defaults to `""` (no prefix) when unset.
     pub valkey_key_prefix: String,
+    /// Postgres connection pool max size — injected via `PG_POOL_MAX`.
+    /// Defaults to `10`. Tune up on hot-path-heavy deployments.
+    pub pg_pool_max: u32,
+    /// Per-IP login attempts allowed in `LOGIN_ATTEMPTS_WINDOW_SECS` (5 min)
+    /// before the rate-limiter trips a 429 — injected via `LOGIN_RATE_LIMIT`.
+    /// Defaults to `10`.
+    pub login_rate_limit: u32,
+    /// Vision model used when an image-analysis request leaves the model
+    /// unspecified — injected via `VISION_FALLBACK_MODEL`. Defaults to
+    /// `qwen3-vl:8b`. Caller may override per-call (lab settings).
+    pub vision_fallback_model: String,
+    /// Valkey client pool size — injected via `VALKEY_POOL_SIZE`. Defaults to `6`.
+    pub valkey_pool_size: usize,
+    /// API instance identity — injected via `VERONEX_INSTANCE_ID`. Defaults
+    /// to a fresh UUIDv7 generated at startup so a missing env var still
+    /// produces a unique heartbeat key.
+    pub instance_id: String,
+    /// Vespa endpoint for MCP tool vector retrieval — injected via `VESPA_URL`.
+    /// `None` disables vector selection (fallback: `get_all`).
+    pub vespa_url: Option<String>,
+    /// Embedding service endpoint — injected via `EMBED_URL`. Required when
+    /// `vespa_url` is set; otherwise vector selection stays off.
+    pub embed_url: Option<String>,
+    /// Number of top-K MCP tools returned by the vector selector — injected
+    /// via `MCP_VECTOR_TOP_K`. Defaults to `16`.
+    pub mcp_vector_top_k: usize,
 }
 
 impl AppConfig {
@@ -101,10 +131,34 @@ impl AppConfig {
         let clickhouse_user = std::env::var("CLICKHOUSE_USER").ok();
         let clickhouse_password = std::env::var("CLICKHOUSE_PASSWORD").ok();
         let clickhouse_db = std::env::var("CLICKHOUSE_DB").ok();
-        let vespa_deployment_id = std::env::var("VESPA_DEPLOYMENT_ID")
+        let vespa_environment = std::env::var("VESPA_ENVIRONMENT")
+            .unwrap_or_else(|_| "local-dev".to_string());
+        let vespa_tenant_id = std::env::var("VESPA_TENANT_ID")
             .unwrap_or_else(|_| "default".to_string());
         let valkey_key_prefix = std::env::var("VALKEY_KEY_PREFIX")
             .unwrap_or_default();
+        let pg_pool_max: u32 = std::env::var("PG_POOL_MAX")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+        let login_rate_limit: u32 = std::env::var("LOGIN_RATE_LIMIT")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(10);
+        let vision_fallback_model = std::env::var("VISION_FALLBACK_MODEL")
+            .unwrap_or_else(|_| "qwen3-vl:8b".to_string());
+        let valkey_pool_size: usize = std::env::var("VALKEY_POOL_SIZE")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(6);
+        let instance_id = std::env::var("VERONEX_INSTANCE_ID")
+            .unwrap_or_else(|_| uuid::Uuid::now_v7().to_string());
+        let vespa_url = std::env::var("VESPA_URL").ok();
+        let embed_url = std::env::var("EMBED_URL").ok();
+        let mcp_vector_top_k: usize = std::env::var("MCP_VECTOR_TOP_K")
+            .ok()
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(16);
 
         Self {
             database_url,
@@ -125,8 +179,17 @@ impl AppConfig {
             clickhouse_user,
             clickhouse_password,
             clickhouse_db,
-            vespa_deployment_id,
+            vespa_environment,
+            vespa_tenant_id,
             valkey_key_prefix,
+            pg_pool_max,
+            login_rate_limit,
+            vision_fallback_model,
+            valkey_pool_size,
+            instance_id,
+            vespa_url,
+            embed_url,
+            mcp_vector_top_k,
         }
     }
 }

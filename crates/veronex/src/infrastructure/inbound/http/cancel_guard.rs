@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use tracing::Instrument;
 use std::sync::Arc;
 use std::task::{Context, Poll};
 
@@ -21,18 +22,21 @@ impl Drop for CancelGuard {
     fn drop(&mut self) {
         let job_id = self.job_id.clone();
         let use_case = self.use_case.clone();
-        tokio::spawn(async move {
-            match tokio::time::timeout(
-                crate::domain::constants::CANCEL_TIMEOUT,
-                use_case.cancel(&job_id),
-            )
-            .await
-            {
-                Ok(Ok(())) => {}
-                Ok(Err(e)) => tracing::error!(%job_id, "cancel-on-drop failed: {e}"),
-                Err(_) => tracing::error!(%job_id, "cancel-on-drop timed out"),
+        tokio::spawn(
+            async move {
+                match tokio::time::timeout(
+                    crate::domain::constants::CANCEL_TIMEOUT,
+                    use_case.cancel(&job_id),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {}
+                    Ok(Err(e)) => tracing::error!(%job_id, "cancel-on-drop failed: {e}"),
+                    Err(_) => tracing::error!(%job_id, "cancel-on-drop timed out"),
+                }
             }
-        });
+            .instrument(tracing::info_span!("veronex.cancel_guard.spawn")),
+        );
     }
 }
 

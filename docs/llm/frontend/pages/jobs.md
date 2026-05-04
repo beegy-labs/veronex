@@ -1,12 +1,12 @@
 # Web -- Jobs Page
 
-> SSOT | **Last Updated**: 2026-03-16 (rev7: flow_stats, Gemini node, stale bee filter)
+> SSOT | **Last Updated**: 2026-05-02 (rev8: feature components moved to `app/jobs/components/`, conversation-list with markdown rendering)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Add new column to jobs table | `web/components/job-table.tsx` columns + `web/lib/types.ts` `Job` | Add column def + i18n key `jobs.*` |
+| Add new column to jobs table | `web/app/jobs/components/job-table.tsx` columns + `web/lib/types.ts` `Job` | Add column def + i18n key `jobs.*` |
 | Add new status filter option | `web/app/jobs/page.tsx` `STATUS_OPTIONS` in `JobsSection` | Matches `JobStatus` enum on backend |
 | Change pagination page size | `web/app/jobs/page.tsx` -> `PAGE_SIZE` constant | |
 | Add new i18n key to jobs | `web/messages/en.json` `jobs.*` -> `web/messages/ko.json` -> `web/messages/ja.json` | Always add to all 3 locales |
@@ -18,11 +18,13 @@
 | File | Purpose |
 |------|---------|
 | `web/app/jobs/page.tsx` | Jobs page -- `GroupSessionsPanel` + 3 tabs (`JobsSection` x 2, `NetworkFlowTab`) |
-| `web/components/job-table.tsx` | Jobs table (imports `JobDetailModal` from `job-detail-modal.tsx`) |
-| `web/components/job-detail-modal.tsx` | `JobDetailModal` — timing, tokens, prompt/result, conversation history |
+| `web/app/jobs/components/job-table.tsx` | Jobs table (imports `JobDetailModal` from `./job-detail-modal`) |
+| `web/app/jobs/components/job-detail-modal.tsx` | `JobDetailModal` — timing, tokens, prompt/result, conversation history |
+| `web/app/jobs/components/conversation-list.tsx` | Conversation turn list with markdown (react-markdown + remark-gfm) rendering for assistant text and tool-result expand panels |
+| `web/app/jobs/components/api-test-panel.tsx` | API test tab (form + runs + conversation panels) |
 | `web/lib/types.ts` | `Job`, `JobDetail` types (include `source` field) |
 | `web/lib/api.ts` | `api.jobs()`, `api.jobDetail()`, `api.triggerSessionGrouping()` |
-| `web/messages/en.json` | i18n keys under `jobs.*` |
+| `web/messages/en.json` | i18n keys under `jobs.*` (mirror in `ko.json`, `ja.json`) |
 
 ## `source` Field
 

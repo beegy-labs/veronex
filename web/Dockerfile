@@ -1,4 +1,5 @@
 FROM node:22-alpine AS builder
+
 WORKDIR /app
 COPY web/package.json web/package-lock.json ./
 RUN --mount=type=cache,target=/root/.npm \

@@ -18,6 +18,7 @@ pub mod gemini_repository;
 pub mod gpu_server_registry;
 pub mod inference_provider;
 pub mod job_repository;
+pub mod model_lifecycle;
 pub mod model_manager_port;
 pub mod llm_provider_registry;
 pub mod observability_port;

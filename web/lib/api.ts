@@ -329,10 +329,10 @@ export const api = {
   roles: () =>
     apiClient.get<RoleSummary[]>('/v1/roles'),
 
-  createRole: (body: { name: string; permissions: string[]; menus: string[] }) =>
+  createRole: (body: { name: string; permissions: string[] }) =>
     apiClient.post<RoleSummary>('/v1/roles', body),
 
-  updateRole: (id: string, body: { name?: string; permissions?: string[]; menus?: string[] }) =>
+  updateRole: (id: string, body: { name?: string; permissions?: string[] }) =>
     apiClient.patch<void>(`/v1/roles/${id}`, body),
 
   deleteRole: (id: string) =>
@@ -345,7 +345,9 @@ export const api = {
   registerMcpServer: (body: RegisterMcpServerRequest) =>
     apiClient.post<{ id: string }>('/v1/mcp/servers', body),
 
-  patchMcpServer: (id: string, body: { is_enabled: boolean }) =>
+  verifyMcpServer: (url: string) => verifyEndpoint('/v1/mcp/servers/verify', url),
+
+  patchMcpServer: (id: string, body: Partial<{ is_enabled: boolean; name: string; slug: string; url: string }>) =>
     apiClient.patch<McpServer>(`/v1/mcp/servers/${id}`, body),
 
   deleteMcpServer: (id: string) =>

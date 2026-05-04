@@ -103,11 +103,18 @@ pub async fn wire_repositories(
     let instance_id = &infra.instance_id;
 
     // ── Valkey port ────────────────────────────────────────────────
+    // SCRIPT LOAD all Lua scripts up-front so subsequent queue ops use the
+    // SHA1 (EVALSHA) and never re-send the script body — critical at the
+    // 1M TPS scale target (avoids ~200 MB/s of redundant traffic).
     let valkey_port: Option<Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>> =
-        valkey_pool.as_ref().map(|pool| {
-            Arc::new(ValkeyAdapter::new(pool.clone()))
-                as Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>
-        });
+        if let Some(pool) = valkey_pool.as_ref() {
+            let adapter = ValkeyAdapter::new(pool.clone());
+            adapter.warmup().await?;
+            Some(Arc::new(adapter)
+                as Arc<dyn veronex::application::ports::outbound::valkey_port::ValkeyPort>)
+        } else {
+            None
+        };
 
     // ── Observability adapter ──────────────────────────────────────
     // Priority: OTLP direct (veronex → OTel Collector → Kafka → Redpanda → ClickHouse)
@@ -309,27 +316,9 @@ pub async fn wire_repositories(
         Arc::new(VramPool::new())
     };
 
-    // Restore learned max_concurrent / baseline_tps from DB into VramPool.
-    if let Ok(profiles) = capacity_repo.list_all().await {
-        for p in &profiles {
-            if p.max_concurrent > 0 {
-                vram_pool.set_max_concurrent(p.provider_id, &p.model_name, p.max_concurrent as u32);
-            }
-            if p.baseline_tps > 0 {
-                vram_pool.set_baseline_tps(p.provider_id, &p.model_name, p.baseline_tps as u32);
-            }
-            if p.baseline_p95_ms > 0 {
-                vram_pool.set_baseline_p95_ms(
-                    p.provider_id,
-                    &p.model_name,
-                    p.baseline_p95_ms as u32,
-                );
-            }
-        }
-        if !profiles.is_empty() {
-            tracing::info!(count = profiles.len(), "restored AIMD profiles from DB");
-        }
-    }
+    // AIMD state (max_concurrent, baseline_tps, baseline_p95_ms) is intentionally NOT
+    // restored from DB on startup. This ensures cold-start caps max_concurrent at
+    // num_parallel (SDD constraint) and re-learns from fresh inference data each restart.
 
     let vram_budget_repo: Arc<dyn ProviderVramBudgetRepository> =
         Arc::new(PostgresProviderVramBudgetRepository::new(pg_pool.clone()));

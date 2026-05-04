@@ -1,6 +1,25 @@
+# syntax=docker/dockerfile:1.7
 FROM rust:1-slim AS chef
-RUN apt-get update && apt-get install -y pkg-config libssl-dev g++ && rm -rf /var/lib/apt/lists/*
+
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev g++ mold clang curl ca-certificates
 RUN cargo install cargo-chef --locked
+# sccache (pre-built) — rustc wrapper backed by MinIO WebDAV cache.
+# Arch-aware: Docker's TARGETARCH (amd64/arm64) maps to sccache's naming
+# (x86_64/aarch64) so the image builds on both ARM64 Macs and CI runners.
+ARG SCCACHE_VERSION=0.8.2
+ARG TARGETARCH
+RUN case "${TARGETARCH}" in \
+      amd64) SCCACHE_ARCH=x86_64 ;; \
+      arm64) SCCACHE_ARCH=aarch64 ;; \
+      *) echo "unsupported TARGETARCH: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl.tar.gz" \
+      | tar -xz -C /tmp \
+    && mv "/tmp/sccache-v${SCCACHE_VERSION}-${SCCACHE_ARCH}-unknown-linux-musl/sccache" /usr/local/bin/ \
+    && chmod +x /usr/local/bin/sccache
 WORKDIR /app
 
 FROM chef AS planner
@@ -12,26 +31,51 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
-    --mount=type=cache,target=/app/target,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=secret,id=sccache_env \
+    [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
     cargo chef cook --release -p veronex-embed --recipe-path recipe.json
 
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY workspace-hack/ ./workspace-hack/
 RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
     --mount=type=cache,target=/app/target,sharing=locked \
+    --mount=type=secret,id=sccache_env \
+    [ -f /run/secrets/sccache_env ] && . /run/secrets/sccache_env; \
+    RUSTFLAGS="-C linker=clang -C link-arg=-fuse-ld=mold" \
     cargo build --release -p veronex-embed --bin veronex-embed && \
-    cp /app/target/release/veronex-embed /app/veronex-embed
+    cp /app/target/release/veronex-embed /app/veronex-embed && \
+    sccache --show-stats
 
-FROM debian:bookworm-slim
-RUN apt-get update && apt-get install -y ca-certificates libssl3 wget && rm -rf /var/lib/apt/lists/*
+FROM debian:trixie-slim
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 wget
 WORKDIR /app
 COPY --from=builder /app/veronex-embed ./
 
-# Pre-bake the embedding model into the image at build time so the container
-# starts immediately without downloading from HuggingFace at runtime.
-ENV FASTEMBED_CACHE_PATH=/app/models
-RUN PRELOAD_ONLY=1 ./veronex-embed
+# Model is downloaded at first request via fastembed's HuggingFace Hub client.
+# Cache lives at FASTEMBED_CACHE_DIR; mount a PersistentVolume there in K8s so
+# downloads persist across pod restarts (first pod warm-up ~30-60s from HF,
+# subsequent starts instant). Baking the ~2GB model into the image was dropped
+# because the resulting layer exceeded the Gitea registry push threshold.
+#
+# Env var name: fastembed v4 reads `FASTEMBED_CACHE_DIR` (see
+# fastembed-rs/src/common.rs `get_cache_dir()`); `FASTEMBED_CACHE_PATH` was a
+# misnaming we previously used and is silently ignored — falling back to
+# `.fastembed_cache` in CWD which is root-owned and not writable by the
+# `runAsUser: 1000` pod, manifesting as `Permission denied (os error 13)` on
+# first model download.
+#
+# Pre-create with `chown 1000:1000` so the directory is writable by the
+# container's non-root user even before the PVC is mounted (covers the
+# preload/non-K8s case).
+ENV FASTEMBED_CACHE_DIR=/app/models
+RUN mkdir -p /app/models && chown 1000:1000 /app/models
 
 EXPOSE 3200
 CMD ["./veronex-embed"]

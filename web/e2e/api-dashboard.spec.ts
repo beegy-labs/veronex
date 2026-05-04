@@ -87,6 +87,15 @@ test.describe('API: Dashboard & Inference @smoke', () => {
       expect(svc.name).toBeTruthy()
       expect(['ok', 'degraded', 'unavailable']).toContain(svc.status)
     }
+
+    // postgresql and valkey are always probed (no env var required)
+    // embed only appears when EMBED_URL is configured
+    const infraNames = body.infrastructure.map((s: { name: string }) => s.name)
+    expect(infraNames).toContain('postgresql')
+    expect(infraNames).toContain('valkey')
+    if (process.env.EMBED_URL) {
+      expect(infraNames).toContain('embed')
+    }
   })
 
   // ── Lab Settings ────────────────────────────────────────────────────────────

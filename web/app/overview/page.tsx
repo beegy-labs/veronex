@@ -12,7 +12,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { DashboardTab } from './components/dashboard-tab'
 
 export default function OverviewPage() {
-  usePageGuard('dashboard')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
 
   // Single aggregated query for stats + perf(24h) + capacity + queue + lab
@@ -41,10 +41,10 @@ export default function OverviewPage() {
 
   if (overviewError) {
     return (
-      <Card className="border-destructive/50 bg-destructive/10">
-        <CardContent className="p-6 text-destructive">
-          <p className="font-semibold">{t('overview.failedStats')}</p>
-          <p className="text-sm mt-1 opacity-80">
+      <Card className="vds-border-destructive/50 vds-bg-destructive/10">
+        <CardContent className="vds-p-6 vds-text-destructive">
+          <p className="vds-font-600">{t('overview.failedStats')}</p>
+          <p className="vds-text-sm vds-mt-1 vds-opacity-80">
             {overviewError instanceof Error ? overviewError.message : t('common.unknownError')}
           </p>
         </CardContent>
@@ -53,10 +53,10 @@ export default function OverviewPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">{t('nav.dashboard')}</h1>
-        <p className="text-muted-foreground mt-1 text-sm">{t('overview.description')}</p>
+        <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('nav.dashboard')}</h1>
+        <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('overview.description')}</p>
       </div>
 
       <DashboardTab

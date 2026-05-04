@@ -124,6 +124,6 @@ reenqueue_reaped_jobs_batch(reaped):
 |------|------|
 | `crates/veronex/src/infrastructure/outbound/pubsub/reaper.rs` | Reaper loop, Lua scripts, re-enqueue |
 | `crates/veronex/src/infrastructure/outbound/capacity/distributed_vram_pool.rs` | `reap_all_expired()` |
-| `crates/veronex/src/infrastructure/outbound/valkey_keys.rs` | Key name helpers |
-| `crates/veronex/src/domain/constants.rs` | Interval/timing constants |
+| `crates/veronex/src/domain/constants.rs` | Canonical Valkey key constructors + interval/timing constants — SSOT |
+| `crates/veronex/src/infrastructure/outbound/valkey_keys.rs` | pk-aware shims for direct-fred callers |
 | `crates/veronex/src/bootstrap/background.rs` | Reaper task spawn |

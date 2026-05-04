@@ -29,12 +29,14 @@ use serde::Deserialize;
 use tokio::signal;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
+use tracing::Instrument;
 
 mod capacity_push;
 mod health;
 mod heartbeat;
 mod orphan_sweeper;
 mod otlp;
+mod persistence;
 mod scraper;
 mod shard;
 
@@ -183,8 +185,20 @@ async fn fetch_mcp_targets(client: &reqwest::Client, api_url: &str) -> Vec<(Stri
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let worker_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(128)
+        .thread_name("veronex-agent-worker")
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -237,20 +251,26 @@ async fn main() -> Result<()> {
         let ordinal = config.ordinal;
         let replicas = config.replicas_fallback;
         let token = shutdown.child_token();
-        tokio::spawn(async move {
-            orphan_sweeper::run_orphan_sweeper(vk, pg, ordinal, replicas, token).await;
-        });
+        tokio::spawn(
+            async move {
+                orphan_sweeper::run_orphan_sweeper(vk, pg, ordinal, replicas, token).await;
+            }
+            .instrument(tracing::info_span!("agent.orphan_sweeper")),
+        );
         tracing::info!("orphan sweeper spawned");
     }
 
     // Start health HTTP server
     let health_clone = health.clone();
     let health_port = config.health_port;
-    tokio::spawn(async move {
-        if let Err(e) = health::serve(health_port, health_clone).await {
-            tracing::error!(error = %e, "health server failed");
+    tokio::spawn(
+        async move {
+            if let Err(e) = health::serve(health_port, health_clone).await {
+                tracing::error!(error = %e, "health server failed");
+            }
         }
-    });
+        .instrument(tracing::info_span!("agent.health_server")),
+    );
 
     tracing::info!(
         api = %config.veronex_api_url,

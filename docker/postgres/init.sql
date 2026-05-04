@@ -1,7 +1,37 @@
 -- ============================================================
 -- Veronex complete database schema (consolidated init)
--- Last updated: 2026-04-06
+-- Last updated: 2026-04-16
 -- ============================================================
+
+-- ── Idempotent schema migrations ─────────────────────────────────────────────
+-- Applied before CREATE TABLE statements below. On fresh installs every ALTER
+-- is a no-op (nothing to alter); on existing DBs these transition the schema
+-- so subsequent CREATE TABLE statements error out (table already exists) and
+-- psql (without ON_ERROR_STOP) continues past them, leaving the migrated
+-- schema in place.
+DROP INDEX IF EXISTS idx_llm_providers_is_active;
+ALTER TABLE IF EXISTS llm_providers DROP COLUMN IF EXISTS is_active;
+ALTER TABLE IF EXISTS gpu_servers ADD COLUMN IF NOT EXISTS gpu_vendor VARCHAR(32) NOT NULL DEFAULT '';
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1 FROM information_schema.referential_constraints
+         WHERE constraint_name = 'inference_jobs_provider_id_fkey'
+           AND delete_rule != 'SET NULL'
+    ) THEN
+        ALTER TABLE inference_jobs DROP CONSTRAINT inference_jobs_provider_id_fkey;
+        ALTER TABLE inference_jobs
+            ADD CONSTRAINT inference_jobs_provider_id_fkey
+            FOREIGN KEY (provider_id) REFERENCES llm_providers(id) ON DELETE SET NULL;
+    END IF;
+END$$;
+-- mcp_loop_tool_calls retired 2026-05-01: per-tool audit moved to S3
+-- ConversationRecord (single source for the conversation chain) and
+-- ClickHouse (`mcp_tool_calls` for analytics/stats). Keeping the row
+-- in PG was duplicating 32KB-capped result bodies under PGLZ when zstd
+-- in S3 compresses them ~3x better, plus the per-row 220B overhead +
+-- three indexes were unused after the UI cut over to S3.
+DROP TABLE IF EXISTS mcp_loop_tool_calls;
 
 -- ── Accounts ──────────────────────────────────────────────────────────────────
 
@@ -80,6 +110,7 @@ CREATE TABLE gpu_servers (
     id                UUID         PRIMARY KEY DEFAULT uuidv7(),
     name              VARCHAR(255) NOT NULL,
     node_exporter_url TEXT,
+    gpu_vendor        VARCHAR(32)  NOT NULL DEFAULT '',
     registered_at     TIMESTAMPTZ  NOT NULL DEFAULT now()
 );
 
@@ -91,7 +122,6 @@ CREATE TABLE llm_providers (
     provider_type     VARCHAR(32) NOT NULL,
     url               TEXT        NOT NULL DEFAULT '',
     api_key_encrypted TEXT,
-    is_active         BOOLEAN     NOT NULL DEFAULT true,
     total_vram_mb     BIGINT      NOT NULL DEFAULT 0,
     status            VARCHAR(32) NOT NULL DEFAULT 'offline',
     registered_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -101,7 +131,6 @@ CREATE TABLE llm_providers (
     num_parallel      SMALLINT    NOT NULL DEFAULT 4
 );
 
-CREATE INDEX idx_llm_providers_is_active ON llm_providers(is_active);
 CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 
@@ -149,7 +178,7 @@ CREATE TABLE inference_jobs (
     cached_tokens        INTEGER,
     source               VARCHAR(8)  NOT NULL DEFAULT 'api',
     account_id           UUID        REFERENCES accounts(id),
-    provider_id          UUID        REFERENCES llm_providers(id),
+    provider_id          UUID        REFERENCES llm_providers(id) ON DELETE SET NULL,
     api_format           TEXT        NOT NULL DEFAULT 'openai_compat',
     request_path         TEXT,
     conversation_id      UUID        REFERENCES conversations(id) ON DELETE SET NULL,
@@ -368,22 +397,19 @@ CREATE TABLE roles (
     id          UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
     name        VARCHAR(64) NOT NULL UNIQUE,
     permissions TEXT[]      NOT NULL DEFAULT '{}',
-    menus       TEXT[]      NOT NULL DEFAULT '{}',
     is_system   BOOLEAN     NOT NULL DEFAULT FALSE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-INSERT INTO roles (name, permissions, menus, is_system) VALUES (
+INSERT INTO roles (name, permissions, is_system) VALUES (
     'super',
-    ARRAY['dashboard_view','api_test','provider_manage','key_manage','account_manage','audit_view','settings_manage','role_manage','model_manage'],
-    ARRAY['dashboard','flow','jobs','performance','usage','test','providers','servers','keys','accounts','audit','api_docs'],
+    ARRAY['dashboard_view','api_test','provider_manage','key_manage','account_manage','audit_view','settings_manage','role_manage','model_manage','mcp_manage'],
     TRUE
 );
 
-INSERT INTO roles (name, permissions, menus, is_system) VALUES (
+INSERT INTO roles (name, permissions, is_system) VALUES (
     'viewer',
     ARRAY['dashboard_view'],
-    ARRAY['dashboard','flow','jobs','performance','usage','api_docs'],
     TRUE
 );
 
@@ -464,28 +490,10 @@ CREATE TABLE mcp_key_access (
 
 CREATE INDEX idx_mcp_key_access_key ON mcp_key_access(api_key_id) WHERE is_allowed = true;
 
--- ── MCP Loop Tool Calls ───────────────────────────────────────────────────────
-
-CREATE TABLE mcp_loop_tool_calls (
-    id              UUID        PRIMARY KEY DEFAULT gen_random_uuid(),
-    mcp_loop_id     UUID        NOT NULL,
-    job_id          UUID        NOT NULL REFERENCES inference_jobs(id) ON DELETE CASCADE,
-    loop_round      SMALLINT    NOT NULL,
-    server_id       UUID        NOT NULL,
-    tool_name       TEXT        NOT NULL,
-    namespaced_name TEXT        NOT NULL,
-    args_json       JSONB       NOT NULL,
-    result_text     TEXT,
-    outcome         TEXT        NOT NULL,
-    cache_hit       BOOLEAN     NOT NULL DEFAULT false,
-    latency_ms      INT,
-    result_bytes    INT,
-    created_at      TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_mcp_loop_tool_calls_loop   ON mcp_loop_tool_calls(mcp_loop_id);
-CREATE INDEX idx_mcp_loop_tool_calls_job    ON mcp_loop_tool_calls(job_id);
-CREATE INDEX idx_mcp_loop_tool_calls_server ON mcp_loop_tool_calls(server_id, created_at DESC);
+-- mcp_loop_tool_calls table retired 2026-05-01 — see DROP block at top of file.
+-- Per-tool audit data now lives in S3 `ConversationRecord.turns[].tool_calls[]`
+-- (with `result`, `outcome`, `latency_ms`, `cache_hit`, `server_slug` fields),
+-- and analytics/stats keep flowing to ClickHouse via `fire_mcp_ingest`.
 
 -- ── Trigram indexes ───────────────────────────────────────────────────────────
 
@@ -499,3 +507,17 @@ CREATE INDEX idx_accounts_username_trgm         ON accounts USING GIN (username 
 CREATE INDEX idx_api_keys_name_trgm             ON api_keys USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_gpu_servers_name_trgm          ON gpu_servers USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_provider_selected_models_lookup ON provider_selected_models (provider_id, model_name);
+
+-- ── Idempotent upgrades (run safely on every helm pre-upgrade) ───────────────
+-- Add `mcp_manage` to existing super role + drop legacy `roles.menus` column.
+-- Frontend nav visibility is now derived from permissions, not menus
+-- (see `web/lib/route-permissions.ts`).
+DO $$
+BEGIN
+    UPDATE roles
+       SET permissions = ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['mcp_manage']))
+     WHERE name = 'super'
+       AND NOT ('mcp_manage' = ANY(permissions));
+END $$;
+
+ALTER TABLE roles DROP COLUMN IF EXISTS menus;

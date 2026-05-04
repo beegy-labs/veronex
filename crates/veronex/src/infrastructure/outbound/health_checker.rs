@@ -9,7 +9,7 @@ use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegis
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::infrastructure::outbound::capacity::thermal::{ThermalThrottleMap, ThrottleLevel};
-use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, store_node_metrics, fetch_node_metrics, HwMetrics};
+use crate::infrastructure::outbound::hw_metrics::{load_hw_metrics, store_hw_metrics, fetch_node_metrics, HwMetrics};
 use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
 use crate::infrastructure::outbound::valkey_keys;
 
@@ -17,12 +17,10 @@ use crate::domain::constants::{
     OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
     SERVICE_PROBE_TIMEOUT,
+    SERVICE_HEALTH_TTL_SECS,
     THERMAL_HARD_COOLDOWN_SECS,
     THERMAL_THROTTLE_KEY_TTL_SECS,
 };
-
-/// TTL for per-instance service health HASH (2× health check interval).
-const SERVICE_HEALTH_TTL_SECS: i64 = 60;
 
 // ── Health check ───────────────────────────────────────────────────────────────
 
@@ -98,6 +96,7 @@ async fn poll_node_exporter_metrics(
     provider: &LlmProvider,
     valkey_pool: &fred::clients::Pool,
     gpu_server_registry: &dyn GpuServerRegistry,
+    pg_pool: &sqlx::PgPool,
 ) {
     let Some(node_exporter_url) = resolve_node_exporter_url(provider, gpu_server_registry).await else {
         return;
@@ -148,10 +147,12 @@ async fn poll_node_exporter_metrics(
 
     store_hw_metrics(valkey_pool, provider.id, &hw).await;
 
-    // Cache full NodeMetrics per server for dashboard API (avoids live scraping).
-    if let Some(server_id) = provider.server_id {
-        store_node_metrics(valkey_pool, server_id, &node_metrics).await;
-    }
+    // Server-level NodeMetrics caching + gpu_vendor persistence are handled by
+    // `run_server_metrics_loop`, which iterates gpu_servers directly and runs
+    // independently of provider health. Doing it here too would duplicate the
+    // writes and create a race on gpu_vendor updates.
+    let _ = pg_pool;
+    let _ = node_metrics;
 }
 
 // ── Service health probes ──────────────────────────────────────────────────────
@@ -179,6 +180,7 @@ async fn check_and_store_services(
     analytics_url: Option<&str>,
     s3_endpoint: Option<&str>,
     vespa_url: Option<&str>,
+    embed_url: Option<&str>,
 ) {
     use fred::prelude::*;
 
@@ -234,16 +236,26 @@ async fn check_and_store_services(
         }
     }
 
-    // S3/MinIO: GET {endpoint}/minio/health/live
+    // S3 (Garage / AWS S3 / MinIO): HEAD {endpoint}/
+    //
+    // We don't care which S3-compatible backend is on the other end — we
+    // only need to know "is something answering HTTP". Treat any non-5xx
+    // response as "service alive" (a 403/404 just means the request was
+    // rejected, but the daemon is running and routable). Network errors
+    // (timeout, connect refused, DNS) → "error".
+    //
+    // Previous probe hit `/minio/health/live` (MinIO-only); after the
+    // 2026-04 Garage migration that path returns 403 from Garage, marking
+    // S3 perpetually "unavailable" even though writes succeed.
     if let Some(endpoint) = s3_endpoint {
         let probe = {
             let start = std::time::Instant::now();
-            let res = client.get(format!("{}/minio/health/live", endpoint.trim_end_matches('/')))
+            let res = client.head(endpoint.trim_end_matches('/'))
                 .timeout(SERVICE_PROBE_TIMEOUT)
                 .send().await;
             let ms = start.elapsed().as_millis() as u32;
             let s = match res {
-                Ok(r) if r.status().is_success() => "ok",
+                Ok(r) if r.status().as_u16() < 500 => "ok",
                 _ => "error",
             };
             SvcProbe { s, ms, t: now_ms }
@@ -269,6 +281,25 @@ async fn check_and_store_services(
         };
         if let Ok(json) = serde_json::to_string(&probe) {
             fields.push(("vespa".into(), json));
+        }
+    }
+
+    // Embed: GET {url}/health
+    if let Some(url) = embed_url {
+        let probe = {
+            let start = std::time::Instant::now();
+            let res = client.get(format!("{}/health", url.trim_end_matches('/')))
+                .timeout(SERVICE_PROBE_TIMEOUT)
+                .send().await;
+            let ms = start.elapsed().as_millis() as u32;
+            let s = match res {
+                Ok(r) if r.status().is_success() => "ok",
+                _ => "error",
+            };
+            SvcProbe { s, ms, t: now_ms }
+        };
+        if let Ok(json) = serde_json::to_string(&probe) {
+            fields.push(("embed".into(), json));
         }
     }
 
@@ -344,6 +375,7 @@ pub async fn run_health_checker_loop(
     analytics_url:      Option<String>,
     s3_endpoint:        Option<String>,
     vespa_url:          Option<String>,
+    embed_url:          Option<String>,
 ) {
     let interval = Duration::from_secs(interval_secs);
 
@@ -368,7 +400,7 @@ pub async fn run_health_checker_loop(
         // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
         let active: Vec<_> = providers
             .into_iter()
-            .filter(|b| b.is_active && matches!(b.provider_type, ProviderType::Ollama))
+            .filter(|b| matches!(b.provider_type, ProviderType::Ollama))
             .collect();
 
         // ── Determine liveness ────────────────────────────────────────────────
@@ -440,6 +472,7 @@ pub async fn run_health_checker_loop(
             let thermal           = thermal.clone();
             let vram_pool         = vram_pool.clone();
             let metrics_sem       = metrics_sem.clone();
+            let pg_pool           = pg_pool.clone();
 
             set.spawn(async move {
                 let _permit = metrics_sem.acquire().await.expect("semaphore closed");
@@ -480,7 +513,7 @@ pub async fn run_health_checker_loop(
 
                 // 2. Hardware metrics (only when linked to a GpuServer)
                 if let Some(ref pool) = valkey_pool {
-                    poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref()).await;
+                    poll_node_exporter_metrics(&provider, pool, gpu_server_registry.as_ref(), &pg_pool).await;
 
                     // 3. Thermal throttle update from cached hw_metrics
                     if let Some(hw) = load_hw_metrics(pool, provider.id).await {
@@ -579,9 +612,103 @@ pub async fn run_health_checker_loop(
                 analytics_url.as_deref(),
                 s3_endpoint.as_deref(),
                 vespa_url.as_deref(),
+                embed_url.as_deref(),
             ).await;
         }
     }
 
     tracing::info!("provider health checker stopped");
+}
+
+// ── Server metrics scrape loop (independent of providers) ─────────────────────
+
+/// Background loop that scrapes node-exporter for every registered GpuServer,
+/// independently of whether any LlmProvider is linked to it.
+///
+/// Why separate from the provider health_checker:
+/// - A GpuServer exists to host one-or-many LlmProviders, but the server's
+///   hardware liveness (RAM/CPU/GPU temp) is meaningful even when no provider
+///   is currently attached to it (e.g. newly registered server, or all
+///   providers temporarily deleted).
+/// - The Servers page should show live metrics for any server with a configured
+///   `node_exporter_url`, without depending on the provider table.
+pub async fn run_server_metrics_loop(
+    gpu_server_registry: Arc<dyn GpuServerRegistry>,
+    valkey_pool: Option<fred::clients::Pool>,
+    pg_pool: sqlx::PgPool,
+    interval_secs: u64,
+    shutdown: CancellationToken,
+) {
+    use crate::infrastructure::outbound::hw_metrics::store_node_metrics;
+
+    let interval = Duration::from_secs(interval_secs);
+
+    tracing::info!(interval_secs, "server metrics loop started");
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown.cancelled() => break,
+            _ = tokio::time::sleep(interval) => {}
+        }
+
+        let servers = match gpu_server_registry.list_all().await {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!(error = %e, "server metrics loop: failed to list gpu_servers");
+                continue;
+            }
+        };
+
+        let Some(ref pool) = valkey_pool else { continue };
+
+        for server in servers {
+            let Some(url) = server.node_exporter_url.as_ref().filter(|u| !u.is_empty()) else {
+                continue;
+            };
+
+            let (node_metrics, _snapshot) = match fetch_node_metrics(url, None, None).await {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::debug!(
+                        server_id = %server.id,
+                        server_name = %server.name,
+                        error = %e,
+                        "server metrics loop: node-exporter fetch failed"
+                    );
+                    continue;
+                }
+            };
+
+            // Detect GPU vendor from DRM metrics (amdgpu exports DRM, NVIDIA does not).
+            let detected_vendor = if node_metrics.gpus.iter().any(|g| g.vram_total_mb.is_some()) {
+                "amd"
+            } else {
+                ""
+            };
+
+            // Cache full NodeMetrics for the Servers page.
+            store_node_metrics(pool, server.id, &node_metrics).await;
+
+            // Persist gpu_vendor when detected and not already correct.
+            if !detected_vendor.is_empty() {
+                if let Err(e) = sqlx::query(
+                    "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
+                )
+                .bind(detected_vendor)
+                .bind(server.id)
+                .execute(&pg_pool)
+                .await
+                {
+                    tracing::warn!(
+                        server_id = %server.id,
+                        error = %e,
+                        "server metrics loop: failed to persist gpu_vendor"
+                    );
+                }
+            }
+        }
+    }
+
+    tracing::info!("server metrics loop stopped");
 }

@@ -1,6 +1,6 @@
 # Auth -- RBAC, JWT & Sessions
 
-> SSOT | **Last Updated**: 2026-03-28 (rev 6 -- N:N roles, permissions in JWT, RequirePermission extractors)
+> SSOT | **Last Updated**: 2026-04-25 (rev 7 -- single-axis RBAC: permissions only, `menus` collapsed)
 
 ## Overview
 
@@ -9,23 +9,23 @@ Two independent auth layers:
 | Layer | Mechanism | Protects |
 |-------|-----------|----------|
 | API Key | `X-API-Key` header (BLAKE2b hash) | Inference only: `/v1/chat/*`, `/v1/inference/*`, `/api/*`, `/v1beta/*`, `/v1/jobs/*/stream` |
-| JWT Bearer | `Authorization: Bearer <token>` (HS256) | All admin routes: `/v1/accounts/*`, `/v1/audit`, `/v1/keys/*`, `/v1/usage/*`, `/v1/dashboard/*`, `/v1/providers/*`, `/v1/servers/*`, `/v1/gemini/*`, `/v1/ollama/*`, `/v1/test/*` |
-| Public | None | `/v1/auth/*`, `/v1/setup/*`, `/health`, `/readyz`, `/docs/*`, `/v1/metrics/targets` |
+| JWT Bearer | `Authorization: Bearer <token>` (HS256) | All admin routes: `/v1/accounts/*`, `/v1/audit`, `/v1/keys/*`, `/v1/usage/*`, `/v1/dashboard/*`, `/v1/providers/*`, `/v1/servers/*`, `/v1/gemini/*`, `/v1/ollama/*`, `/v1/test/*`, `/v1/mcp/*` |
+| Public | None | `/v1/auth/*`, `/v1/setup/*`, `/health`, `/readyz`, `/docs/*`, `/v1/metrics/targets`, `/v1/mcp/targets` (internal-network) |
 
 ## Roles & Permissions (N:N)
 
-Accounts have N:N role assignment via `account_roles` join table. Each role grants a set of permissions and menu visibility.
+Accounts have N:N role assignment via `account_roles` join table. Each role grants a set of permissions; **menu visibility is derived from permissions** — there is no longer a separately-configurable menu set (rev 7 collapsed the dual axis to prevent the two from drifting).
 
 | Table | Purpose |
 |-------|---------|
-| `roles` | `id, name, permissions TEXT[], menus TEXT[], is_system BOOL` |
+| `roles` | `id, name, permissions TEXT[], is_system BOOL` |
 | `account_roles` | `account_id, role_id` (composite PK) |
 
 ### Built-in Roles
 
 | Role | `is_system` | Permissions |
 |------|-------------|-------------|
-| `super` | true | All: `dashboard_view`, `api_test`, `provider_manage`, `key_manage`, `account_manage`, `audit_view`, `settings_manage`, `role_manage`, `model_manage` |
+| `super` | true | All: `dashboard_view`, `api_test`, `provider_manage`, `key_manage`, `account_manage`, `audit_view`, `settings_manage`, `role_manage`, `model_manage`, `mcp_manage` |
 | `viewer` | true | `dashboard_view` only |
 
 System roles (`is_system=true`) cannot be edited or deleted.
@@ -36,17 +36,20 @@ System roles (`is_system=true`) cannot be edited or deleted.
 |------------|---------|
 | `dashboard_view` | View dashboard and overview |
 | `api_test` | Run test inferences |
-| `provider_manage` | CRUD providers and servers |
+| `provider_manage` | CRUD LLM providers + GPU servers |
 | `key_manage` | CRUD API keys |
 | `account_manage` | CRUD accounts |
 | `audit_view` | View audit log |
 | `settings_manage` | Modify system settings |
 | `role_manage` | CRUD roles (except system roles) |
 | `model_manage` | Manage models (enable/disable, sync) |
+| `mcp_manage` | CRUD MCP servers + per-key MCP access grants |
+
+### Route ↔ Permission SSOT
+
+Frontend nav and page guards read **`web/lib/route-permissions.ts`**, which maps every admin route to the permission required by that route's API endpoints. Both the sidebar (`hasPermission(item.permission)`) and the page guard (`usePageGuard(permission)`) use this map; the matching `Require<Permission>` extractor on the backend handler must agree. Mismatches surface as visible-but-broken pages — see the regression test in `web/lib/__tests__/route-permissions.test.ts`.
 
 ### JWT Claims
-
-Permissions and menus are embedded in JWT claims for frontend gating:
 
 ```json
 {
@@ -55,10 +58,11 @@ Permissions and menus are embedded in JWT claims for frontend gating:
   "jti": "session-uuid",
   "exp": 1234567890,
   "permissions": ["dashboard_view", "provider_manage", "role_manage"],
-  "menus": ["dashboard", "providers", "accounts"],
   "role_name": "super"
 }
 ```
+
+> **rev 7**: the legacy `menus` claim has been removed. Older tokens that still carry it are accepted (the field is ignored). The `roles.menus` column has been dropped; idempotent migration in `docker/postgres/init.sql` upgrades existing dev/prod DBs.
 
 ## Router Layers (4-layer)
 
@@ -150,7 +154,6 @@ BOOTSTRAP_SUPER_PASS=secret
 | `jti` | `Uuid::now_v7()` -- unique per session, used for revocation |
 | `exp` | now + 1 hour |
 | `permissions` | Merged permission strings from all assigned roles |
-| `menus` | Merged menu IDs from all assigned roles |
 | `role_name` | Primary role name |
 | Secret | `JWT_SECRET` env var |
 

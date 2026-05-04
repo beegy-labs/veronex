@@ -59,11 +59,13 @@ should_handoff(turns, lab, configured_ctx)
     > handoff_threshold × configured_ctx ?
   │
   YES:
-    generate_master_summary()
+    generate_master_summary(http_client, record, model, provider_url, timeout_secs)
       → prompt: all compressed summaries → one paragraph
-      → call compression model (timeout: compression_timeout_secs)
+      → call compression model via the shared http_client
+        (NEVER reqwest::Client::new() — connection pool reuse)
 
-    perform_handoff()
+    perform_handoff(http_client, record, prev_conv_id, owner_id, date,
+                    model, provider_url, timeout_secs, store)
       → new ConversationRecord { turns: [HandoffTurn { master_summary }] }
       → S3 put_conversation(new_id)
       → return (new_id, session_renewed=true)

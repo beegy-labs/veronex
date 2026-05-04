@@ -52,6 +52,7 @@ pub fn should_handoff(
 // ── Master summary generation ─────────────────────────────────────────────────
 
 async fn generate_master_summary(
+    http: &reqwest::Client,
     record: &ConversationRecord,
     model: &str,
     provider_url: &str,
@@ -66,7 +67,6 @@ async fn generate_master_summary(
         .collect::<Vec<_>>()
         .join("\n");
 
-    let http = reqwest::Client::new();
     let endpoint = format!("{}/api/chat", provider_url.trim_end_matches('/'));
     let body = serde_json::json!({
         "model": model,
@@ -109,7 +109,9 @@ async fn generate_master_summary(
 /// with HandoffTurn as first turn, return `(new_conversation_id, master_summary)`.
 ///
 /// Non-fatal: returns `None` on any error (caller continues with original session).
+#[allow(clippy::too_many_arguments)]
 pub async fn perform_handoff(
+    http: &reqwest::Client,
     record: &ConversationRecord,
     previous_conversation_id: Uuid,
     owner_id: Uuid,
@@ -121,7 +123,7 @@ pub async fn perform_handoff(
 ) -> Option<(Uuid, String)> {
     let previous_turn_count = record.regular_turns().count() as u32;
 
-    let master_summary = match generate_master_summary(record, model, provider_url, timeout_secs).await {
+    let master_summary = match generate_master_summary(http, record, model, provider_url, timeout_secs).await {
         Ok(s) => s,
         Err(e) => {
             tracing::warn!(

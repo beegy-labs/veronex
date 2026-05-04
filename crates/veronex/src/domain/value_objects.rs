@@ -1,4 +1,5 @@
 use std::fmt;
+use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -189,14 +190,54 @@ pub struct StreamToken {
     /// Finish reason from the provider ("stop", "length", "tool_calls").
     /// Only set on the final token. `None` for intermediate tokens.
     pub finish_reason: Option<String>,
+    /// Phase 1 → Phase 2 boundary signal. Carries no content; not forwarded
+    /// to clients. Bridge consumers use this to switch from
+    /// `LIFECYCLE_TIMEOUT` (load) to `TOKEN_FIRST_TIMEOUT` (Phase 2 first
+    /// token). Emitted by `runner::run_job` after `ensure_ready` succeeds
+    /// when `MCP_LIFECYCLE_PHASE=on`. SDD:
+    /// `.specs/veronex/bridge-phase-aware-timing.md` §3.
+    pub is_phase_boundary: bool,
 }
 
 impl StreamToken {
     pub fn text(value: String) -> Self {
-        Self { value, is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None, finish_reason: None }
+        Self {
+            value,
+            is_final: false,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            tool_calls: None,
+            finish_reason: None,
+            is_phase_boundary: false,
+        }
     }
     pub fn done() -> Self {
-        Self { value: String::new(), is_final: true, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: None, finish_reason: None }
+        Self {
+            value: String::new(),
+            is_final: true,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            tool_calls: None,
+            finish_reason: None,
+            is_phase_boundary: false,
+        }
+    }
+    /// Phase 1 → Phase 2 boundary signal. Bridge `collect_round` switches
+    /// from `LIFECYCLE_TIMEOUT` to `TOKEN_FIRST_TIMEOUT` on receipt.
+    /// SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3.
+    pub fn phase_boundary() -> Self {
+        Self {
+            value: String::new(),
+            is_final: false,
+            prompt_tokens: None,
+            completion_tokens: None,
+            cached_tokens: None,
+            tool_calls: None,
+            finish_reason: None,
+            is_phase_boundary: true,
+        }
     }
 }
 
@@ -263,10 +304,132 @@ impl ProviderUrl {
     }
 }
 
+// ── Vision analysis ──────────────────────────────────────────────────────────
+
+/// Result of the vision pre-processing call for an image-bearing turn.
+///
+/// Stored in `TurnRecord` / `InferenceJob` before inference runs so that future
+/// compression can preserve the image context as text rather than losing it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VisionAnalysis {
+    /// Image analysis text produced by the vision model (~200 tokens).
+    pub analysis: String,
+    /// Model used for analysis (e.g. "llava:7b").
+    pub vision_model: String,
+    /// Number of images analyzed.
+    pub image_count: u32,
+    /// Token count of the analysis output.
+    pub analysis_tokens: u32,
+}
+
+// ── Model instance lifecycle (per-provider, per-model) ───────────────────────
+//
+// Tracked in VramPool (SSOT) and updated by ModelLifecyclePort adapters and
+// the sync_loop background task. State transitions are constrained to the
+// closure documented on `ModelInstanceState::can_transition_to`.
+//
+// SDD reference: `.specs/veronex/history/inference-lifecycle-sod.md`.
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ModelInstanceState {
+    NotLoaded,
+    Loading {
+        started_at: SystemTime,
+        last_progress_at: SystemTime,
+    },
+    Loaded {
+        loaded_at: SystemTime,
+        weight_bytes: u64,
+    },
+    Failed {
+        failed_at: SystemTime,
+        reason: String,
+        retry_after: SystemTime,
+    },
+    Evicted {
+        evicted_at: SystemTime,
+        reason: EvictionReason,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvictionReason {
+    /// ollama unloaded the model to make room for another.
+    VramPressure,
+    /// ollama TTL expired (low-power keep-alive policy).
+    KeepAliveExpired,
+    /// Explicit `evict()` call (operator action / model unenrollment).
+    Operator,
+    /// Cleanup after a load attempt failed.
+    LoadFailed,
+}
+
+impl ModelInstanceState {
+    /// Returns `true` when `self` may transition to `next` per the lifecycle
+    /// invariants. Callers MUST check this before persisting a new state.
+    ///
+    /// Allowed transitions:
+    /// ```text
+    /// NotLoaded → Loading | Failed
+    /// Loading   → Loaded  | Failed
+    /// Loaded    → Evicted              (must go via Evicted, not directly NotLoaded)
+    /// Failed    → Loading              (retry after retry_after)
+    /// Evicted   → NotLoaded | Loading
+    /// ```
+    pub fn can_transition_to(&self, next: &Self) -> bool {
+        use ModelInstanceState::*;
+        matches!(
+            (self, next),
+            (NotLoaded, Loading { .. })
+                | (NotLoaded, Failed { .. })
+                | (Loading { .. }, Loaded { .. })
+                | (Loading { .. }, Failed { .. })
+                | (Loaded { .. }, Evicted { .. })
+                | (Failed { .. }, Loading { .. })
+                | (Evicted { .. }, NotLoaded)
+                | (Evicted { .. }, Loading { .. })
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use proptest::prelude::*;
+
+    // ── StreamToken — phase boundary (S19) ───────────────────────────────────
+    //
+    // SDD: `.specs/veronex/bridge-phase-aware-timing.md` §3. The phase
+    // boundary token is the contract between runner (post-`ensure_ready`)
+    // and bridge (`collect_round` timing-mode switch).
+
+    #[test]
+    fn stream_token_phase_boundary_constructor() {
+        let t = StreamToken::phase_boundary();
+        assert!(t.is_phase_boundary, "phase_boundary() must set the flag");
+        assert!(!t.is_final, "phase_boundary is not a terminal token");
+        assert!(t.value.is_empty(), "phase_boundary carries no content");
+        assert!(t.tool_calls.is_none());
+        assert!(t.finish_reason.is_none());
+        assert!(t.prompt_tokens.is_none());
+        assert!(t.completion_tokens.is_none());
+        assert!(t.cached_tokens.is_none());
+    }
+
+    #[test]
+    fn stream_token_text_not_phase_boundary() {
+        let t = StreamToken::text("hello".into());
+        assert!(!t.is_phase_boundary, "text() must NOT set is_phase_boundary");
+    }
+
+    #[test]
+    fn stream_token_done_not_phase_boundary() {
+        let t = StreamToken::done();
+        assert!(!t.is_phase_boundary, "done() must NOT set is_phase_boundary");
+        assert!(t.is_final);
+    }
 
     // ── Username ─────────────────────────────────────────────────────────
 
@@ -401,5 +564,112 @@ mod tests {
     #[test]
     fn prompt_empty_rejected() {
         assert!(Prompt::new("").is_err());
+    }
+
+    // ── ModelInstanceState transitions ───────────────────────────────────
+
+    use std::time::{Duration, SystemTime};
+
+    fn now() -> SystemTime {
+        SystemTime::now()
+    }
+
+    #[test]
+    fn model_state_not_loaded_to_loading_allowed() {
+        let from = ModelInstanceState::NotLoaded;
+        let to = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_loading_to_loaded_allowed() {
+        let from = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        let to = ModelInstanceState::Loaded {
+            loaded_at: now(),
+            weight_bytes: 58 * 1024 * 1024 * 1024,
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_loaded_direct_to_not_loaded_forbidden() {
+        // Must go via Evicted — invariant prevents losing the eviction reason
+        let from = ModelInstanceState::Loaded {
+            loaded_at: now(),
+            weight_bytes: 0,
+        };
+        let to = ModelInstanceState::NotLoaded;
+        assert!(!from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_loaded_to_evicted_allowed() {
+        let from = ModelInstanceState::Loaded {
+            loaded_at: now(),
+            weight_bytes: 0,
+        };
+        let to = ModelInstanceState::Evicted {
+            evicted_at: now(),
+            reason: EvictionReason::KeepAliveExpired,
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_failed_to_loading_allowed_for_retry() {
+        let from = ModelInstanceState::Failed {
+            failed_at: now(),
+            reason: "stalled".into(),
+            retry_after: now() + Duration::from_secs(60),
+        };
+        let to = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_evicted_to_loading_allowed() {
+        let from = ModelInstanceState::Evicted {
+            evicted_at: now(),
+            reason: EvictionReason::VramPressure,
+        };
+        let to = ModelInstanceState::Loading {
+            started_at: now(),
+            last_progress_at: now(),
+        };
+        assert!(from.can_transition_to(&to));
+    }
+
+    #[test]
+    fn model_state_serde_roundtrip_loaded() {
+        let s = ModelInstanceState::Loaded {
+            loaded_at: SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000),
+            weight_bytes: 12_345_678,
+        };
+        let json = serde_json::to_string(&s).unwrap();
+        let back: ModelInstanceState = serde_json::from_str(&json).unwrap();
+        assert_eq!(s, back);
+    }
+
+    #[test]
+    fn eviction_reason_serde_each_variant() {
+        for r in [
+            EvictionReason::VramPressure,
+            EvictionReason::KeepAliveExpired,
+            EvictionReason::Operator,
+            EvictionReason::LoadFailed,
+        ] {
+            let json = serde_json::to_string(&r).unwrap();
+            let back: EvictionReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(r, back);
+        }
     }
 }

@@ -1,0 +1,204 @@
+name: CI Rust
+
+on:
+  push:
+    branches: [develop, main]
+    paths:
+      - 'crates/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - 'docker/Dockerfile.rust'
+      - '.github/workflows/ci-rust.yml'
+  workflow_dispatch:
+    inputs:
+      force_build:
+        description: 'Force rebuild even if image exists'
+        required: false
+        default: true
+        type: boolean
+
+env:
+  REGISTRY: gitea.girok.dev
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build Rust Workspace
+    runs-on: arc-runner-set
+    timeout-minutes: 30
+    env:
+      # Rust compile happens inside Dockerfile.rust (not on the runner), so
+      # sccache only needs to flow through as a build secret. arc-runner-set
+      # has DinD already; we inject sccache creds from repo secrets here
+      # rather than baking them into a dedicated runner pool's env.
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "true"
+      SCCACHE_S3_KEY_PREFIX: veronex/
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      skipped: ${{ steps.check_image.outputs.exists }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      - name: Wait for Docker (DinD sidecar)
+        run: |
+          for i in $(seq 1 30); do
+            docker info >/dev/null 2>&1 && exit 0
+            echo "Waiting for Docker daemon... ($i/30)"
+            sleep 2
+          done
+          echo "Docker daemon not available after 60s"
+          exit 1
+
+      # No `docker/setup-buildx-action` step here — the runner pod's
+      # `setup-buildx-mirror` initContainer (defined in
+      # platform-gitops `bootstrap/terraform/modules/arc-controller`)
+      # pre-creates a default `cluster-mirror` buildx instance with
+      # the per-registry mirror config baked in. `docker buildx
+      # build` below picks it up automatically.
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.GITEA_USERNAME }}
+          password: ${{ secrets.GITEA_TOKEN }}
+
+      - name: Meta
+        id: meta
+        run: |
+          SHORT_SHA=$(echo ${{ github.sha }} | cut -c1-7)
+          case "${{ github.ref_name }}" in
+            main)    TAG="${SHORT_SHA}";         PREFIX="" ;;
+            develop) TAG="develop-${SHORT_SHA}"; PREFIX="develop-" ;;
+            *)       TAG="develop-${SHORT_SHA}"; PREFIX="develop-" ;;
+          esac
+          echo "tag=${TAG}" >> $GITHUB_OUTPUT
+          echo "prefix=${PREFIX}" >> $GITHUB_OUTPUT
+
+      - name: Check if image exists
+        id: check_image
+        env:
+          GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}
+        run: |
+          if [ "${{ inputs.force_build }}" = "true" ]; then
+            echo "exists=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          TAG="${{ steps.meta.outputs.tag }}"
+          RESPONSE=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "Authorization: token ${GITEA_TOKEN}" \
+            "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex/${TAG}")
+          if [ "$RESPONSE" = "200" ]; then
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Prepare sccache env
+        if: steps.check_image.outputs.exists != 'true'
+        run: |
+          {
+            echo "export SCCACHE_BUCKET=${SCCACHE_BUCKET:-sccache}"
+            echo "export SCCACHE_ENDPOINT=$SCCACHE_ENDPOINT"
+            echo "export SCCACHE_REGION=${SCCACHE_REGION:-us-east-1}"
+            echo "export SCCACHE_S3_USE_SSL=${SCCACHE_S3_USE_SSL:-false}"
+            echo "export SCCACHE_S3_KEY_PREFIX=${SCCACHE_S3_KEY_PREFIX:-veronex/}"
+            echo "export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+            echo "export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+            echo "export RUSTC_WRAPPER=sccache"
+            echo "export CARGO_INCREMENTAL=0"
+          } > /tmp/sccache.env
+
+      # Build 5 binaries in one pass (embed excluded — ort-sys requires glibc)
+      - name: Build and push all crate images
+        if: steps.check_image.outputs.exists != 'true'
+        run: |
+          TAG="${{ steps.meta.outputs.tag }}"
+
+          # First build: compiles everything (cached by sccache + BuildKit layers)
+          echo "::group::Building workspace (all crates)"
+          docker buildx build \
+            --file docker/Dockerfile.rust \
+            --target veronex \
+            --tag ${{ env.REGISTRY }}/beegy-labs/veronex:${TAG} \
+            --secret id=sccache_env,src=/tmp/sccache.env \
+            --push \
+            .
+          echo "::endgroup::"
+
+          # Remaining targets reuse the cached builder layer — near-instant
+          for CRATE in veronex-agent veronex-mcp veronex-consumer veronex-analytics; do
+            echo "::group::Pushing ${CRATE}"
+            docker buildx build \
+              --file docker/Dockerfile.rust \
+              --target ${CRATE} \
+              --tag ${{ env.REGISTRY }}/beegy-labs/${CRATE}:${TAG} \
+              --secret id=sccache_env,src=/tmp/sccache.env \
+              --push \
+              .
+            echo "::endgroup::"
+          done
+
+  deploy:
+    name: Update GitOps
+    needs: build
+    if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          repository: beegy-labs/platform-gitops
+          ref: develop
+          token: ${{ secrets.GH_PAT }}
+
+      - name: Update all image tags
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          case "${{ github.ref_name }}" in
+            main)    FILE="clusters/home/values/veronex-prod-values.yaml" ;;
+            develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
+            *)       exit 0 ;;
+          esac
+
+          # Update each crate's image tag
+          sed -i "/^api:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^agent:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^mcp:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^consumer:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+          sed -i "/^analytics:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(veronex): update all rust image tags to ${{ needs.build.outputs.tag }}"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
+
+  cleanup:
+    name: Cleanup Old Images
+    needs: build
+    if: github.ref_name == 'develop' || github.ref_name == 'main'
+    strategy:
+      matrix:
+        image: [veronex, veronex-agent, veronex-mcp, veronex-consumer, veronex-analytics]
+    uses: ./.github/workflows/cleanup-images.yml
+    with:
+      image_name: ${{ matrix.image }}
+      branch: ${{ github.ref_name }}
+      keep: 5
+    secrets:
+      GITEA_TOKEN: ${{ secrets.GITEA_TOKEN }}

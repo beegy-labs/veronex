@@ -1,10 +1,10 @@
 use axum::extract::{Path, Query, State};
+use tracing::Instrument;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::{JobId, ProviderId};
 use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
 
@@ -42,6 +42,8 @@ pub struct OllamaModelDto {
     pub is_vision: bool,
     /// Maximum context window across all providers (0 = not yet profiled).
     pub max_ctx: u32,
+    /// False if the model is disabled on all providers carrying it.
+    pub is_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -74,7 +76,7 @@ pub async fn list_models(
         .map_err(|e| { tracing::error!("ollama list_models: {e}"); super::error::AppError::Internal(e) })?;
     let dtos: Vec<OllamaModelDto> = page_result.items
         .into_iter()
-        .map(|m| OllamaModelDto { is_vision: is_vision_model(&m.model_name), model_name: m.model_name, provider_count: m.provider_count, max_ctx: m.max_ctx.max(0) as u32 })
+        .map(|m| OllamaModelDto { is_vision: is_vision_model(&m.model_name), model_name: m.model_name, provider_count: m.provider_count, max_ctx: m.max_ctx.max(0) as u32, is_enabled: m.is_enabled })
         .collect();
     Ok(Json(serde_json::json!({
         "models": dtos,
@@ -128,7 +130,7 @@ pub async fn sync_all_providers(
         Ok(all) => {
             let ollama: Vec<_> = all
                 .into_iter()
-                .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
+                .filter(|p| p.is_ollama())
                 .collect();
             ollama
         }
@@ -161,87 +163,90 @@ pub async fn sync_all_providers(
     let ollama_sync_job_repo = state.ollama_sync_job_repo.clone();
     let model_selection_repo = state.model_selection_repo.clone();
 
-    tokio::spawn(async move {
-        let client = http_client;
+    tokio::spawn(
+        async move {
+            let client = http_client;
 
-        for provider in providers {
-            let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
+            // Fan out per-provider sync concurrently — at fleet scale this turns
+            // an O(N) sequential pull into one wall-clock RTT bounded by the
+            // slowest provider.
+            futures::future::join_all(providers.into_iter().map(|provider| {
+                let client = client.clone();
+                let ollama_model_repo = ollama_model_repo.clone();
+                let model_selection_repo = model_selection_repo.clone();
+                let ollama_sync_job_repo = ollama_sync_job_repo.clone();
+                async move {
+                    let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
+                    let result = async {
+                        let json: serde_json::Value = client
+                            .get(&url)
+                            .send()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
+                            .error_for_status()
+                            .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
+                            .json()
+                            .await
+                            .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
 
-            let result = async {
-                let json: serde_json::Value = client
-                    .get(&url)
-                    .send()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
-                    .error_for_status()
-                    .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
-                    .json()
-                    .await
-                    .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
+                        let models: Vec<String> = json["models"]
+                            .as_array()
+                            .map_or(&[] as &[_], |v| v)
+                            .iter()
+                            .filter_map(|m| m["name"].as_str().map(String::from))
+                            .collect();
 
-                let models: Vec<String> = json["models"]
-                    .as_array()
-                    .map_or(&[] as &[_], |v| v)
-                    .iter()
-                    .filter_map(|m| m["name"].as_str().map(String::from))
-                    .collect();
+                        ollama_model_repo.sync_provider_models(provider.id, &models).await?;
+                        anyhow::Ok(models)
+                    }.await;
 
-                ollama_model_repo
-                    .sync_provider_models(provider.id, &models)
-                    .await?;
+                    let progress_entry = match result {
+                        Ok(models) => {
+                            if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
+                                tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
+                            }
+                            tracing::info!(
+                                provider_id = %provider.id,
+                                name = %provider.name,
+                                count = models.len(),
+                                "ollama provider synced"
+                            );
+                            serde_json::json!({
+                                "provider_id": provider.id,
+                                "name": provider.name,
+                                "models": models,
+                                "error": null
+                            })
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                provider_id = %provider.id,
+                                name = %provider.name,
+                                "ollama provider sync failed: {e}"
+                            );
+                            serde_json::json!({
+                                "provider_id": provider.id,
+                                "name": provider.name,
+                                "models": [],
+                                "error": "sync failed"
+                            })
+                        }
+                    };
 
-                anyhow::Ok(models)
-            }
-            .await;
-
-            let progress_entry = match result {
-                Ok(models) => {
-                    // Upsert model selections (is_enabled defaults to true for new rows).
-                    if let Err(e) = model_selection_repo.upsert_models(provider.id, &models).await {
-                        tracing::warn!(provider_id = %provider.id, "upsert model selections failed (non-fatal): {e}");
+                    if let Err(e) = ollama_sync_job_repo.update_progress(job_id, progress_entry).await {
+                        tracing::error!(%job_id, "failed to update sync job progress: {e}");
                     }
-                    tracing::info!(
-                        provider_id = %provider.id,
-                        name = %provider.name,
-                        count = models.len(),
-                        "ollama provider synced"
-                    );
-                    serde_json::json!({
-                        "provider_id": provider.id,
-                        "name": provider.name,
-                        "models": models,
-                        "error": null
-                    })
                 }
-                Err(e) => {
-                    tracing::warn!(
-                        provider_id = %provider.id,
-                        name = %provider.name,
-                        "ollama provider sync failed: {e}"
-                    );
-                    serde_json::json!({
-                        "provider_id": provider.id,
-                        "name": provider.name,
-                        "models": [],
-                        "error": "sync failed"
-                    })
-                }
-            };
+            })).await;
 
-            if let Err(e) = ollama_sync_job_repo
-                .update_progress(job_id, progress_entry)
-                .await
-            {
-                tracing::error!(%job_id, "failed to update sync job progress: {e}");
+            if let Err(e) = ollama_sync_job_repo.complete(job_id).await {
+                tracing::error!(%job_id, "failed to mark sync job completed: {e}");
             }
-        }
 
-        if let Err(e) = ollama_sync_job_repo.complete(job_id).await {
-            tracing::error!(%job_id, "failed to mark sync job completed: {e}");
+            tracing::info!(%job_id, "ollama global sync completed");
         }
-
-        tracing::info!(%job_id, "ollama global sync completed");
-    });
+        .instrument(tracing::info_span!("veronex.ollama_model_handlers.spawn")),
+    );
 
     emit_audit(&state, &claims, "trigger", "ollama_sync",
         &job_id.to_string(), "global",
@@ -310,7 +315,7 @@ pub async fn pull_model(
 
     // Verify provider exists and is Ollama
     let provider = match state.provider_registry.get(provider_id).await {
-        Ok(Some(p)) if p.provider_type == ProviderType::Ollama => p,
+        Ok(Some(p)) if p.is_ollama() => p,
         Ok(Some(_)) => {
             return (
                 StatusCode::BAD_REQUEST,
@@ -336,11 +341,14 @@ pub async fn pull_model(
     let base_url = provider.url.clone();
     let model_c = model.clone();
 
-    tokio::spawn(async move {
-        crate::infrastructure::outbound::ollama::preloader::pull_and_reset(
-            &client, &base_url, &model_c, provider_id, &vram_c,
-        ).await;
-    });
+    tokio::spawn(
+        async move {
+            crate::infrastructure::outbound::ollama::preloader::pull_and_reset(
+                &client, &base_url, &model_c, provider_id, &vram_c,
+            ).await;
+        }
+        .instrument(tracing::info_span!("veronex.ollama_model_handlers.spawn")),
+    );
 
     emit_audit(&state, &claims, "trigger", "ollama_pull",
         &provider_id.to_string(), &model,

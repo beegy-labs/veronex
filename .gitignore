@@ -47,8 +47,11 @@ minio-prod/
 mutants.out/
 mutants.out.old/
 
+# Claude Code local agent state (per-machine, not source)
+.claude/
+
 
 # E2E test fixture images — generated on first run, not committed (repo size)
-scripts/e2e/*.jpg
-scripts/e2e/*.jpeg
-scripts/e2e/*.png
+test/scripts/e2e/*.jpg
+test/scripts/e2e/*.jpeg
+test/scripts/e2e/*.png

@@ -50,43 +50,43 @@ export function GeminiStatusSyncSection() {
   const onlineCount = results.filter((r) => r.status === 'online').length
 
   return (
-    <div className="space-y-3">
-      <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
-        <RefreshCw className="h-4 w-4 text-accent-gpu" />
+    <div className="vds-space-y-3">
+      <h2 className="vds-text-base vds-font-600 vds-text-bright vds-flex vds-items-center vds-gap-2">
+        <RefreshCw className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
         {t('providers.gemini.statusSyncSection')}
       </h2>
 
       <Card>
-        <CardContent className="p-4 space-y-4">
-          <p className="text-sm text-muted-foreground">{t('providers.gemini.statusSyncDesc')}</p>
+        <CardContent className="vds-p-4 vds-space-y-4">
+          <p className="vds-text-sm vds-text-dim">{t('providers.gemini.statusSyncDesc')}</p>
 
-          <div className="flex items-center gap-3">
-            <Button size="sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="gap-1.5">
-              <RefreshCw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+          <div className="vds-flex vds-items-center vds-gap-3">
+            <Button size="sm" onClick={() => syncMutation.mutate()} disabled={syncMutation.isPending} className="vds-gap-1.5">
+              <RefreshCw className={syncMutation.isPending ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
               {syncMutation.isPending ? t('providers.gemini.syncingStatus') : t('providers.gemini.syncStatus')}
             </Button>
             {syncMutation.isSuccess && !syncMutation.isPending && (
-              <span className="text-xs text-status-success-fg">
+              <span className="vds-text-xs vds-text-success">
                 ✓ {t('providers.gemini.statusSyncDone')} — {onlineCount}/{results.length} {t('common.online').toLowerCase()}
               </span>
             )}
           </div>
 
           {syncMutation.isSuccess && results.length === 0 && (
-            <p className="text-xs text-muted-foreground italic">{t('providers.gemini.noStatusResults')}</p>
+            <p className="vds-text-xs vds-text-dim vds-italic">{t('providers.gemini.noStatusResults')}</p>
           )}
 
           {results.length > 0 && (
-            <div className="divide-y divide-border rounded-md border border-border overflow-hidden">
+            <div className="vds-divide-y vds-divide-border vds-rounded-md vds-border-1 vds-border-subtle vds-overflow-hidden">
               {results.map((r) => (
-                <div key={r.id} className="flex items-center gap-3 px-3 py-2.5">
+                <div key={r.id} className="vds-flex vds-items-center vds-gap-3 vds-px-3 vds-py-2.5">
                   <span className={statusDotCls(r.status)} />
-                  <span className="font-medium text-sm text-text-bright flex-1 truncate">{r.name}</span>
-                  <span className={`text-xs font-medium ${statusResultCls(r.status)}`}>
+                  <span className="vds-font-500 vds-text-sm vds-text-bright vds-flex-1 vds-truncate">{r.name}</span>
+                  <span className={`vds-text-xs vds-font-500 ${statusResultCls(r.status)}`}>
                     {statusResultLabel(r.status, t)}
                   </span>
                   {r.error && (
-                    <span className="text-xs text-status-error-fg truncate max-w-[160px]" title={r.error}>
+                    <span className="vds-text-xs vds-text-error vds-truncate vds-max-w-[160px]" title={r.error}>
                       {r.error}
                     </span>
                   )}
@@ -156,49 +156,49 @@ export function GeminiSyncSection() {
   const hasContent = !!globalDefault || models.length > 0
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
       <div>
-        <h2 className="text-base font-semibold text-text-bright flex items-center gap-2">
-          <RotateCcw className="h-4 w-4 text-accent-gpu" />
+        <h2 className="vds-text-base vds-font-600 vds-text-bright vds-flex vds-items-center vds-gap-2">
+          <RotateCcw className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
           {t('providers.gemini.syncSection')}
         </h2>
-        <p className="text-sm text-muted-foreground mt-0.5">{t('providers.gemini.syncSectionDesc')}</p>
+        <p className="vds-text-sm vds-text-dim vds-mt-0.5">{t('providers.gemini.syncSectionDesc')}</p>
       </div>
 
       <Card>
-        <CardContent className="p-4 space-y-4">
-          <div className="flex items-center justify-between gap-4">
-            <div className="min-w-0">
-              <p className="text-sm font-medium">{t('providers.gemini.syncKey')}</p>
-              <p className="font-mono text-xs text-muted-foreground mt-0.5 truncate">
-                {syncConfig?.api_key_masked ?? <span className="italic">{t('providers.gemini.noSyncKey')}</span>}
+        <CardContent className="vds-p-4 vds-space-y-4">
+          <div className="vds-flex vds-items-center vds-justify-between vds-gap-4">
+            <div className="vds-min-w-0">
+              <p className="vds-text-sm vds-font-500">{t('providers.gemini.syncKey')}</p>
+              <p className="vds-font-mono vds-text-xs vds-text-dim vds-mt-0.5 vds-truncate">
+                {syncConfig?.api_key_masked ?? <span className="vds-italic">{t('providers.gemini.noSyncKey')}</span>}
               </p>
             </div>
-            <Button size="sm" variant="outline" onClick={() => setShowSetKey(true)} className="shrink-0">
+            <Button size="sm" variant="outline" onClick={() => setShowSetKey(true)} className="vds-flex-shrink-0">
               {syncConfig?.api_key_masked ? t('common.edit') : t('providers.gemini.setSyncKey')}
             </Button>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="vds-flex vds-items-center vds-gap-3 vds-flex-wrap">
             <Button size="sm" onClick={() => syncMutation.mutate()}
               disabled={syncMutation.isPending || !syncConfig?.api_key_masked}
-              className="gap-1.5">
-              <RotateCcw className={syncMutation.isPending ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              className="vds-gap-1.5">
+              <RotateCcw className={syncMutation.isPending ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
               {syncMutation.isPending ? t('common.syncing') : t('providers.gemini.syncNow')}
             </Button>
             <Button size="sm" variant="outline" onClick={refreshGeminiData}
               disabled={isRefreshing || syncMutation.isPending}
-              className="gap-1.5">
-              <RefreshCw className={isRefreshing ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+              className="vds-gap-1.5">
+              <RefreshCw className={isRefreshing ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
               {t('common.refresh')}
             </Button>
             {lastSynced && (
-              <span className="text-xs text-muted-foreground">
+              <span className="vds-text-xs vds-text-dim">
                 {t('providers.gemini.lastSynced')}: {lastSynced}
               </span>
             )}
             {syncMutation.data && (
-              <span className="text-xs text-status-success-fg">
+              <span className="vds-text-xs vds-text-success">
                 ✓ {syncMutation.data.count} {t('providers.gemini.globalModels').toLowerCase()}
               </span>
             )}
@@ -206,25 +206,25 @@ export function GeminiSyncSection() {
         </CardContent>
       </Card>
 
-      <div className="space-y-3">
-        <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-accent-gpu" />
-          <h3 className="text-sm font-semibold text-text-bright">{t('providers.gemini.rateLimitPolicies')}</h3>
+      <div className="vds-space-y-3">
+        <div className="vds-flex vds-items-center vds-gap-2">
+          <ShieldCheck className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
+          <h3 className="vds-text-sm vds-font-600 vds-text-bright">{t('providers.gemini.rateLimitPolicies')}</h3>
         </div>
-        <p className="text-sm text-muted-foreground">
+        <p className="vds-text-sm vds-text-dim">
           {t('providers.gemini.rateLimitDesc')}
           {' '}{t('providers.gemini.globalFallbackHint')}
         </p>
 
         {tableLoading && (
-          <div className="flex h-16 items-center justify-center text-muted-foreground text-sm animate-pulse">
+          <div className="vds-flex vds-h-16 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
             {t('common.loading')}
           </div>
         )}
 
         {!tableLoading && !hasContent && (
-          <Card className="border-dashed">
-            <CardContent className="p-6 text-center text-muted-foreground text-sm">
+          <Card className="vds-border-dashed">
+            <CardContent className="vds-p-6 vds-text-center vds-text-dim vds-text-sm">
               {t('providers.gemini.noGlobalModels')}
             </CardContent>
           </Card>
@@ -233,13 +233,13 @@ export function GeminiSyncSection() {
         {!tableLoading && hasContent && (
           <DataTable minWidth="600px">
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow className="vds-hover:bg-transparent">
                 <TableHead>{t('providers.gemini.model')}</TableHead>
-                <TableHead className="w-36">{t('providers.gemini.onFreeTier')}</TableHead>
-                <TableHead className="w-24 text-right">{t('providers.gemini.rpm')}</TableHead>
-                <TableHead className="w-24 text-right">{t('providers.gemini.rpd')}</TableHead>
-                <TableHead className="w-40">{t('providers.gemini.lastUpdated')}</TableHead>
-                <TableHead className="text-right w-20">{t('common.edit')}</TableHead>
+                <TableHead className="vds-w-36">{t('providers.gemini.onFreeTier')}</TableHead>
+                <TableHead className="vds-w-24 vds-text-right">{t('providers.gemini.rpm')}</TableHead>
+                <TableHead className="vds-w-24 vds-text-right">{t('providers.gemini.rpd')}</TableHead>
+                <TableHead className="vds-w-40">{t('providers.gemini.lastUpdated')}</TableHead>
+                <TableHead className="vds-text-right vds-w-20">{t('common.edit')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -248,43 +248,43 @@ export function GeminiSyncSection() {
                 const isInherited = !specific
                 const displayPolicy = specific ?? globalDefault
                 return (
-                  <TableRow key={m.model_name} className={isInherited ? 'opacity-60' : ''}>
+                  <TableRow key={m.model_name} className={isInherited ? 'vds-opacity-60' : ''}>
                     <TableCell>
-                      <span className="font-mono text-sm text-text-bright">{m.model_name}</span>
+                      <span className="vds-font-mono vds-text-sm vds-text-bright">{m.model_name}</span>
                     </TableCell>
                     <TableCell>
                       {isInherited ? (
-                        <span className="text-xs text-muted-foreground italic">{t('providers.gemini.globalDefault')}</span>
+                        <span className="vds-text-xs vds-text-dim vds-italic">{t('providers.gemini.globalDefault')}</span>
                       ) : displayPolicy?.available_on_free_tier ? (
-                        <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-1.5 py-0">
+                        <Badge variant="outline" className="vds-bg-warning/15 vds-text-warning vds-border-warning/30 vds-text-[10px] vds-px-1.5 vds-py-0">
                           {t('providers.gemini.enabled')}
                         </Badge>
                       ) : (
-                        <Badge variant="outline" className="bg-surface-code text-muted-foreground/70 border-border text-[10px] px-1.5 py-0">
+                        <Badge variant="outline" className="vds-bg-surface-code vds-text-dim/70 vds-border-subtle vds-text-[10px] vds-px-1.5 vds-py-0">
                           {t('providers.gemini.paidOnly')}
                         </Badge>
                       )}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums font-mono text-sm">
+                    <TableCell className="vds-text-right vds-tabular-nums vds-font-mono vds-text-sm">
                       {displayPolicy && displayPolicy.rpm_limit > 0
-                        ? <span className={isInherited ? 'text-text-faint' : ''}>{displayPolicy.rpm_limit}</span>
-                        : <span className="text-text-faint">—</span>}
+                        ? <span className={isInherited ? 'vds-text-faint' : ''}>{displayPolicy.rpm_limit}</span>
+                        : <span className="vds-text-faint">—</span>}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums font-mono text-sm">
+                    <TableCell className="vds-text-right vds-tabular-nums vds-font-mono vds-text-sm">
                       {displayPolicy && displayPolicy.rpd_limit > 0
-                        ? <span className={isInherited ? 'text-text-faint' : ''}>{displayPolicy.rpd_limit}</span>
-                        : <span className="text-text-faint">—</span>}
+                        ? <span className={isInherited ? 'vds-text-faint' : ''}>{displayPolicy.rpd_limit}</span>
+                        : <span className="vds-text-faint">—</span>}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
-                      {specific?.updated_at ? fmtDateOnly(specific.updated_at, tz) : <span className="text-text-faint">—</span>}
+                    <TableCell className="vds-text-xs vds-text-dim">
+                      {specific?.updated_at ? fmtDateOnly(specific.updated_at, tz) : <span className="vds-text-faint">—</span>}
                     </TableCell>
-                    <TableCell className="text-right">
+                    <TableCell className="vds-text-right">
                       <Button variant="ghost" size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-status-info-fg hover:bg-status-info/10"
+                        className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-info vds-hover:bg-info/10"
                         aria-label={t('providers.gemini.editPolicyTitle')}
                         onClick={() => setEditingPolicy(makeEditablePolicy(m.model_name))}
                         title={t('providers.gemini.editPolicyTitle')}>
-                        <Pencil className="h-4 w-4" />
+                        <Pencil className="vds-h-4 vds-w-4" />
                       </Button>
                     </TableCell>
                   </TableRow>

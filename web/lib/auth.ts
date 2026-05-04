@@ -5,7 +5,6 @@ const USERNAME_KEY     = 'veronex_username'
 const ROLE_KEY         = 'veronex_role'
 const ACCOUNT_ID_KEY   = 'veronex_account_id'
 const PERMISSIONS_KEY  = 'veronex_permissions'
-const MENUS_KEY        = 'veronex_menus'
 
 // ── Cookie helpers (same pattern as timezone-provider.tsx) ─────────────────
 
@@ -38,7 +37,8 @@ export function setSession(resp: LoginResponse): void {
   writeCookie(ROLE_KEY,        resp.role)
   writeCookie(ACCOUNT_ID_KEY,  resp.account_id)
   writeCookie(PERMISSIONS_KEY, JSON.stringify(resp.permissions ?? []))
-  writeCookie(MENUS_KEY,       JSON.stringify(resp.menus ?? []))
+  // Best-effort: clear stale legacy menus cookie from older sessions.
+  deleteCookie('veronex_menus')
 }
 
 /**
@@ -53,7 +53,7 @@ export function clearSession(): void {
   deleteCookie(ROLE_KEY)
   deleteCookie(ACCOUNT_ID_KEY)
   deleteCookie(PERMISSIONS_KEY)
-  deleteCookie(MENUS_KEY)
+  deleteCookie('veronex_menus') // legacy
 }
 
 export function getAuthUser(): {
@@ -61,7 +61,6 @@ export function getAuthUser(): {
   role: string
   accountId: string
   permissions: string[]
-  menus: string[]
 } | null {
   if (!isLoggedIn()) return null
   const username  = readCookie(USERNAME_KEY)
@@ -70,15 +69,11 @@ export function getAuthUser(): {
   if (!username || !role || !accountId) return null
 
   let permissions: string[] = []
-  let menus: string[] = []
   try {
     permissions = JSON.parse(readCookie(PERMISSIONS_KEY) ?? '[]')
   } catch { /* empty */ }
-  try {
-    menus = JSON.parse(readCookie(MENUS_KEY) ?? '[]')
-  } catch { /* empty */ }
 
-  return { username, role, accountId, permissions, menus }
+  return { username, role, accountId, permissions }
 }
 
 /**
@@ -98,12 +93,4 @@ export function hasPermission(perm: string): boolean {
   if (!user) return false
   if (user.role === 'super') return true
   return user.permissions.includes(perm)
-}
-
-/** Check if the current user has access to a specific menu. Super role has all menus. */
-export function hasMenu(menuId: string): boolean {
-  const user = getAuthUser()
-  if (!user) return false
-  if (user.role === 'super') return true
-  return user.menus.includes(menuId)
 }

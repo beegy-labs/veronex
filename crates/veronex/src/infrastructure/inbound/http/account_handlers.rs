@@ -65,7 +65,6 @@ pub struct AccountSummary {
     pub roles: Vec<RoleInfo>,
     pub role_name: String,
     pub permissions: Vec<String>,
-    pub menus: Vec<String>,
     pub department: Option<String>,
     pub position: Option<String>,
     pub is_active: bool,
@@ -90,8 +89,8 @@ pub struct ResetLinkResponse {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, AppError> {
-    let role_rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, Vec<String>, bool)>(
-        "SELECT r.id, r.name, r.permissions, r.menus, r.is_system
+    let role_rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, bool)>(
+        "SELECT r.id, r.name, r.permissions, r.is_system
          FROM roles r
          JOIN account_roles ar ON ar.role_id = r.id
          WHERE ar.account_id = $1
@@ -103,20 +102,17 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
     .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
 
     let mut all_perms = std::collections::BTreeSet::new();
-    let mut all_menus = std::collections::BTreeSet::new();
     let mut is_super = false;
     let mut roles = Vec::new();
 
-    for (id, name, perms, menus, is_system) in &role_rows {
+    for (id, name, perms, is_system) in &role_rows {
         if *is_system && name == "super" { is_super = true; }
         roles.push(RoleInfo { id: RoleId::from_uuid(*id), name: name.clone() });
         for p in perms { all_perms.insert(p.clone()); }
-        for m in menus { all_menus.insert(m.clone()); }
     }
 
     if is_super {
         all_perms = crate::domain::enums::ALL_PERMISSIONS.iter().map(|s| s.to_string()).collect();
-        all_menus = crate::domain::enums::ALL_MENUS.iter().map(|s| s.to_string()).collect();
     }
 
     let role_name = if is_super {
@@ -133,7 +129,6 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
         roles,
         role_name,
         permissions: all_perms.into_iter().collect(),
-        menus: all_menus.into_iter().collect(),
         department: a.department,
         position: a.position,
         is_active: a.is_active,
@@ -161,10 +156,10 @@ pub async fn list_accounts(
         .list_page(&search, limit, offset)
         .await?;
 
-    let mut result = Vec::with_capacity(accounts.len());
-    for a in accounts {
-        result.push(to_summary(a, &state.pg_pool).await?);
-    }
+    // Concurrent per-account role fetch — turns N round-trips into one wall-clock RTT.
+    let result: Vec<AccountSummary> = futures::future::try_join_all(
+        accounts.into_iter().map(|a| to_summary(a, &state.pg_pool)),
+    ).await?;
 
     Ok(Json(serde_json::json!({
         "accounts": result,
@@ -453,10 +448,11 @@ pub async fn revoke_all_account_sessions(
         .list_active(&aid.0)
         .await?;
     state.session_repo.revoke_all_for_account(&aid.0).await?;
-    // Add each JTI to the Valkey blocklist so JWTs are rejected immediately.
-    for session in &sessions {
-        super::auth_handlers::revoke_jti(&state, session.jti, session.expires_at).await;
-    }
+    // Add each JTI to the Valkey blocklist so JWTs are rejected immediately —
+    // concurrent fan-out (each revoke is independent fire-and-forget).
+    futures::future::join_all(
+        sessions.iter().map(|s| super::auth_handlers::revoke_jti(&state, s.jti, s.expires_at)),
+    ).await;
     emit_audit(&state, &claims, "delete", "session", &aid.to_string(), &format!("all_sessions:{aid}"),
         &format!("All active sessions for account {} force-revoked by admin ({} session(s) blocklisted)", aid, sessions.len())).await;
     Ok(StatusCode::NO_CONTENT)
@@ -481,7 +477,7 @@ pub async fn create_reset_link(
     if let Some(ref pool) = state.valkey_pool {
         use fred::prelude::*;
         let key = valkey_keys::password_reset(&token);
-        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(24 * 3600)), None, false)
+        pool.set(key, aid.0.to_string(), Some(fred::types::Expiration::EX(crate::domain::constants::PASSWORD_RESET_TTL_SECS)), None, false)
             .await
             .unwrap_or_else(|e| tracing::warn!(error = %e, account_id = %aid, "create_reset_link: Valkey SET failed"));
     }

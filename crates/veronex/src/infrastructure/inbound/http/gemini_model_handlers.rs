@@ -3,6 +3,7 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::{DateTime, Utc};
+use tracing::instrument;
 use serde::{Deserialize, Serialize};
 
 use crate::domain::enums::ProviderType;
@@ -45,6 +46,7 @@ pub struct SyncModelsResponse {
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
 /// `GET /v1/gemini/sync-config` — return the masked admin API key (or null).
+#[instrument(skip(state), name = "GET /v1/gemini/sync-config")]
 pub async fn get_sync_config(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<SyncConfigResponse>> {
     let key = state.gemini_sync_config_repo.get_api_key().await.map_err(db_error)?;
     let masked = key.as_deref().map(gemini_helpers::mask_api_key);
@@ -52,6 +54,7 @@ pub async fn get_sync_config(RequireProviderManage(_claims): RequireProviderMana
 }
 
 /// `PUT /v1/gemini/sync-config` — store (or replace) the admin API key.
+#[instrument(skip_all, name = "PUT /v1/gemini/sync-config")]
 pub async fn set_sync_config(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -71,6 +74,7 @@ pub async fn set_sync_config(
 /// `POST /v1/gemini/models/sync` — fetch the global Gemini model list and persist it.
 ///
 /// Uses the stored admin API key. Returns `400` if no key is configured.
+#[instrument(skip(state), name = "POST /v1/gemini/sync-models")]
 pub async fn sync_models(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -121,31 +125,33 @@ pub struct GeminiSyncStatusResponse {
 ///
 /// Runs synchronously (fast — just one lightweight API call per provider).
 /// Returns the updated status for each provider.
+#[instrument(skip(state), name = "GET /v1/gemini/sync-status")]
 pub async fn sync_status(RequireProviderManage(claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<Json<GeminiSyncStatusResponse>> {
     let providers = state.provider_registry.list_all().await.map_err(db_error)?;
 
     let gemini_active: Vec<_> = providers
         .into_iter()
-        .filter(|p| p.is_active && matches!(p.provider_type, ProviderType::Gemini))
+        .filter(|p| matches!(p.provider_type, ProviderType::Gemini))
         .collect();
 
-    let mut results = Vec::with_capacity(gemini_active.len());
-
-    for provider in gemini_active {
-        let new_status = check_provider(&state.http_client, &provider).await;
-        let status_str = new_status.as_str().to_string();
-
-        if let Err(e) = state.provider_registry.update_status(provider.id, new_status).await {
-            tracing::warn!(provider_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
-        }
-
-        results.push(GeminiStatusResult {
-            id: ProviderId::from_uuid(provider.id),
-            name: provider.name,
-            status: status_str,
-            error: None,
-        });
-    }
+    // Probe + persist every Gemini provider concurrently — wall-clock = max(per-provider).
+    let http = &state.http_client;
+    let registry = &state.provider_registry;
+    let results: Vec<GeminiStatusResult> = futures::future::join_all(
+        gemini_active.into_iter().map(|provider| async move {
+            let new_status = check_provider(http, &provider).await;
+            let status_str = new_status.as_str().to_string();
+            if let Err(e) = registry.update_status(provider.id, new_status).await {
+                tracing::warn!(provider_id = %provider.id, "gemini sync_status: failed to persist status: {e}");
+            }
+            GeminiStatusResult {
+                id: ProviderId::from_uuid(provider.id),
+                name: provider.name,
+                status: status_str,
+                error: None,
+            }
+        }),
+    ).await;
 
     tracing::info!(count = results.len(), "gemini status sync completed");
 
@@ -160,6 +166,7 @@ pub async fn sync_status(RequireProviderManage(claims): RequireProviderManage, S
 }
 
 /// `GET /v1/gemini/models` — list the global Gemini model pool.
+#[instrument(skip(state), name = "GET /v1/gemini/models")]
 pub async fn list_models(RequireProviderManage(_claims): RequireProviderManage, State(state): State<AppState>) -> HandlerResult<impl IntoResponse> {
     let rows = state.gemini_model_repo.list().await.map_err(db_error)?;
     let dtos: Vec<GeminiModelDto> = rows

@@ -10,7 +10,6 @@ import type { Provider } from '@/lib/types'
 import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { PROVIDER_OLLAMA } from '@/lib/constants'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EditModal, RegisterModal } from './components/modals'
 import { OllamaTab } from './components/ollama-tab'
@@ -42,16 +41,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
   const deleteMutation = useApiMutation(
     (id: string) => api.deleteProvider(id),
-    { invalidateKey: ['providers'] },
-  )
-
-  const toggleActiveMutation = useApiMutation(
-    (b: Provider) => api.updateProvider(b.id, {
-      name: b.name,
-      is_active: !b.is_active,
-      ...(b.provider_type === PROVIDER_OLLAMA && { url: b.url, total_vram_mb: b.total_vram_mb, gpu_index: b.gpu_index, server_id: b.server_id }),
-    }),
-    { invalidateKey: ['providers'] },
+    { invalidateKey: ['providers'], onSuccess: () => setDeleteTarget(null) },
   )
 
   const syncProviderMutation = useMutation({
@@ -67,12 +57,12 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   })
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       <div>
-        <h1 className="text-2xl font-bold tracking-tight">
+        <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">
           {section === 'gemini' ? t('providers.gemini.title') : t('providers.ollama.title')}
         </h1>
-        <p className="text-muted-foreground mt-1 text-sm">
+        <p className="vds-text-dim vds-mt-1 vds-text-sm">
           {section === 'gemini' ? t('providers.gemini.description') : t('providers.ollama.description')}
         </p>
       </div>
@@ -99,8 +89,6 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
           onEdit={(b) => setEditingProvider(b)}
           onSync={(id) => syncProviderMutation.mutate(id)}
           syncPending={syncProviderMutation.isPending}
-          onToggleActive={(b) => toggleActiveMutation.mutate(b)}
-          toggleActivePending={toggleActiveMutation.isPending}
           onDelete={(id, name) => setDeleteTarget({ id, name })}
           deleteIsPending={deleteMutation.isPending}
         />
@@ -142,10 +130,10 @@ function ProvidersSectionReader() {
 }
 
 export default function ProvidersPage() {
-  usePageGuard('providers')
+  usePageGuard('provider_manage')
   const { t } = useTranslation()
   return (
-    <Suspense fallback={<div className="p-2 text-sm text-muted-foreground">{t('common.loading')}</div>}>
+    <Suspense fallback={<div className="vds-p-2 vds-text-sm vds-text-dim">{t('common.loading')}</div>}>
       <ProvidersSectionReader />
     </Suspense>
   )

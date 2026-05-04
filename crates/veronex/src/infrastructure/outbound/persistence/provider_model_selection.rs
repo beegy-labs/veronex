@@ -99,4 +99,17 @@ impl ProviderModelSelectionRepository for PostgresProviderModelSelectionReposito
 
         Ok(rows.into_iter().map(|r| r.model_name).collect())
     }
+
+    async fn list_disabled(&self, provider_id: Uuid) -> Result<Vec<String>> {
+        let rows: Vec<String> = sqlx::query_scalar(
+            "SELECT model_name FROM provider_selected_models \
+             WHERE provider_id = $1 AND is_enabled = false \
+             ORDER BY model_name ASC",
+        )
+        .bind(provider_id)
+        .fetch_all(&self.pool)
+        .await?;
+
+        Ok(rows)
+    }
 }

@@ -1,0 +1,112 @@
+/* @verobee/design — themes/veronex.css */
+/* Theme: veronex. light-dark() collapsed; mode toggled via :root color-scheme. */
+/* Architecture: docs/llm/build/optimization.md § Technique 4. */
+
+/*
+ * NOTE (veronex/web cascade fix): verodesign's @property declarations register
+ * every `--vds-theme-*` with `inherits: false`. That means descendants of
+ * `<html>` do NOT inherit the token values — they fall back to the @property
+ * initial-value (verodesign default light palette). Toggling `data-mode` on
+ * `<html>` correctly flips the var on `:root`, but `<body>`, cards, buttons,
+ * etc. keep showing the static initial value, so dark mode never visually
+ * applies.
+ *
+ * The original selector `[data-theme="veronex"]` only matches `<html>`. We
+ * append `[data-theme="veronex"] *` so the same tokens are re-declared on
+ * every descendant element. Each descendant resolves `light-dark(...)` via
+ * the inherited `color-scheme` (and inherited `--lightningcss-light` /
+ * `--lightningcss-dark` control vars set on `:root` by full.css), so toggling
+ * `data-mode` propagates to the entire DOM.
+ *
+ * KEEP IN SYNC with `verodesign/.../themes/veronex.css` if upstream tokens
+ * change. The file is a copy with this one selector edit.
+ */
+
+@layer vds-tokens {
+  [data-theme="veronex"],
+  [data-theme="veronex"] * {
+  /* Premium-neutral dark tuning (2026-05-03 v3, "Linear/Vercel" aesthetic):
+   *  - Pure neutral dark (chroma ≤ 0.005). The previous indigo-tinted attempt
+   *    read as "colored" rather than "premium" — high-end dark UIs (Linear,
+   *    Vercel, native macOS) keep the surface achromatic and let accent colors
+   *    do the work.
+   *  - Page bg deepened to L7 (near-black but not pure #000 — avoids halation
+   *    per Bartlett 2017 while looking sophisticated).
+   *  - Card lifted to L11 (~4% L gap from page) — barely-perceptible elevation
+   *    is the hallmark of the look. With near-zero chroma the eye reads it as
+   *    "depth" not "color shift".
+   *  - Accent saturation kept HIGH (success/warning/error/primary) so those
+   *    colors POP against the neutral surface — that contrast is what makes
+   *    the design feel intentional and luxurious.
+   *  - Light mode unchanged (already premium-feeling with green-tinted page).
+   */
+  /* v5 — user-specified card color #101412 (green-tinted dark, hsl 150,11,7).
+   * Matches the Verde Nexus brand hue family rather than blue/slate. The
+   * sidebar uses `vds-bg-card` so this single token controls both card and
+   * menu surface. Page sits one step darker; elevated/hover/muted step up
+   * toward lighter surfaces in the same green-grey ramp. */
+  --vds-theme-bg-page: light-dark(oklch(96% 0.004 150), #080a09);
+  --vds-theme-bg-card: light-dark(oklch(100% 0 0), #101412);
+  --vds-theme-bg-elevated: light-dark(oklch(100% 0 0), #161a18);
+  --vds-theme-bg-hover: light-dark(oklch(93% 0.008 150), #1a1e1c);
+  --vds-theme-bg-muted: light-dark(oklch(89% 0.01 150), #1f2321);
+  --vds-theme-bg-inverse: light-dark(#101412, oklch(96% 0.004 150));
+  --vds-theme-bg-code: light-dark(oklch(93% 0.008 150), #1a1e1c);
+  /* Text-color tuning (2026-05-03 v6 — readability pass):
+   * Dim labels were oklch(62%) → ~5:1 against #101412 card, within WCAG AA
+   * but reads as "tired/grey". Bumping the secondary/dim/faint ramp ~10pp
+   * each so captions and labels are clearly legible without blasting pure
+   * white (which causes halation per Bartlett 2017). Slight green chroma
+   * (0.005-0.008 hue 150°) keeps text family-aligned with Verde Nexus and
+   * reads softer than achromatic gray. */
+  --vds-theme-text-primary: light-dark(oklch(15% 0.012 240), oklch(96% 0.005 150));
+  --vds-theme-text-secondary: light-dark(oklch(32% 0.018 240), oklch(86% 0.006 150));
+  --vds-theme-text-dim: light-dark(oklch(48% 0.02 240), oklch(74% 0.007 150));
+  --vds-theme-text-faint: light-dark(oklch(65% 0.015 240), oklch(60% 0.008 150));
+  --vds-theme-text-bright: light-dark(oklch(8% 0.008 240), oklch(99% 0.003 150));
+  --vds-theme-text-inverse: light-dark(oklch(96% 0.004 150), oklch(15% 0.012 240));
+  --vds-theme-border-subtle: light-dark(oklch(88% 0.008 150), #1c2120);
+  --vds-theme-border-default: light-dark(oklch(76% 0.012 150), #2a302d);
+  --vds-theme-border-strong: light-dark(oklch(48% 0.02 240), #4a5350);
+  --vds-theme-border-focus: light-dark(oklch(40% 0.1 150), oklch(72% 0.16 165));
+  --vds-theme-primary: light-dark(oklch(30% 0.06 150), oklch(72% 0.16 165));
+  --vds-theme-primary-fg: light-dark(oklch(100% 0 0), oklch(15% 0.04 150));
+  --vds-theme-primary-ring: light-dark(oklch(40% 0.1 150), oklch(82% 0.12 165));
+  --vds-theme-accent: light-dark(oklch(50% 0.152 180), oklch(70% 0.136 180));
+  --vds-theme-accent-fg: light-dark(oklch(100% 0 0), oklch(5% 0.005 240));
+  /* Status colors are mode-aware after the card luminance shift —
+   * a single OKLCH value can't satisfy WCAG AA on both light card (L100)
+   * and dark card (L18). Light mode darkens for ≥4.5:1, dark mode lightens. */
+  --vds-theme-destructive: light-dark(oklch(48% 0.2 25), oklch(72% 0.2 25));
+  --vds-theme-destructive-fg: light-dark(oklch(100% 0 0), oklch(15% 0.04 25));
+  --vds-theme-success: light-dark(oklch(45% 0.171 145), oklch(74% 0.18 145));
+  --vds-theme-success-fg: light-dark(oklch(100% 0 0), oklch(15% 0.04 145));
+  --vds-theme-warning: light-dark(oklch(52% 0.18 70), oklch(78% 0.175 70));
+  --vds-theme-warning-fg: light-dark(oklch(100% 0 0), oklch(15% 0.04 70));
+  --vds-theme-error: light-dark(oklch(48% 0.2 25), oklch(72% 0.2 25));
+  --vds-theme-error-fg: light-dark(oklch(100% 0 0), oklch(15% 0.04 25));
+  --vds-theme-info: light-dark(oklch(30% 0.06 150), oklch(72% 0.16 165));
+  --vds-theme-info-fg: light-dark(oklch(100% 0 0), oklch(15% 0.04 150));
+  --vds-theme-neutral: light-dark(oklch(50% 0.02 240), oklch(60% 0.018 240));
+  --vds-theme-neutral-fg: oklch(100% 0 0);
+  --vds-theme-chart-1: light-dark(oklch(30% 0.06 150), oklch(72% 0.16 165));
+  --vds-theme-chart-2: light-dark(oklch(60% 0.16 180), oklch(70% 0.136 180));
+  --vds-theme-chart-3: light-dark(oklch(60% 0.18 130), oklch(70% 0.153 130));
+  --vds-theme-chart-4: light-dark(oklch(60% 0.18 70), oklch(70% 0.153 70));
+  --vds-theme-chart-5: light-dark(oklch(60% 0.21 275), oklch(70% 0.179 275));
+  --vds-theme-success-bg: light-dark(oklch(95% 0.018 145), oklch(20% 0.09 145));
+  --vds-theme-error-bg: light-dark(oklch(95% 0.018 25), oklch(20% 0.105 25));
+  --vds-theme-warning-bg: light-dark(oklch(95% 0.018 70), oklch(20% 0.09 70));
+  --vds-theme-info-bg: light-dark(oklch(95% 0.018 250), oklch(20% 0.05 165));
+  --vds-theme-neutral-bg: light-dark(oklch(95% 0.005 240), oklch(20% 0.015 240));
+  --vds-theme-cancelled: light-dark(oklch(50% 0.02 240), oklch(40% 0.02 240));
+  --vds-theme-cancelled-fg: light-dark(oklch(100% 0 0), oklch(98% 0.003 240));
+  --vds-theme-accent-2: light-dark(oklch(45% 0.16 60), oklch(65% 0.16 60));
+  --vds-theme-accent-2-fg: light-dark(oklch(100% 0 0), oklch(5% 0.005 240));
+  --vds-theme-accent-3: light-dark(oklch(50% 0.16 195), oklch(70% 0.14 195));
+  --vds-theme-accent-3-fg: light-dark(oklch(100% 0 0), oklch(5% 0.005 240));
+  --vds-theme-logo-start: light-dark(oklch(30% 0.06 150), oklch(72% 0.16 165));
+  --vds-theme-logo-end: light-dark(oklch(60% 0.16 180), oklch(70% 0.136 180));
+  --vds-theme-logo-inner: light-dark(oklch(100% 0 0), oklch(5% 0.005 240));
+  }
+}

@@ -18,8 +18,7 @@ use uuid::Uuid;
 use super::enums::{
     ApiFormat, FinishReason, JobSource, JobStatus, LlmProviderStatus, ProviderType,
 };
-use super::value_objects::{JobId, ModelName, Prompt};
-use crate::application::ports::outbound::message_store::VisionAnalysis;
+use super::value_objects::{JobId, ModelName, Prompt, VisionAnalysis};
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
@@ -216,7 +215,6 @@ pub struct LlmProvider {
     pub provider_type: ProviderType,
     pub url: String,
     pub api_key_encrypted: Option<String>,
-    pub is_active: bool,
     /// GPU VRAM capacity in MiB (manual). 0 = unknown → treat as unlimited for dispatch.
     pub total_vram_mb: i64,
     /// GPU index on this host (0-based). Correlates with node-exporter drm/hwmon metrics.
@@ -236,6 +234,19 @@ pub struct LlmProvider {
     pub num_parallel: i16,
     pub status: LlmProviderStatus,
     pub registered_at: DateTime<Utc>,
+}
+
+impl LlmProvider {
+    /// True for Ollama-typed providers. Used by handlers and helpers that
+    /// filter the registry list to local GPU hosts (vs. Gemini cloud).
+    pub fn is_ollama(&self) -> bool {
+        self.provider_type == ProviderType::Ollama
+    }
+
+    /// True for Gemini-typed providers (cloud).
+    pub fn is_gemini(&self) -> bool {
+        self.provider_type == ProviderType::Gemini
+    }
 }
 
 fn default_num_parallel() -> i16 {
@@ -320,7 +331,6 @@ mod tests {
             provider_type: ProviderType::Ollama,
             url: "http://localhost:11434".to_string(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb: 24576,
             gpu_index: None,
             server_id: None,
@@ -365,7 +375,6 @@ mod tests {
         assert_eq!(deserialized.name, provider.name);
         assert_eq!(deserialized.provider_type, provider.provider_type);
         assert_eq!(deserialized.url, provider.url);
-        assert_eq!(deserialized.is_active, provider.is_active);
         assert_eq!(deserialized.status, provider.status);
     }
 

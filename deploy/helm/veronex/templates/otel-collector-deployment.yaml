@@ -53,10 +53,26 @@ spec:
               value: {{ .Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT" | quote }}
             - name: KAFKA_SASL_MECHANISM
               value: {{ .Values.otelCollector.kafka.saslMechanism | default "" | quote }}
+            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: KAFKA_USERNAME
+                  optional: true
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: KAFKA_PASSWORD
+                  optional: true
+            {{- else }}
             - name: KAFKA_USERNAME
               value: {{ .Values.otelCollector.kafka.saslUsername | default "" | quote }}
             - name: KAFKA_PASSWORD
               value: {{ .Values.otelCollector.kafka.saslPassword | default "" | quote }}
+            {{- end }}
           volumeMounts:
             - name: config
               mountPath: /etc/otel

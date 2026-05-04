@@ -1,10 +1,15 @@
 -- ============================================================
 -- Veronex ClickHouse schema (consolidated init)
 -- Generated from migrations 000001–000005
--- Last updated: 2026-04-07
+-- Last updated: 2026-04-13
 --
--- Ingest path: OTel Collector → Redpanda → Redpanda Connect
---              → ClickHouse HTTP INSERT (otel_logs / otel_metrics_gauge / otel_traces_raw)
+-- Ingest path: veronex-analytics (app-layer processing)
+--              → OTel Collector → Redpanda → veronex-consumer
+--              → ClickHouse HTTP INSERT (JSONEachRow, batch)
+--
+-- Fan-out routing (inference / audit / mcp) is done by veronex-consumer,
+-- NOT by ClickHouse MVs. Offset committed after all INSERTs succeed.
+-- ClickHouse block-level dedup (insert_deduplicate=1) ensures idempotency.
 -- ============================================================
 
 -- ── MergeTree target tables ────────────────────────────────────────────────────
@@ -94,38 +99,6 @@ PARTITION BY toYYYYMM(event_time)
 ORDER BY (event_time, resource_type, resource_id)
 TTL toDate(event_time) + INTERVAL __RETENTION_AUDIT_DAYS__ DAY;
 
--- ── Derived MVs: otel_logs → specialized tables ──────────────────────────────
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS otel_inference_logs_mv
-TO inference_logs AS
-SELECT
-    Timestamp                                                        AS event_time,
-    toUUIDOrZero(LogAttributes['api_key_id'])                        AS api_key_id,
-    LogAttributes['tenant_id']                                       AS tenant_id,
-    toUUIDOrZero(LogAttributes['request_id'])                        AS request_id,
-    LogAttributes['model_name']                                      AS model_name,
-    toUInt32OrZero(LogAttributes['prompt_tokens'])                   AS prompt_tokens,
-    toUInt32OrZero(LogAttributes['completion_tokens'])               AS completion_tokens,
-    toUInt32OrZero(LogAttributes['latency_ms'])                      AS latency_ms,
-    LogAttributes['finish_reason']                                   AS finish_reason,
-    LogAttributes['status']                                          AS status
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'inference.completed';
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS otel_audit_events_mv
-TO audit_events AS
-SELECT
-    Timestamp                                                        AS event_time,
-    toUUIDOrZero(LogAttributes['account_id'])                        AS account_id,
-    LogAttributes['account_name']                                    AS account_name,
-    LogAttributes['action']                                          AS action,
-    LogAttributes['resource_type']                                   AS resource_type,
-    LogAttributes['resource_id']                                     AS resource_id,
-    LogAttributes['resource_name']                                   AS resource_name,
-    LogAttributes['ip_address']                                      AS ip_address,
-    LogAttributes['details']                                         AS details
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'audit.action';
 
 -- OTel metrics gauge
 CREATE TABLE IF NOT EXISTS otel_metrics_gauge (
@@ -201,23 +174,3 @@ SELECT
 FROM mcp_tool_calls
 GROUP BY hour, server_slug, tool_name;
 
--- OTel log stream → mcp_tool_calls (mirrors otel_inference_logs_mv pattern)
-CREATE MATERIALIZED VIEW IF NOT EXISTS otel_mcp_tool_calls_mv
-TO mcp_tool_calls AS
-SELECT
-    Timestamp                                   AS event_time,
-    toUUIDOrZero(LogAttributes['request_id'])   AS request_id,
-    toUUIDOrZero(LogAttributes['api_key_id'])   AS api_key_id,
-    LogAttributes['tenant_id']                  AS tenant_id,
-    toUUIDOrZero(LogAttributes['server_id'])    AS server_id,
-    LogAttributes['server_slug']                AS server_slug,
-    LogAttributes['tool_name']                  AS tool_name,
-    LogAttributes['namespaced_name']            AS namespaced_name,
-    LogAttributes['outcome']                    AS outcome,
-    toUInt8OrZero(LogAttributes['cache_hit'])   AS cache_hit,
-    toUInt32OrZero(LogAttributes['latency_ms']) AS latency_ms,
-    toUInt32OrZero(LogAttributes['result_bytes']) AS result_bytes,
-    toUInt8OrZero(LogAttributes['cap_charged']) AS cap_charged,
-    toUInt8OrZero(LogAttributes['loop_round'])  AS loop_round
-FROM otel_logs
-WHERE LogAttributes['event.name'] = 'mcp.tool_call';

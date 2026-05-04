@@ -8,10 +8,14 @@ use futures::StreamExt as _;
 use serde::{Deserialize, Serialize};
 
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::model_lifecycle::{
+    LifecycleOutcome, ModelLifecyclePort,
+};
 use crate::domain::constants::{MAX_LINE_BUFFER, PROVIDER_REQUEST_TIMEOUT};
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
-use crate::domain::value_objects::StreamToken;
+use crate::domain::errors::LifecycleError;
+use crate::domain::value_objects::{EvictionReason, ModelInstanceState, StreamToken};
 
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
@@ -30,6 +34,30 @@ impl GeminiAdapter {
                 .build()
                 .expect("failed to build HTTP client"),
         }
+    }
+}
+
+// ── ModelLifecyclePort impl (no-op for cloud provider) ──────────────────────
+//
+// Gemini is a cloud API — no local VRAM lifecycle. All lifecycle calls
+// short-circuit so the runner's Phase-1 step is uniform across providers.
+// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §6.1 (Gemini no-op row).
+
+#[async_trait]
+impl ModelLifecyclePort for GeminiAdapter {
+    async fn ensure_ready(&self, _model: &str) -> Result<LifecycleOutcome, LifecycleError> {
+        Ok(LifecycleOutcome::AlreadyLoaded)
+    }
+
+    async fn instance_state(&self, _model: &str) -> ModelInstanceState {
+        ModelInstanceState::Loaded {
+            loaded_at: std::time::SystemTime::now(),
+            weight_bytes: 0,
+        }
+    }
+
+    async fn evict(&self, _model: &str, _reason: EvictionReason) -> Result<(), LifecycleError> {
+        Ok(())
     }
 }
 
@@ -298,9 +326,9 @@ impl InferenceProviderPort for GeminiAdapter {
                     // Emit a dedicated token for tool calls (empty text) so run_job
                     // can store them in tool_calls_json independently of result_text.
                     if let Some(ref tc) = tool_calls {
-                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()), finish_reason: None };
+                        yield StreamToken { value: String::new(), is_final: false, prompt_tokens: None, completion_tokens: None, cached_tokens: None, tool_calls: Some(tc.clone()), finish_reason: None, is_phase_boundary: false };
                     }
-                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason };
+                    yield StreamToken { value: text, is_final: done, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason, is_phase_boundary: false };
 
                     if done {
                         return;
@@ -320,7 +348,7 @@ impl InferenceProviderPort for GeminiAdapter {
                         let text = extract_text(&parsed.candidates);
                         let (prompt_tokens, completion_tokens, cached_tokens) = extract_usage(&parsed);
                         let finish_reason = Some(map_finish_reason(&parsed.candidates).as_str().to_string());
-                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason };
+                        yield StreamToken { value: text, is_final: true, prompt_tokens, completion_tokens, cached_tokens, tool_calls: None, finish_reason, is_phase_boundary: false };
                         return;
                     }
             }

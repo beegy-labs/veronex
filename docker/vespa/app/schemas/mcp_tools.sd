@@ -1,17 +1,18 @@
 schema mcp_tools {
     document mcp_tools {
-        # Unique tool identifier: "{service_id}:{server_id}:{tool_name}"
+        # Unique tool identifier: "{environment}:{tenant_id}:{server_id}:{tool_name}"
         field tool_id type string {
             indexing: attribute | summary
         }
-        # Deployment-level isolation key — injected via VESPA_DEPLOYMENT_ID env var.
-        # Partitions a shared Vespa instance per deployment (prod, staging, dev, ...).
-        field deployment_id type string {
+        # Environment isolation key — injected via VESPA_ENVIRONMENT env var.
+        # Partitions a shared Vespa instance per environment (prod, dev, local-dev, ...).
+        field environment type string {
             indexing: attribute | summary
             rank: filter
         }
-        # Multi-tenant isolation key
-        field service_id type string {
+        # Tenant isolation key — injected via VESPA_TENANT_ID env var.
+        # Sub-partitions documents within a schema by team/org (default: "default").
+        field tenant_id type string {
             indexing: attribute | summary
             rank: filter
         }

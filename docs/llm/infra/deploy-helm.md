@@ -1,6 +1,6 @@
 # Deploy: Helm
 
-> SSOT | **Last Updated**: 2026-04-08 | Classification: Operational
+> SSOT | **Last Updated**: 2026-04-11 | Classification: Operational
 > Helm deployment configuration for Veronex services.
 
 ## Helm Deployment
@@ -41,6 +41,38 @@ Disable subcharts to use pre-existing services:
 > **Note**: Redpanda uses top-level `redpandaEnabled` (not `redpanda.enabled`) due to Redpanda chart JSON schema restrictions.
 
 ### Secret Management
+
+> **Policy**: Every credential env var in this chart MUST support all four secret modes (chart-managed, ESO, CSI, existingSecret). Adding a new secret requires updating **all three** secret templates: `secret.yaml`, `external-secret.yaml`, `secret-provider-class.yaml`.
+
+#### Managed Secret Keys
+
+All keys stored in the shared K8s Secret (`<release>-veronex-secrets`):
+
+| Key | Required | Condition | Notes |
+|-----|----------|-----------|-------|
+| `JWT_SECRET` | ✓ | Always | Main API auth signing key |
+| `ANALYTICS_SECRET` | ✓ | Always | Analytics service HMAC key |
+| `DATABASE_URL` | ✓ | Always | PostgreSQL connection string |
+| `S3_ACCESS_KEY` | ✓ | Always | Object storage access key |
+| `S3_SECRET_KEY` | ✓ | Always | Object storage secret key |
+| `GEMINI_ENCRYPTION_KEY` | ✓ | Always | Provider credential encryption key |
+| `GEMINI_API_KEY` | Optional | `veronex.geminiApiKey` set | Gemini API access key |
+| `CLICKHOUSE_USER` | Optional | `clickhouse.enabled` or `externalClickhouse.host` | ClickHouse username |
+| `CLICKHOUSE_PASSWORD` | Optional | `clickhouse.enabled` or `externalClickhouse.host` | ClickHouse password |
+| `KAFKA_USERNAME` | Optional | SASL enabled | Redpanda/Kafka SASL username |
+| `KAFKA_PASSWORD` | Optional | SASL enabled | Redpanda/Kafka SASL password |
+| `VERONEX_API_KEY` | Optional | `veronexMcp.veronexApiKey` set | MCP server API key |
+| `BOOTSTRAP_SUPER_PASS` | Optional | `veronex.bootstrapSuperPass` set | Initial admin password |
+
+#### Adding New Secrets (required checklist)
+
+```
+1. secret.yaml          — add stringData entry (conditional if optional)
+2. external-secret.yaml — add optional remoteRef entry under eso.remoteRefs
+3. secret-provider-class.yaml — add to secretObjects AND parameters.objects (same condition)
+4. values.yaml          — add key under externalSecrets.eso.remoteRefs
+5. Deployment template  — use secretKeyRef when ESO/CSI/existingSecret active, plain value otherwise
+```
 
 Three modes for production secret injection (mutually exclusive):
 
@@ -116,7 +148,8 @@ Set via `values.yaml` or `--set`. All optional — app falls back to built-in de
 | `veronex.loginRateLimit` | `LOGIN_RATE_LIMIT` | 10 | Max login attempts per IP per 5-min window. `0` = disabled |
 | `veronex.visionFallbackModel` | `VISION_FALLBACK_MODEL` | — | Model for vision requests on non-image providers (e.g. `llava:13b`) |
 | `veronex.mcpVectorTopK` | `MCP_VECTOR_TOP_K` | 8 | Vespa ANN top-K for MCP tool selection |
-| `vespa.deploymentId` | `VESPA_DEPLOYMENT_ID` | `"default"` | Vespa partition key — isolates this deployment from others sharing the same Vespa instance (e.g. `prod-v1`, `staging-v1`) |
+| `veronex.vespaEnvironment` | `VESPA_ENVIRONMENT` | `"prod"` | Vespa environment partition key — isolates documents per environment (prod, dev, local-dev) on a shared Vespa instance |
+| `veronex.vespaTenantId` | `VESPA_TENANT_ID` | `"default"` | Vespa tenant partition key — sub-partitions documents within an environment by team/org |
 | `veronex.valkeyKeyPrefix` | `VALKEY_KEY_PREFIX` | `""` | Valkey key namespace prefix — isolates deployments sharing a single Valkey instance. Not injected when empty. Example: `"prod:"` → keys become `"prod:veronex:queue:zset"` |
 
 Auto-injected (no values.yaml key needed):
@@ -130,33 +163,39 @@ Auto-injected (no values.yaml key needed):
 | `CLICKHOUSE_PASSWORD` | `veronex.clickhousePassword` helper | Same condition as above |
 | `CLICKHOUSE_DB` | `veronex.clickhouseDb` helper | Same condition as above |
 
-### Vespa (MCP Vector Selection)
+### Vespa + Embed (MCP Vector Selection)
 
 Single-node Vespa for MCP tool ANN search. Enabled via `vespa.enabled=true` or via external URL.
+
+When `vespa.enabled=true`, `veronex-embed` is automatically co-deployed (embedding sidecar, port 3200).
+`EMBED_URL` is auto-set to `http://{release}-veronex-embed:3200`; override with `embed.url` for external instances.
+The embed service is probed by the health checker (`GET EMBED_URL/health`) and reported via `GET /v1/dashboard/services`.
 
 ```bash
 # Internal Vespa (chart-managed)
 helm install veronex . \
   --set vespa.enabled=true \
-  --set vespa.deploymentId=prod-v1 \
+  --set veronex.vespaEnvironment=prod \
+  --set veronex.vespaTenantId=default \
   --set embed.url=http://veronex-embed:3200
 
 # External Vespa (pre-existing)
 helm install veronex . \
   --set vespa.url=http://vespa.infra.svc:8080 \
-  --set vespa.deploymentId=prod-v1 \
+  --set veronex.vespaEnvironment=prod \
+  --set veronex.vespaTenantId=default \
   --set embed.url=http://veronex-embed:3200
 ```
 
-**Multi-deployment isolation**: `vespa.deploymentId` is injected as `VESPA_DEPLOYMENT_ID` and stored as `deployment_id` in every Vespa document. All queries filter on `deployment_id = "..."` — deployments sharing a single Vespa instance never see each other's documents.
+**Multi-environment isolation**: `environment` and `tenant_id` are stored in every Vespa document. All queries filter on both keys — environments and tenants sharing a single Vespa instance never see each other's documents.
 
-| Environment | `vespa.deploymentId` |
-|-------------|----------------------|
-| Production  | `prod-v1` |
-| Staging     | `staging-v1` |
-| Local dev   | `local-dev` (docker-compose default) |
+| Environment | `veronex.vespaEnvironment` | `veronex.vespaTenantId` |
+|-------------|----------------------------|--------------------------|
+| Production  | `prod` | `default` |
+| Dev         | `dev` | `default` |
+| Local dev   | `local-dev` (docker-compose default) | `default` |
 
-> Redeploying with the same `deploymentId` reuses the existing index. Changing it creates a new partition (old documents remain until manually purged).
+> Changing `vespaEnvironment` creates a new partition — old documents remain until manually purged.
 
 ### Ingress
 

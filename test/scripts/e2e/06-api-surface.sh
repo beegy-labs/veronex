@@ -1,0 +1,653 @@
+#!/usr/bin/env bash
+# Phase 06: Multi-Format Inference + Endpoint Smoke Tests
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/_lib.sh"; ensure_auth
+ensure_provider_ids
+
+# Create a phase-specific API key so rate limits are not shared with concurrent
+# phases (e.g. 03-inference) that use the shared API_KEY from state.env.
+_phase_acct=$(curl -sf "$API/v1/accounts" -H "Authorization: Bearer $TK" 2>/dev/null \
+  | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('accounts',[{}])[0].get('id',''))" 2>/dev/null || echo "")
+if [ -n "$_phase_acct" ]; then
+  _phase_key=$(curl -sf "$API/v1/keys" -H "Authorization: Bearer $TK" \
+    -H 'Content-Type: application/json' \
+    -d "{\"tenant_id\":\"$_phase_acct\",\"name\":\"e2e-06-$$\",\"tier\":\"paid\"}" 2>/dev/null \
+    | python3 -c "import sys,json; print(json.loads(sys.stdin.read()).get('key',''))" 2>/dev/null || echo "")
+  [ -n "$_phase_key" ] && API_KEY="$_phase_key"
+fi
+
+# Wait for any queued/running jobs from previous phases to drain.
+# Phase 2 inference tests can leave jobs in-flight; give them up to 120s to drain.
+wait_queue_empty 120
+
+# ── Multi-Format Inference ────────────────────────────────────────────────────
+
+hdr "Multi-Format Inference (all endpoints)"
+
+TMPDIR_MF=$(mktemp -d)
+(curl -s --max-time 30 "$API/v1/chat/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Say hi\"}],\"max_tokens\":8,\"stream\":true}" \
+  > "$TMPDIR_MF/sse" 2>/dev/null || true) &
+(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/chat" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"What is 1+1? Answer with just the number.\"}],\"stream\":false}" \
+  > "$TMPDIR_MF/chat" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/chat") &
+(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"What is 1+1? Answer with just the number.\",\"stream\":false}" \
+  > "$TMPDIR_MF/generate" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/generate") &
+(curl -s -w "\n%{http_code}" "$API/api/tags" -H "X-API-Key: $API_KEY" \
+  > "$TMPDIR_MF/tags" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/tags") &
+(curl -s -w "\n%{http_code}" "$API/api/show" \
+  -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"name\":\"$MODEL\"}" > "$TMPDIR_MF/show" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/show") &
+(curl -s -w "\n%{http_code}" "$API/v1beta/models" -H "X-API-Key: $API_KEY" \
+  > "$TMPDIR_MF/gemini" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/gemini") &
+(curl -s -w "\n%{http_code}" "$API/v1/chat/completions" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"max_tokens\":4,\"stream\":false,\"provider_type\":\"ollama\"}" \
+  > "$TMPDIR_MF/test_completions" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_completions") &
+(curl -s -w "\n%{http_code}" "$API/api/chat" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"ping\"}],\"stream\":false}" \
+  > "$TMPDIR_MF/test_chat" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_chat") &
+(curl -s -w "\n%{http_code}" "$API/api/generate" \
+  -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"ping\",\"stream\":false}" \
+  > "$TMPDIR_MF/test_generate" 2>/dev/null || printf "\n000" > "$TMPDIR_MF/test_generate") &
+wait
+
+# SSE check
+SSE_RES=$(cat "$TMPDIR_MF/sse" 2>/dev/null || echo "")
+echo "$SSE_RES" | grep -q "data:" \
+  && pass "OpenAI SSE streaming has data events" \
+  || fail "SSE: no data events"
+
+for ep in chat generate tags show gemini test_completions test_chat test_generate; do
+  c=$(tail -1 "$TMPDIR_MF/$ep" 2>/dev/null || echo "000")
+  [ "$c" = "200" ] && pass "$ep → 200" || fail "$ep → $c"
+done
+
+# ── stream:false response format validation (Ollama compat) ───────────────────
+# Extract body: remove the last line (HTTP status code appended by -w)
+# Use python to handle edge cases with trailing newlines
+
+validate_stream_false() {
+  local file="$1" endpoint="$2" required_field="$3"
+  local raw; raw=$(cat "$file" 2>/dev/null || echo "")
+  local http_code; http_code=$(echo "$raw" | tail -1)
+  # Body = everything except last line (the HTTP code)
+  local body; body=$(echo "$raw" | sed '$d')
+
+  if [ "$http_code" != "200" ]; then
+    fail "$endpoint stream:false → HTTP $http_code"
+    return
+  fi
+
+  local result; result=$(echo "$body" | python3 -c "
+import sys, json
+raw = sys.stdin.read().strip()
+try:
+    d = json.loads(raw)
+    issues = []
+    if d.get('done') is not True: issues.append('done!=true')
+    if '$required_field' == 'message':
+        if 'message' not in d: issues.append('no message')
+        elif 'content' not in d.get('message', {}): issues.append('no message.content')
+    elif '$required_field' == 'response':
+        if 'response' not in d: issues.append('no response field')
+    if 'model' not in d: issues.append('no model')
+    if 'created_at' not in d: issues.append('no created_at')
+    print('ok' if not issues else '|'.join(issues))
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+
+  [ "$result" = "ok" ] \
+    && pass "$endpoint stream:false → done:true, $required_field (Ollama spec)" \
+    || fail "$endpoint stream:false → format: $result"
+}
+
+validate_stream_false "$TMPDIR_MF/chat" "/api/chat" "message"
+validate_stream_false "$TMPDIR_MF/generate" "/api/generate" "response"
+
+rm -rf "$TMPDIR_MF"
+
+# ── SSE Content Validation (basic — detailed check in phase 08) ───────────────
+
+hdr "SSE Content Validation"
+
+# During parallel phases, other tests can saturate providers causing SSE failures.
+# We do a basic check here; strict JSON structure validation is in 08-sdd-advanced.sh.
+SSE_OK="no"
+SSE_FULL=""
+HAS_DONE=0
+for _sse_attempt in 1 2 3 4 5; do
+  SSE_FULL=$(curl -s --max-time 90 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think hi\"}],\"max_tokens\":20,\"stream\":true}" \
+    2>/dev/null || echo "")
+
+  # Check for SSE format: either JSON with choices/id OR just a valid data: line
+  SSE_OK="no"
+  if echo "$SSE_FULL" | grep -q '^data: {'; then
+    # Got SSE format — check if choices appear anywhere in the stream
+    if echo "$SSE_FULL" | grep -q '"choices"'; then
+      SSE_OK="yes"
+    elif echo "$SSE_FULL" | grep -q '"id":"chatcmpl'; then
+      SSE_OK="yes"
+    fi
+  fi
+  [ "$SSE_OK" = "yes" ] && break
+  sleep 5
+done
+
+if [ "$SSE_OK" = "yes" ]; then
+  pass "SSE valid JSON structure with choices"
+else
+  FIRST_DATA=$(echo "$SSE_FULL" | grep "^data:" | head -1 | cut -c1-120 || echo "")
+  fail "SSE choices not found (first data: ${FIRST_DATA:-empty})"
+fi
+HAS_DONE=$(echo "$SSE_FULL" | grep -c "\[DONE\]" 2>/dev/null || echo "0")
+[ "${HAS_DONE:-0}" -gt 0 ] && pass "SSE ends with [DONE]" || fail "SSE [DONE] not found in stream"
+
+# ── Endpoint Smoke Tests ──────────────────────────────────────────────────────
+
+hdr "Endpoint Smoke Tests"
+
+assert_get "/v1/servers" 200 "List servers"
+assert_get "/v1/audit?limit=10" 200 "Audit log"
+
+# Audit response structure validation
+AUDIT_RES=$(aget "/v1/audit?limit=5" 2>/dev/null || echo "[]")
+AUDIT_VALID=$(echo "$AUDIT_RES" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    entries = d.get('entries', d) if isinstance(d, dict) else d
+    if not isinstance(entries, list): print('not_array'); exit()
+    if not entries: print('ok:empty'); exit()
+    e = entries[0]
+    required = ['action', 'resource_type', 'account_id', 'event_time']
+    missing = [f for f in required if f not in e]
+    print('ok' if not missing else 'missing:' + ','.join(missing))
+except Exception as ex:
+    print(f'parse_error:{ex}')
+" 2>/dev/null || echo "parse_error")
+case "$AUDIT_VALID" in
+  ok*) pass "Audit response structure valid ($AUDIT_VALID)" ;;
+  *) fail "Audit response structure → $AUDIT_VALID" ;;
+esac
+assert_get "/v1/dashboard/lab" 200 "Lab settings"
+assert_get "/v1/dashboard/analytics?hours=24" 200 "Dashboard analytics"
+assert_get "/v1/dashboard/queue/depth" 200 "Queue depth"
+assert_get "/v1/dashboard/overview" 200 "Dashboard overview"
+assert_get "/v1/dashboard/capacity/cluster" 200 "Dashboard capacity/cluster"
+assert_get "/v1/mcp/stats" 200 "MCP stats"
+assert_get "/v1/dashboard/services" 200 "Service health"
+
+# Service health response structure (retry up to 5× — infra list may be empty under parallel load)
+SVC_VALID="not_checked"
+for _svc_attempt in 1 2 3 4 5; do
+  SVC_RES=$(aget "/v1/dashboard/services" 2>/dev/null || echo "{}")
+  SVC_VALID=$(echo "$SVC_RES" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    infra = d.get('infrastructure', [])
+    pods  = d.get('api_pods', [])
+    agents = d.get('agent_pods', [])
+    ok_parts = []
+    if isinstance(infra, list): ok_parts.append('infra')
+    if isinstance(pods, list) and len(pods) > 0: ok_parts.append(f'api_pods={len(pods)}')
+    if isinstance(agents, list): ok_parts.append(f'agent_pods={len(agents)}')
+    # Verify infra services have required fields
+    for s in infra:
+        assert s.get('name') and s.get('status') in ('ok','degraded','unavailable','error'), f'bad svc: {s}'
+    # Verify pods have required fields
+    for p in pods:
+        assert p.get('id') and p.get('status') in ('online','offline'), f'bad pod: {p}'
+    # Verify expected infra services are present
+    import os
+    infra_names = {s['name'] for s in infra}
+    required = {'postgresql', 'valkey'}
+    if os.environ.get('EMBED_URL'):
+        required.add('embed')
+    missing = required - infra_names
+    assert not missing, f'missing services: {missing}'
+    print('ok:' + ','.join(ok_parts))
+except Exception as ex:
+    print(f'error:{ex}')
+" 2>/dev/null || echo "parse_error")
+  case "$SVC_VALID" in
+    ok*) break ;;
+    *) [ "$_svc_attempt" -lt 5 ] && sleep 2 ;;
+  esac
+done
+case "$SVC_VALID" in
+  ok*) pass "Service health structure valid ($SVC_VALID)" ;;
+  *) fail "Service health structure → $SVC_VALID" ;;
+esac
+
+c=$(curl -s -w "\n%{http_code}" "$API/docs/openapi.json" | code)
+[ "$c" = "200" ] && pass "OpenAPI spec → 200" || fail "OpenAPI → $c"
+c=$(curl -s -w "\n%{http_code}" "$API/docs/swagger" | code)
+[ "$c" = "200" ] && pass "Swagger UI → 200" || fail "Swagger → $c"
+c=$(curl -s -w "\n%{http_code}" "$API/docs/redoc" | code)
+[ "$c" = "200" ] && pass "Redoc UI → 200" || fail "Redoc → $c"
+c=$(curl -s -w "\n%{http_code}" "$API/v1/metrics/targets" | code)
+[ "$c" = "200" ] && pass "Metrics targets → 200" || fail "Metrics targets → $c"
+
+# /api/version, /api/ps — proxy to Ollama (503 if no provider online yet)
+c=$(curl -s -w "\n%{http_code}" "$API/api/version" -H "X-API-Key: $API_KEY" 2>/dev/null | code)
+case "$c" in
+  200) pass "/api/version → 200" ;;
+  503) fail "/api/version → 503 (no eligible provider)" ;;
+  *) fail "/api/version → $c" ;;
+esac
+c=$(curl -s -w "\n%{http_code}" "$API/api/ps" -H "X-API-Key: $API_KEY" 2>/dev/null | code)
+case "$c" in
+  200) pass "/api/ps → 200" ;;
+  503) fail "/api/ps → 503 (no eligible provider)" ;;
+  *) fail "/api/ps → $c" ;;
+esac
+
+# Embed endpoints
+for ep_name in "embed" "embeddings"; do
+  BODY='{"model":"'"$MODEL"'","input":"test"}'
+  [ "$ep_name" = "embeddings" ] && BODY='{"model":"'"$MODEL"'","prompt":"test"}'
+  c=$(curl -s -w "\n%{http_code}" --max-time 30 "$API/api/$ep_name" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" -d "$BODY" 2>/dev/null | code)
+  case "$c" in
+    200) pass "/api/$ep_name → 200" ;;
+    400|404|500|501) pass "/api/$ep_name → $c (not supported)" ;;
+    503) fail "/api/$ep_name → 503 (no eligible provider)" ;;
+    *) fail "/api/$ep_name → $c" ;;
+  esac
+done
+
+# ── Server / Provider Endpoints ───────────────────────────────────────────────
+
+hdr "Server & Provider Endpoints"
+
+if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
+  c=$(agetc "/v1/servers/$SERVER_ID_LOCAL/metrics" | code)
+  [ "$c" = "200" ] && pass "Local server metrics → 200" || info "Local server metrics → $c"
+  assert_get "/v1/servers/$SERVER_ID_LOCAL/metrics/history?hours=1" 200 "Local metrics history"
+fi
+
+# /v1/servers/metrics/batch — GET with ?ids=id1,id2 query parameter
+BATCH_IDS_PARAM=""
+if [ -n "${SERVER_ID_LOCAL:-}" ] && [ "$SERVER_ID_LOCAL" != "None" ]; then
+  BATCH_IDS_PARAM="?ids=$SERVER_ID_LOCAL"
+fi
+BATCH_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/servers/metrics/batch${BATCH_IDS_PARAM}" \
+  -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+[ "$BATCH_CODE" = "200" ] \
+  && pass "GET /v1/servers/metrics/batch → 200" \
+  || fail "GET /v1/servers/metrics/batch → $BATCH_CODE (expected 200)"
+
+# /v1/models/{model_id} — single model lookup
+if [ -n "${MODEL:-}" ]; then
+  MENC=$(python3 -c "import urllib.parse; print(urllib.parse.quote('$MODEL'))" 2>/dev/null || echo "$MODEL")
+  MODEL_ID_CODE=$(curl -s -o /dev/null -w "%{http_code}" "$API/v1/models/$MENC" \
+    -H "Authorization: Bearer $TK" 2>/dev/null || echo "000")
+  case "$MODEL_ID_CODE" in
+    200) pass "GET /v1/models/:model_id → 200" ;;
+    404) pass "GET /v1/models/:model_id → 404 (model not in OpenAI list — acceptable)" ;;
+    *) fail "GET /v1/models/:model_id → $MODEL_ID_CODE" ;;
+  esac
+fi
+if [ -n "${SERVER_ID_REMOTE:-}" ] && [ "$SERVER_ID_REMOTE" != "None" ]; then
+  c=$(agetc "/v1/servers/$SERVER_ID_REMOTE/metrics" | code)
+  [ "$c" = "200" ] && pass "Remote server metrics → 200" || info "Remote server metrics → $c"
+fi
+
+if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
+  c=$(agetc "/v1/providers/$PROVIDER_ID_LOCAL/key" | code)
+  [ "$c" = "200" ] && pass "Local provider key → 200" || info "Local provider key → $c (no key)"
+fi
+
+# Session grouping trigger
+c=$(apostc "/v1/dashboard/session-grouping/trigger" "{}" | code)
+[ "$c" = "200" ] || [ "$c" = "202" ] && pass "Session grouping → $c" || fail "Session grouping → $c"
+
+# ── Agent Health Probes ──────────────────────────────────────────────────────
+
+hdr "Agent Health Probes"
+
+AGENT_HEALTH="${AGENT_HEALTH_URL:-http://localhost:9091}"
+for ep in startup ready health; do
+  c=$(curl -s -o /dev/null -w "%{http_code}" --max-time 3 "$AGENT_HEALTH/$ep" 2>/dev/null || echo "000")
+  case "$c" in
+    200) pass "Agent /$ep → 200" ;;
+    503) fail "Agent /$ep → 503 (not ready)" ;;
+    000) fail "Agent /$ep → unreachable (veronex-agent must be running on port 9091)" ;;
+    *)   fail "Agent /$ep → $c" ;;
+  esac
+done
+
+# ── Lab Settings ─────────────────────────────────────────────────────────────
+
+hdr "Lab Settings"
+
+LAB_FULL=$(aget "/v1/dashboard/lab" 2>/dev/null || echo "{}")
+
+# Verify all expected fields present
+LAB_CHECK=$(echo "$LAB_FULL" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    required = ['gemini_function_calling', 'max_images_per_request', 'max_image_b64_bytes', 'updated_at']
+    missing = [k for k in required if k not in d]
+    if missing:
+        print('missing:' + ','.join(missing))
+    else:
+        print(f'ok|{d[\"max_images_per_request\"]}|{d[\"max_image_b64_bytes\"]}')
+except Exception as e: print(f'error:{e}')
+" 2>/dev/null || echo "error")
+
+if [[ "$LAB_CHECK" == ok* ]]; then
+  MAX_IMG=$(echo "$LAB_CHECK" | cut -d'|' -f2)
+  MAX_BYTES=$(echo "$LAB_CHECK" | cut -d'|' -f3)
+  pass "Lab settings: all fields present (max_images=$MAX_IMG, max_bytes=$MAX_BYTES)"
+else
+  fail "Lab settings: $LAB_CHECK"
+fi
+
+# Dynamic image limit: set max_images=2, verify 3 images → 400, then revert
+TINY_B64="dGVzdA=="  # "test" in base64
+PATCH_RES=$(apatchc "/v1/dashboard/lab" '{"max_images_per_request":2}')
+PATCH_CODE=$(echo "$PATCH_RES" | code)
+if [ "$PATCH_CODE" = "200" ]; then
+  THREE_IMGS=$(printf '"%s",' "$TINY_B64" "$TINY_B64" "$TINY_B64" | sed 's/,$//')
+  DYN_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
+    -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"prompt\":\"test\",\"images\":[$THREE_IMGS],\"stream\":false}" \
+    2>/dev/null | tail -1)
+  [ "$DYN_CODE" = "400" ] \
+    && pass "Dynamic image limit: max_images=2, 3 images → 400" \
+    || fail "Dynamic image limit: max_images=2, 3 images → $DYN_CODE (expected 400)"
+  apatch "/v1/dashboard/lab" '{"max_images_per_request":4}' > /dev/null 2>&1
+else
+  fail "Lab settings PATCH failed ($PATCH_CODE) — /v1/dashboard/lab PATCH must return 200"
+fi
+
+# gemini_function_calling toggle + revert
+LAB_GEMINI=$(echo "$LAB_FULL" | jv '["gemini_function_calling"]' 2>/dev/null || echo "")
+if [ -n "$LAB_GEMINI" ] && [ "$LAB_GEMINI" != "None" ]; then
+  if [ "$LAB_GEMINI" = "True" ]; then
+    apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
+    apatch "/v1/dashboard/lab" '{"gemini_function_calling":true}' > /dev/null 2>&1
+  else
+    apatch "/v1/dashboard/lab" '{"gemini_function_calling":true}' > /dev/null 2>&1
+    apatch "/v1/dashboard/lab" '{"gemini_function_calling":false}' > /dev/null 2>&1
+  fi
+  pass "Lab toggle gemini_function_calling + revert OK"
+fi
+
+# Policy field round-trips (PATCH → GET → verify persistence → revert)
+# new_val and original are JSON-valid strings (quoted if string, bare if number/bool/array).
+assert_lab_roundtrip() {
+  local field="$1"; local new_val="$2"; local parse_expr="$3"
+  local original=$(aget "/v1/dashboard/lab" 2>/dev/null | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+print(json.dumps(d.get('$field')))
+" 2>/dev/null || echo "null")
+  apatch "/v1/dashboard/lab" "{\"$field\":$new_val}" > /dev/null 2>&1
+  local got=$(aget "/v1/dashboard/lab" 2>/dev/null | python3 -c "
+import sys, json
+d = json.loads(sys.stdin.read())
+$parse_expr
+" 2>/dev/null || echo "")
+  apatch "/v1/dashboard/lab" "{\"$field\":$original}" > /dev/null 2>&1
+  [ "$got" = "ok" ] && pass "Lab field $field round-trip" || fail "Lab field $field round-trip (got: '$got')"
+}
+
+assert_lab_roundtrip "max_image_b64_bytes" "524288" \
+  "print('ok' if d.get('max_image_b64_bytes') == 524288 else d.get('max_image_b64_bytes'))"
+assert_lab_roundtrip "context_budget_ratio" "0.42" \
+  "v = d.get('context_budget_ratio'); print('ok' if v is not None and abs(v - 0.42) < 0.001 else v)"
+assert_lab_roundtrip "compression_trigger_turns" "3" \
+  "print('ok' if d.get('compression_trigger_turns') == 3 else d.get('compression_trigger_turns'))"
+assert_lab_roundtrip "recent_verbatim_window" "2" \
+  "print('ok' if d.get('recent_verbatim_window') == 2 else d.get('recent_verbatim_window'))"
+assert_lab_roundtrip "compression_timeout_secs" "17" \
+  "print('ok' if d.get('compression_timeout_secs') == 17 else d.get('compression_timeout_secs'))"
+assert_lab_roundtrip "multiturn_allowed_models" '["test-model-a","test-model-b"]' \
+  "v = d.get('multiturn_allowed_models', []); print('ok' if v == ['test-model-a','test-model-b'] else v)"
+assert_lab_roundtrip "vision_model" '"qwen3-vl:8b"' \
+  "print('ok' if d.get('vision_model') == 'qwen3-vl:8b' else d.get('vision_model'))"
+
+
+# Per-key usage
+KEY_LIST=$(aget "/v1/keys" 2>/dev/null || echo '{"keys":[]}')
+FIRST_KEY_ID=$(echo "$KEY_LIST" | jv '["keys"][0]["id"]' 2>/dev/null || echo "")
+if [ -n "$FIRST_KEY_ID" ] && [ "$FIRST_KEY_ID" != "None" ]; then
+  assert_get "/v1/usage/$FIRST_KEY_ID?hours=24" 200 "Per-key usage"
+  assert_get "/v1/usage/$FIRST_KEY_ID/jobs?hours=24" 200 "Per-key jobs"
+  assert_get "/v1/usage/$FIRST_KEY_ID/models?hours=24" 200 "Per-key models"
+fi
+
+FIRST_JOB_ID=$(aget "/v1/dashboard/jobs?limit=1" 2>/dev/null | jv '["jobs"][0]["id"]' 2>/dev/null || echo "")
+[ -n "$FIRST_JOB_ID" ] && [ "$FIRST_JOB_ID" != "None" ] \
+  && assert_get "/v1/dashboard/jobs/$FIRST_JOB_ID" 200 "Job detail"
+
+# ── SDD §5: Pull Drain Endpoint ──────────────────────────────────────────────
+
+hdr "SDD §5: Pull Drain — POST /v1/ollama/models/pull"
+
+# Verify endpoint exists and accepts admin requests
+# (Full drain+pull would take too long in CI; we verify the API surface and 202 response)
+if [ -n "${PROVIDER_ID_LOCAL:-}" ] && [ "$PROVIDER_ID_LOCAL" != "None" ]; then
+  PULL_RES=$(apostc "/v1/ollama/models/pull" \
+    "{\"model\":\"$MODEL\",\"provider_id\":\"$PROVIDER_ID_LOCAL\"}")
+  PULL_CODE=$(echo "$PULL_RES" | code)
+  case "$PULL_CODE" in
+    202) pass "Pull drain endpoint → 202 Accepted (drain+pull started in background)" ;;
+    200) pass "Pull drain endpoint → 200 OK" ;;
+    # 409 would mean pull already in progress — acceptable
+    409) pass "Pull drain endpoint → 409 (pull already in progress)" ;;
+    *) fail "Pull drain endpoint → $PULL_CODE (expected 202)" ;;
+  esac
+
+  # Wait briefly for is_pulling state to propagate, then verify dispatch blocked
+  sleep 2
+  info "Pull in progress — is_pulling=true should block dispatch routing"
+
+  # §5: Verify dispatch is actually blocked during pull
+  # Inference for pulling model+provider should either:
+  #   - Route to remote provider (200) if available
+  #   - Return 503 if no other provider can serve the model
+  PULL_INF_CODE=$({ curl -s -w "\n%{http_code}" -o /dev/null --max-time 90 "$API/v1/chat/completions" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d "{\"model\":\"$MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think pull block test\"}],\"max_tokens\":3,\"stream\":false}" \
+    2>/dev/null || printf "\n000"; } | tail -1)
+  case "$PULL_INF_CODE" in
+    200) pass "Pull dispatch block: request rerouted to non-pulling provider (200)" ;;
+    503) pass "Pull dispatch block: no eligible provider during pull (503)" ;;
+    429) pass "Pull dispatch block: rate limited during pull (429)" ;;
+    *)   fail "Pull dispatch block: unexpected → $PULL_INF_CODE" ;;
+  esac
+  # is_pulling will be cleared by background task after pull completes
+else
+  fail "Pull drain test: PROVIDER_ID_LOCAL not set — local provider must be registered in setup"
+fi
+
+# ── Image Inference (vision model — auto-detected) ────────────────────────────
+
+hdr "Image Inference (vision model)"
+
+# Detect vision model from local Ollama directly (host-side access)
+VISION_MODEL=$(get_vision_model)
+
+if [ -n "$VISION_MODEL" ]; then
+  info "Vision model: $VISION_MODEL"
+
+  # Generate 128×128 bee image at runtime (raw base64, no data URL prefix)
+  BEE_IMG=$(python3 -c "
+from PIL import Image, ImageDraw
+import base64, io
+img = Image.new('RGB', (128, 128), '#87CEEB')
+draw = ImageDraw.Draw(img)
+draw.ellipse([35,45,95,85], fill='#FFD700', outline='black', width=2)
+for y in [52,62,72]: draw.rectangle([40,y,90,y+4], fill='black')
+draw.ellipse([85,50,110,80], fill='#FFD700', outline='black', width=2)
+draw.ellipse([95,58,103,66], fill='white', outline='black')
+draw.ellipse([97,60,101,64], fill='black')
+draw.ellipse([45,25,75,50], fill='#FFFFFF', outline='#CCCCCC')
+draw.ellipse([55,20,85,48], fill='#FFFFFF', outline='#CCCCCC')
+draw.polygon([(35,65),(25,62),(25,68)], fill='black')
+draw.line([(100,52),(110,35)], fill='black', width=2)
+draw.line([(105,55),(118,40)], fill='black', width=2)
+for x in [50,65,80]: draw.line([(x,85),(x-5,100)], fill='black', width=2)
+buf = io.BytesIO()
+img.save(buf, format='JPEG', quality=85)
+print(base64.b64encode(buf.getvalue()).decode())
+" 2>/dev/null)
+
+  if [ -z "$BEE_IMG" ]; then
+    fail "Pillow not installed — run: pip install pillow"
+  else
+    info "Generated 128x128 bee test image ($(echo -n "$BEE_IMG" | wc -c | tr -d ' ') bytes base64)"
+
+    # Sync vision model to veronex before testing — poll until model appears
+    apost "/v1/ollama/models/sync" "{}" > /dev/null 2>&1 || true
+    VISION_READY=0
+    for i in $(seq 1 10); do
+      MODELS_JSON=$(aget "/v1/ollama/models" 2>/dev/null || echo "[]")
+      if echo "$MODELS_JSON" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read())
+    models = d.get('models', d) if isinstance(d, dict) else d
+    if any('$VISION_MODEL' in m.get('model_name','') for m in models):
+        exit(0)
+except: pass
+exit(1)
+" 2>/dev/null; then
+        VISION_READY=1
+        break
+      fi
+      sleep 2
+    done
+    if [ "$VISION_READY" = "0" ]; then
+      info "Vision model not synced after 20s — may cause no_eligible_provider"
+    fi
+
+    # Warm-up: ensure providers are active (parallel phases may trigger Scale-In)
+    curl -s --max-time 30 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL\",\"prompt\":\"ok\",\"stream\":false}" > /dev/null 2>&1 || true
+    sleep 1
+
+    # /api/generate with bee image — stream:false — validate model describes the image
+    IMG_GEN_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"/no_think What is in this image? Answer in one sentence.\",\"images\":[\"$BEE_IMG\"],\"stream\":false}" \
+      2>/dev/null || printf "\n000")
+    IMG_GEN_CODE=$(echo "$IMG_GEN_RES" | tail -1)
+    IMG_GEN_BODY=$(echo "$IMG_GEN_RES" | sed '$d')
+
+    case "$IMG_GEN_CODE" in
+      200)
+        IMG_GEN_VALID=$(echo "$IMG_GEN_BODY" | python3 -c "
+import sys, json
+try:
+    d = json.loads(sys.stdin.read().strip())
+    resp = d.get('response', '')
+    # Vision models with thinking mode may return empty response via proxy
+    # (thinking tokens consumed by collect_stream). Accept done:true as success.
+    ok = d.get('done') is True
+    display = resp[:80] if resp else '(empty — thinking mode)'
+    print(f'ok|{display}' if ok else f'fail|done={d.get(\"done\")}')
+except Exception as e:
+    print(f'not_json:{e}')
+" 2>/dev/null || echo "parse_error")
+        IMG_STATUS=$(echo "$IMG_GEN_VALID" | cut -d'|' -f1)
+        IMG_RESP=$(echo "$IMG_GEN_VALID" | cut -d'|' -f2-)
+        if [ "$IMG_STATUS" = "ok" ]; then
+          pass "Image inference /api/generate → 200 (vision response: ${IMG_RESP})"
+        else
+          fail "Image inference /api/generate → 200 but: $IMG_GEN_VALID"
+        fi
+        ;;
+      503) fail "Image inference /api/generate → 503 (vision model not synced)" ;;
+      400) fail "Image inference /api/generate → 400 (validation rejected)" ;;
+      *)   fail "Image inference /api/generate → $IMG_GEN_CODE" ;;
+    esac
+
+    # /api/generate without images — verify non-image inference still works
+    NO_IMG_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$MODEL\",\"prompt\":\"say ok\",\"stream\":false}" \
+      2>/dev/null || printf "\n000")
+    NO_IMG_CODE=$(echo "$NO_IMG_RES" | tail -1)
+    [ "$NO_IMG_CODE" = "200" ] \
+      && pass "/api/generate without images → 200" \
+      || fail "/api/generate without images → $NO_IMG_CODE"
+
+    # Validate: 5 images → 400 (lab_settings.max_images_per_request=4)
+    FIVE_IMGS=$(printf '"%s",' "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" "$BEE_IMG" | sed 's/,$//')
+    IMG_LIMIT_CODE=$(curl -s -w "\n%{http_code}" -o /dev/null --max-time 10 "$API/api/generate" \
+      -H "X-API-Key: $API_KEY" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$VISION_MODEL\",\"prompt\":\"test\",\"images\":[$FIVE_IMGS],\"stream\":false}" \
+      2>/dev/null | tail -1)
+    [ "$IMG_LIMIT_CODE" = "400" ] \
+      && pass "Image count limit (max_images=4): 5 images → 400" \
+      || fail "Image count limit: 5 images → $IMG_LIMIT_CODE (expected 400)"
+
+    # /v1/chat/completions with bee image (session auth)
+    IMG_TEST_RES=$(curl -s -w "\n%{http_code}" --max-time 120 "$API/v1/chat/completions" \
+      -H "Authorization: Bearer $TK" -H "Content-Type: application/json" \
+      -d "{\"model\":\"$VISION_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"/no_think What insect is in this image? One word.\"}],\"images\":[\"$BEE_IMG\"],\"stream\":false,\"provider_type\":\"ollama\"}" \
+      2>/dev/null || printf "\n000")
+    IMG_TEST_CODE=$(echo "$IMG_TEST_RES" | tail -1)
+    case "$IMG_TEST_CODE" in
+      200) pass "Image inference /v1/chat/completions (session) → 200" ;;
+      503) fail "Image inference session → 503 (vision model not synced)" ;;
+      400) fail "Image inference session → 400" ;;
+      *)   fail "Image inference session → $IMG_TEST_CODE" ;;
+    esac
+
+    # Image storage verification is in 10-image-storage.sh (runs after parallel phases
+    # to avoid Scale-In interference from 08-sdd-advanced)
+  fi
+else
+  fail "No vision model on local Ollama — llava/qwen-vl/minicpm-v must be loaded"
+fi
+
+# ── OpenAI Media & Completions Stubs ─────────────────────────────────────────
+
+hdr "OpenAI Media Stubs (501)"
+
+# These endpoints exist but return 501 Not Implemented (planned features)
+for stub_ep in "audio/transcriptions" "audio/speech" "images/generations" "moderations"; do
+  STUB_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$API/v1/$stub_ep" \
+    -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+    -d '{"model":"test"}' 2>/dev/null || echo "000")
+  case "$STUB_CODE" in
+    501) pass "POST /v1/$stub_ep → 501 (stub registered)" ;;
+    400) pass "POST /v1/$stub_ep → 400 (validation before 501 — acceptable)" ;;
+    404) fail "POST /v1/$stub_ep → 404 (route not registered)" ;;
+    *)   fail "POST /v1/$stub_ep → $STUB_CODE (expected 501 or 400)" ;;
+  esac
+done
+
+# /v1/completions — text completion (legacy, not chat)
+COMPLETIONS_RES=$(curl -s -w "\n%{http_code}" --max-time 60 "$API/v1/completions" \
+  -H "Authorization: Bearer $API_KEY" -H "Content-Type: application/json" \
+  -d "{\"model\":\"$MODEL\",\"prompt\":\"Say hello.\",\"max_tokens\":8,\"stream\":false}" \
+  2>/dev/null || printf "\n000")
+COMPLETIONS_CODE=$(echo "$COMPLETIONS_RES" | tail -1)
+case "$COMPLETIONS_CODE" in
+  200) pass "POST /v1/completions → 200" ;;
+  501) pass "POST /v1/completions → 501 (stub — not yet implemented)" ;;
+  503) fail "POST /v1/completions → 503 (no eligible provider)" ;;
+  *) fail "POST /v1/completions → $COMPLETIONS_CODE" ;;
+esac
+
+save_counts

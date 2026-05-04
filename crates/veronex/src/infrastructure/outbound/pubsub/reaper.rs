@@ -12,6 +12,7 @@
 //! After Lua removal, the Rust caller re-enqueues to QUEUE_ZSET with model from DB.
 
 use std::collections::HashSet;
+use tracing::Instrument;
 use std::sync::Arc;
 
 use fred::prelude::*;
@@ -136,7 +137,7 @@ pub async fn run_reaper_loop(
 async fn refresh_heartbeat(pool: &Pool, instance_id: &str) {
     let key = valkey_keys::heartbeat(instance_id);
     let result: Result<(), _> = pool
-        .set(&key, "1", Some(Expiration::EX(30)), None, false)
+        .set(&key, "1", Some(Expiration::EX(crate::domain::constants::INSTANCE_HEARTBEAT_TTL_SECS)), None, false)
         .await;
     if let Err(e) = result {
         tracing::warn!("heartbeat refresh failed: {e}");
@@ -180,11 +181,14 @@ async fn reap_orphaned_jobs(pool: &Pool, pg_pool: &sqlx::PgPool) {
                 let pool = pool.clone();
                 let s_owned = s.clone();
                 let qp = queue_processing.clone();
-                tokio::spawn(async move {
-                    let _ = pool
-                        .lrem::<i64, _, _>(&qp, 1, &s_owned)
-                        .await;
-                });
+                tokio::spawn(
+                    async move {
+                        let _ = pool
+                            .lrem::<i64, _, _>(&qp, 1, &s_owned)
+                            .await;
+                    }
+                    .instrument(tracing::info_span!("veronex.pubsub.reaper.spawn")),
+                );
                 None
             }
         })

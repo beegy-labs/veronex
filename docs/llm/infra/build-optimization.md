@@ -84,7 +84,7 @@ RUN --mount=type=cache,target=/app/.next/cache npm run build
 | Tool | Purpose | Status |
 |------|---------|--------|
 | mold + clang | Fast linker | Installed |
-| sccache | Compilation cache | Config ready (uncomment in .cargo/config.toml) |
+| sccache | Compilation cache backed by MinIO S3 | Active in CI; Dockerfiles use arch-aware `TARGETARCH` (amd64→x86_64, arm64→aarch64). Secret `sccache_env` is optional (CI provides it, local builds skip). |
 | cargo-chef | Docker dep caching | All 3 Rust Dockerfiles |
 | cargo-nextest | Parallel test runner | Installed |
 | cargo-hakari | workspace-hack management | Installed |

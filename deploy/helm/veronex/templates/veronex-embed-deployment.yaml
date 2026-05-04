@@ -1,4 +1,4 @@
-{{- if .Values.vespa.enabled }}
+{{- if and (or .Values.vespa.enabled .Values.vespa.url) (not .Values.embed.url) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

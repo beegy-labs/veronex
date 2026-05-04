@@ -57,6 +57,7 @@ impl InferenceUseCase for MockUseCase {
                 cached_tokens: None,
                 tool_calls: None,
                 finish_reason: None,
+                is_phase_boundary: false,
             }),
             Ok(StreamToken {
                 value: "".to_string(),
@@ -66,6 +67,7 @@ impl InferenceUseCase for MockUseCase {
                 cached_tokens: None,
                 tool_calls: None,
                 finish_reason: None,
+                is_phase_boundary: false,
             }),
         ];
         Box::pin(futures::stream::iter(tokens))
@@ -142,7 +144,7 @@ impl LlmProviderRegistry for MockProviderRegistry {
     async fn list_page(&self, _search: &str, _provider_type: Option<&str>, _limit: i64, _offset: i64) -> Result<(Vec<LlmProvider>, i64)> { Ok((vec![], 0)) }
     async fn get(&self, _id: Uuid) -> Result<Option<LlmProvider>> { Ok(None) }
     async fn update_status(&self, _id: Uuid, _status: LlmProviderStatus) -> Result<()> { Ok(()) }
-    async fn deactivate(&self, _id: Uuid) -> Result<()> { Ok(()) }
+    async fn delete(&self, _id: Uuid) -> Result<()> { Ok(()) }
     async fn update(&self, _provider: &LlmProvider) -> Result<()> { Ok(()) }
 }
 
@@ -191,6 +193,7 @@ impl ProviderModelSelectionRepository for MockModelSelectionRepo {
     async fn list(&self, _provider_id: Uuid) -> Result<Vec<ProviderSelectedModel>> { Ok(vec![]) }
     async fn set_enabled(&self, _provider_id: Uuid, _model_name: &str, _enabled: bool) -> Result<()> { Ok(()) }
     async fn list_enabled(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
+    async fn list_disabled(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
 }
 
 pub(crate) struct MockGlobalModelSettingsRepo;
@@ -270,6 +273,8 @@ impl crate::application::ports::outbound::model_capacity_repository::ModelCapaci
     async fn list_by_provider(&self, _: uuid::Uuid) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
     async fn list_by_providers(&self, _: &[uuid::Uuid]) -> Result<Vec<crate::application::ports::outbound::model_capacity_repository::ModelVramProfileEntry>> { Ok(vec![]) }
     async fn compute_throughput_stats(&self, _: uuid::Uuid, _: &str, _: u32) -> Result<Option<crate::application::ports::outbound::model_capacity_repository::ThroughputStats>> { Ok(None) }
+    async fn has_unprofiled_selected_models(&self) -> Result<bool> { Ok(false) }
+    async fn min_configured_ctx_for_model(&self, _: &str) -> Result<Option<u32>> { Ok(None) }
 }
 
 pub(crate) struct MockCapacitySettingsRepo;
@@ -393,12 +398,14 @@ pub(crate) fn make_app() -> axum::Router {
         mcp_tool_indexer: None,
         instance_id: Arc::from("test-instance"),
         login_rate_limit: 0,
+        vision_fallback_model: Arc::from("qwen3-vl:8b"),
         kafka_broker_admin_url: None,
         clickhouse_http_url: None,
         clickhouse_user: None,
         clickhouse_password: None,
         clickhouse_db: None,
-        vespa_deployment_id: Arc::from(""),
+        vespa_environment: Arc::from(""),
+        vespa_tenant_id: Arc::from(""),
     };
     // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()

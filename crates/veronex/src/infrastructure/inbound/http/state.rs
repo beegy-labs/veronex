@@ -127,16 +127,23 @@ pub struct AppState {
     /// Tool indexer — embeds and feeds tools to Vespa on server register/delete.
     /// `None` when VESPA_URL is not configured.
     pub mcp_tool_indexer: Option<Arc<McpToolIndexer>>,
-    /// Deployment-level Vespa partition key — from `VESPA_DEPLOYMENT_ID` env var.
-    /// Isolates this deployment's documents from others on a shared Vespa instance.
-    pub vespa_deployment_id: Arc<str>,
+    /// Environment-level Vespa partition key — from `VESPA_ENVIRONMENT` env var.
+    /// Isolates documents per environment (prod, dev, local-dev) on a shared Vespa instance.
+    pub vespa_environment: Arc<str>,
+    /// Tenant-level Vespa partition key — from `VESPA_TENANT_ID` env var.
+    /// Sub-partitions documents within a deployment by logical tenant (e.g. org, team).
+    pub vespa_tenant_id: Arc<str>,
     /// Instance ID of this API pod (UUID string).
     /// Used by service health endpoint to identify pods.
     pub instance_id: Arc<str>,
     /// Maximum login attempts per IP per 5-minute window.
     /// `0` disables IP-based rate limiting (e.g. for E2E test environments).
-    /// Controlled via `LOGIN_RATE_LIMIT` env var (default: 10).
+    /// Sourced from `AppConfig::login_rate_limit` (env `LOGIN_RATE_LIMIT`, default: 10).
     pub login_rate_limit: u64,
+    /// Vision model used when an image-analysis request leaves the model
+    /// unspecified. Sourced from `AppConfig::vision_fallback_model`
+    /// (env `VISION_FALLBACK_MODEL`, default `qwen3-vl:8b`).
+    pub vision_fallback_model: Arc<str>,
     /// Redpanda metrics URL for high-watermark scraping (e.g. `http://redpanda:9644`).
     pub kafka_broker_admin_url: Option<Arc<str>>,
     /// ClickHouse HTTP base URL for pipeline stats queries.

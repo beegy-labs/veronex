@@ -28,21 +28,21 @@ export function KeyPerformanceSection({ keys }: { keys: KeyPerfRow[] }) {
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base flex items-center gap-2">
-          <Key className="h-4 w-4 text-primary" />
+        <CardTitle className="vds-text-base vds-flex vds-items-center vds-gap-2">
+          <Key className="vds-h-4 vds-w-4 vds-text-primary" />
           {t('performance.byKey')}
         </CardTitle>
-        <p className="text-xs text-muted-foreground">{t('performance.keyPerformance')}</p>
+        <p className="vds-text-xs vds-text-dim">{t('performance.keyPerformance')}</p>
       </CardHeader>
       <CardContent>
         <DataTable minWidth="640px">
           <TableHeader>
-            <TableRow className="hover:bg-transparent">
+            <TableRow className="vds-hover:bg-transparent">
               <TableHead>{t('performance.keyCol')}</TableHead>
-              <TableHead className="text-right w-24">{t('usage.requestsCol')}</TableHead>
-              <TableHead className="text-right w-28">{t('usage.successCol')}</TableHead>
-              <TableHead className="text-right w-28">{t('usage.tokensCol')}</TableHead>
-              <TableHead className="text-right w-28">{t('usage.estimatedCost')}</TableHead>
+              <TableHead className="vds-text-right vds-w-24">{t('usage.requestsCol')}</TableHead>
+              <TableHead className="vds-text-right vds-w-28">{t('usage.successCol')}</TableHead>
+              <TableHead className="vds-text-right vds-w-28">{t('usage.tokensCol')}</TableHead>
+              <TableHead className="vds-text-right vds-w-28">{t('usage.estimatedCost')}</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -51,25 +51,25 @@ export function KeyPerformanceSection({ keys }: { keys: KeyPerfRow[] }) {
               return (
                 <TableRow key={k.key_id}>
                   <TableCell>
-                    <p className="font-semibold text-sm">{k.key_name}</p>
-                    <p className="text-xs text-muted-foreground font-mono">{k.key_prefix}…</p>
+                    <p className="vds-font-600 vds-text-sm">{k.key_name}</p>
+                    <p className="vds-text-xs vds-text-dim vds-font-mono">{k.key_prefix}…</p>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums font-semibold">{fmtCompact(k.request_count)}</TableCell>
-                  <TableCell className="text-right">
-                    <span className={`text-sm font-semibold tabular-nums ${
-                      k.success_rate >= SUCCESS_RATE_GOOD ? 'text-status-success-fg'
-                        : k.success_rate >= SUCCESS_RATE_WARNING ? 'text-status-warning-fg'
-                        : 'text-status-error-fg'
-                    }`}>
+                  <TableCell className="vds-text-right vds-tabular-nums vds-font-600">{fmtCompact(k.request_count)}</TableCell>
+                  <TableCell className="vds-text-right">
+                    <span className={`vds-text-sm vds-font-600 vds-tabular-nums ${
+ k.success_rate >= SUCCESS_RATE_GOOD ? 'vds-text-success'
+ : k.success_rate >= SUCCESS_RATE_WARNING ? 'vds-text-warning'
+ : 'vds-text-error'
+ }`}>
                       {k.success_rate}%
                     </span>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums text-muted-foreground text-sm">{fmtCompact(totalTok)}</TableCell>
-                  <TableCell className="text-right tabular-nums text-sm font-mono">
+                  <TableCell className="vds-text-right vds-tabular-nums vds-text-dim vds-text-sm">{fmtCompact(totalTok)}</TableCell>
+                  <TableCell className="vds-text-right vds-tabular-nums vds-text-sm vds-font-mono">
                     {k.estimated_cost_usd == null
-                      ? <span className="text-muted-foreground">—</span>
+                      ? <span className="vds-text-dim">—</span>
                       : k.estimated_cost_usd === 0
-                        ? <span className="text-muted-foreground">{t('usage.free')}</span>
+                        ? <span className="vds-text-dim">{t('usage.free')}</span>
                         : <span>{fmtCost(k.estimated_cost_usd)}</span>}
                   </TableCell>
                 </TableRow>

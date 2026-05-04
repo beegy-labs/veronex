@@ -50,43 +50,41 @@ export interface ApiKey {
 // ── Re-exported generated enums (SSOT: Rust domain → ts-rs → here) ──────────
 export type { JobStatus, JobSource, ProviderType, LlmProviderStatus } from './generated'
 /** Re-export GpuServer as-is — API response shape matches domain entity 1:1. */
-export type { GpuServer } from './generated'
-
-/** Fields shared by both the list-level Job and the detail-level JobDetail. */
+export type { GpuServer } from './generated'/** Fields shared by both the list-level Job and the detail-level JobDetail. */
 export interface JobBase {
-  id: string
-  model_name: string
-  provider_type: string
-  status: JobStatus
-  source: JobSource
-  created_at: string
-  completed_at: string | null
-  latency_ms: number | null
-  ttft_ms: number | null
-  prompt_tokens: number | null
-  completion_tokens: number | null
-  cached_tokens: number | null
-  tps: number | null
-  api_key_name: string | null
-  /** For test run jobs: the account name of who ran it. */
-  account_name: string | null
-  /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
-  request_path: string | null
-  /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
-  estimated_cost_usd: number | null
+ id: string
+ model_name: string
+ provider_type: string
+ status: JobStatus
+ source: JobSource
+ created_at: string
+ completed_at: string | null
+ latency_ms: number | null
+ ttft_ms: number | null
+ prompt_tokens: number | null
+ completion_tokens: number | null
+ cached_tokens: number | null
+ tps: number | null
+ api_key_name: string | null
+ /** For test run jobs: the account name of who ran it. */
+ account_name: string | null
+ /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
+ request_path: string | null
+ /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
+ estimated_cost_usd: number | null
 }
 
 export interface Job extends JobBase {
-  /** True when the model responded with tool calls instead of text. */
-  has_tool_calls: boolean
-  /** Name of the provider (Ollama server) that processed this job. */
-  provider_name: string | null
-  /** Conversation this job belongs to (multi-turn), if any. */
-  conversation_id: string | null
+ /** True when the model responded with tool calls instead of text. */
+ has_tool_calls: boolean
+ /** Name of the provider (Ollama server) that processed this job. */
+ provider_name: string | null
+ /** Conversation this job belongs to (multi-turn), if any. */
+ conversation_id: string | null
 }
 
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool'
+ role:'system' | 'user' | 'assistant' | 'tool'
   content: string | null
   /** For tool-role messages: the tool call id this is a response to. */
   tool_call_id?: string
@@ -297,7 +295,6 @@ export interface Provider {
   provider_type: ProviderType
   url: string
   timeout_secs?: number
-  is_active: boolean
   total_vram_mb: number
   /** GPU index on the host (0-based). Used to filter node-exporter metrics. */
   gpu_index: number | null
@@ -358,7 +355,6 @@ export interface UpdateProviderRequest {
   gpu_index?: number | null
   server_id?: string | null
   is_free_tier?: boolean
-  is_active?: boolean
 }
 
 export interface GeminiStatusResult {
@@ -459,6 +455,8 @@ export interface OllamaModelWithCount {
   is_vision?: boolean
   /** Maximum context window across providers (0 = not yet profiled). */
   max_ctx?: number
+  /** False if the model is disabled on all providers carrying it. */
+  is_enabled?: boolean
 }
 
 /** Provider info returned by GET /v1/ollama/models/:model_name/providers. */
@@ -500,7 +498,6 @@ export interface RoleSummary {
   id: string
   name: string
   permissions: string[]
-  menus: string[]
   is_system: boolean
   account_count: number
   created_at: string
@@ -519,7 +516,6 @@ export interface Account {
   roles: RoleInfo[]
   role_name: string
   permissions: string[]
-  menus: string[]
   department: string | null
   position: string | null
   is_active: boolean
@@ -557,7 +553,6 @@ export interface LoginResponse {
   username: string
   role: string
   permissions: string[]
-  menus: string[]
 }
 
 export interface SessionRecord {
@@ -702,6 +697,26 @@ export interface ConversationDetail extends ConversationSummary {
   turns: ConversationTurn[]
 }
 
+/**
+ * Per-turn MCP tool-call audit entry.
+ *
+ * Source: PG `mcp_loop_tool_calls` joined with `mcp_servers` for `server_slug`.
+ * SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
+ */
+export interface ToolCallDetail {
+  round: number
+  server_slug: string
+  tool_name: string
+  namespaced_name: string
+  args: unknown
+  result_text: string | null
+  outcome: 'success' | 'error' | 'timeout' | 'cache_hit' | 'circuit_open' | string
+  cache_hit: boolean
+  latency_ms: number | null
+  result_bytes: number | null
+  created_at: string
+}
+
 export interface TurnInternals {
   job_id: string
   compressed?: {
@@ -716,6 +731,12 @@ export interface TurnInternals {
     image_count: number
     analysis_tokens: number
   } | null
+  /**
+   * Per-tool MCP execution audit for this turn (S23). Empty array when no
+   * MCP tools were invoked. Ordered by execution sequence (loop_round, then
+   * created_at).
+   */
+  tool_calls: ToolCallDetail[]
 }
 
 export interface AuditEvent {

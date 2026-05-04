@@ -13,7 +13,7 @@
 | rust-embed | Axum, fastembed, ort (ONNX Runtime) | `crates/veronex-embed/` |
 | react-frontend | Next.js 16, React 19, TanStack Query v5 | `web/` |
 | migration | SQL (Postgres + ClickHouse) | `migrations/` |
-| testing | cargo-nextest, vitest, bash E2E | `scripts/e2e/` |
+| testing | cargo-nextest, vitest, bash E2E | `test/scripts/e2e/` |
 | infra | Helm, Docker, K8s | `deploy/` |
 | docs-policy | CDD/SDD/ADD framework | `.ai/`, `docs/llm/`, `.specs/`, `.add/` |
 

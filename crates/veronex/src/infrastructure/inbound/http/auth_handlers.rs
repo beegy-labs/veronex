@@ -40,7 +40,6 @@ pub struct LoginResponse {
     pub username: String,
     pub role: String,
     pub permissions: Vec<String>,
-    pub menus: Vec<String>,
 }
 
 /// JSON body returned on successful token refresh.
@@ -61,16 +60,18 @@ pub struct ResetPasswordRequest {
 /// Role info resolved from DB — passed to `issue_access_token` for JWT embedding.
 pub(crate) struct ResolvedRole {
     pub permissions: Vec<String>,
-    pub menus: Vec<String>,
     pub name: String,
     pub is_super: bool,
 }
 
 /// Resolve merged role info from the N:N account_roles join table.
-/// Returns union of all permissions/menus across assigned roles.
+/// Returns union of all permissions across assigned roles. Menu visibility is
+/// derived on the frontend from these permissions (see
+/// `web/lib/route-permissions.ts`); this server no longer returns a separate
+/// `menus` set so the two cannot drift.
 pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uuid) -> Result<ResolvedRole, AppError> {
-    let rows = sqlx::query_as::<_, (String, Vec<String>, Vec<String>, bool)>(
-        "SELECT r.name, r.permissions, r.menus, r.is_system
+    let rows = sqlx::query_as::<_, (String, Vec<String>, bool)>(
+        "SELECT r.name, r.permissions, r.is_system
          FROM roles r
          JOIN account_roles ar ON ar.role_id = r.id
          WHERE ar.account_id = $1
@@ -86,23 +87,20 @@ pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uui
     }
 
     let mut all_perms = std::collections::BTreeSet::new();
-    let mut all_menus = std::collections::BTreeSet::new();
     let mut is_super = false;
     let mut role_names = Vec::new();
 
-    for (name, perms, menus, is_system) in &rows {
+    for (name, perms, is_system) in &rows {
         if *is_system && name == "super" {
             is_super = true;
         }
         role_names.push(name.clone());
         for p in perms { all_perms.insert(p.clone()); }
-        for m in menus { all_menus.insert(m.clone()); }
     }
 
-    // If super, grant all permissions/menus
+    // If super, grant all permissions
     if is_super {
         all_perms = crate::domain::enums::ALL_PERMISSIONS.iter().map(|s| s.to_string()).collect();
-        all_menus = crate::domain::enums::ALL_MENUS.iter().map(|s| s.to_string()).collect();
     }
 
     // Primary role name: "super" if any, otherwise first
@@ -110,7 +108,6 @@ pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uui
 
     Ok(ResolvedRole {
         permissions: all_perms.into_iter().collect(),
-        menus: all_menus.into_iter().collect(),
         name: primary_name,
         is_super,
     })
@@ -131,7 +128,6 @@ fn issue_access_token(
         jti,
         exp,
         permissions: resolved.permissions.clone(),
-        menus: resolved.menus.clone(),
         role_name: resolved.name.clone(),
     };
     let token = encode(
@@ -150,10 +146,6 @@ fn hash_token(raw: &str) -> String {
     h.update(b"veronex-refresh-token-v1:");
     h.update(raw.as_bytes());
     hex::encode(h.finalize())
-}
-
-fn pwreset_key(token: &str) -> String {
-    valkey_keys::password_reset(token)
 }
 
 /// Add `jti` to the Valkey revocation blocklist with a TTL matching the token's
@@ -314,13 +306,13 @@ pub async fn login(
                 1
             });
             if count == 1 {
-                let _: bool = pool.expire(&key, 300, None).await.unwrap_or_else(|e| {
+                let _: bool = pool.expire(&key, crate::domain::constants::LOGIN_ATTEMPTS_WINDOW_SECS, None).await.unwrap_or_else(|e| {
                     tracing::warn!(ip, error = %e, "login rate-limit: expire failed, key may not expire");
                     false
                 });
             }
             if count > state.login_rate_limit as i64 {
-                return Err(AppError::TooManyRequests { retry_after: 300 });
+                return Err(AppError::TooManyRequests { retry_after: crate::domain::constants::LOGIN_ATTEMPTS_WINDOW_SECS as u64 });
             }
         }
     }
@@ -385,7 +377,6 @@ pub async fn login(
         username: account.username,
         role: resolved.name.clone(),
         permissions: resolved.permissions.clone(),
-        menus: resolved.menus.clone(),
     })))
 }
 
@@ -495,7 +486,7 @@ pub async fn reset_password(
         .ok_or_else(|| AppError::ServiceUnavailable("valkey not configured".into()))?;
 
     use fred::prelude::*;
-    let key = pwreset_key(&req.token);
+    let key = valkey_keys::password_reset(&req.token);
     // S1: Atomically get-and-delete to prevent token reuse race window
     let account_id_str: Option<String> =
         pool.getdel(&key).await
@@ -662,7 +653,6 @@ pub async fn setup(
         username: account.username,
         role: resolved.name.clone(),
         permissions: resolved.permissions.clone(),
-        menus: resolved.menus.clone(),
     })))
 }
 

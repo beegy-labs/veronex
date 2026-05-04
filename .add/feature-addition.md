@@ -35,5 +35,5 @@ User requests new feature or SDD spec moves to active.
 | veronex-embed: flat service | axum + fastembed, single binary, POST /embed + /embed/batch |
 | veronex-agent: flat module | scraper + heartbeat + mcp_discover, background scrape loop |
 | Test before commit | All new code must have tests |
-| E2E after feature | Run `scripts/e2e/` relevant test script |
+| E2E after feature | Run `test/scripts/e2e/` relevant test script |
 | CDD feedback | Always run after completion |

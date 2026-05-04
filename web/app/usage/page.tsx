@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useTimeRange } from '@/components/time-range-context'
 import {
   usageAggregateQuery, analyticsQuery, performanceQuery,
   usageBreakdownQuery, keysQuery,
@@ -18,7 +19,7 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
-import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
 import { SectionLabel } from '@/components/section-label'
 
 import { OverviewTab } from './components/overview-tab'
@@ -29,9 +30,9 @@ import { ModelLatencyChart } from './components/model-latency-chart'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function UsagePage() {
-  usePageGuard('usage')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
-  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const { range, setRange } = useTimeRange()
   const hours = range.hours
   const [modelFilter, setModelFilter] = useState('')
 
@@ -50,72 +51,72 @@ export default function UsagePage() {
     : TIME_LABEL_MAP.get(hours) ?? `${hours}h`
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('usage.title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{t('usage.description')}</p>
+          <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('usage.title')}</h1>
+          <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('usage.description')}</p>
         </div>
         <TimeRangeSelector value={range} onChange={setRange} />
       </div>
 
       {aggError && (
-        <Card className="border-status-warning/30 bg-status-warning/10">
-          <CardContent className="p-5">
-            <p className="font-semibold text-status-warning-fg">{t('usage.analyticsUnavailable')}</p>
-            <p className="text-sm mt-1 text-status-warning-fg/80">{t('usage.clickhouseDisabled')}</p>
+        <Card className="vds-border-warning/30 vds-bg-warning/10">
+          <CardContent className="vds-p-5">
+            <p className="vds-font-600 vds-text-warning">{t('usage.analyticsUnavailable')}</p>
+            <p className="vds-text-sm vds-mt-1 vds-text-warning/80">{t('usage.clickhouseDisabled')}</p>
           </CardContent>
         </Card>
       )}
 
       {/* ── KPI cards — always visible ────────────────── */}
       {aggLoading && (
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="vds-grid vds-grid-cols-2 vds-xl:grid-cols-4 vds-gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i}><CardContent className="p-6">
-              <div className="h-3 w-24 rounded bg-muted animate-pulse mb-4" />
-              <div className="h-8 w-16 rounded bg-muted animate-pulse" />
+            <Card key={i}><CardContent className="vds-p-6">
+              <div className="vds-h-3 vds-w-24 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-4" />
+              <div className="vds-h-8 vds-w-16 vds-rounded vds-bg-muted vds-animate-pulse" />
             </CardContent></Card>
           ))}
         </div>
       )}
 
       {agg && !aggError && (
-        <div className="grid grid-cols-2 xl:grid-cols-4 gap-4">
+        <div className="vds-grid vds-grid-cols-2 vds-xl:grid-cols-4 vds-gap-4">
           <StatsCard title={t('usage.totalRequests')} value={fmtCompact(agg.request_count)}
-            subtitle={`${t('common.last')} ${currentLabel}`} icon={<Hash className="h-5 w-5" />} />
+            subtitle={`${t('common.last')} ${currentLabel}`} icon={<Hash className="vds-h-5 vds-w-5" />} />
           <StatsCard title={t('usage.totalTokens')} value={fmtCompact(agg.total_tokens)}
             subtitle={`${fmtCompact(agg.prompt_tokens)} prompt · ${fmtCompact(agg.completion_tokens)} compl`}
-            icon={<Coins className="h-5 w-5" />} />
+            icon={<Coins className="vds-h-5 vds-w-5" />} />
           <StatsCard title={t('usage.success')}
             value={agg.request_count > 0 ? `${calcPercentage(agg.success_count, agg.request_count)}%` : '—'}
             subtitle={`${fmtCompact(agg.success_count)} ${t('usage.completed')}`}
-            icon={<CheckCircle className="h-5 w-5" />} />
+            icon={<CheckCircle className="vds-h-5 vds-w-5" />} />
           <StatsCard title={t('usage.errors')} value={fmtCompact(agg.error_count)}
             subtitle={`${fmtCompact(agg.cancelled_count)} ${t('usage.cancelled')}`}
             icon={errorRate >= 10
-              ? <AlertTriangle className="h-5 w-5 text-status-error" />
-              : <XCircle className="h-5 w-5" />} />
+              ? <AlertTriangle className="vds-h-5 vds-w-5 vds-text-error" />
+              : <XCircle className="vds-h-5 vds-w-5" />} />
         </div>
       )}
 
       {/* Total cost badge */}
       {breakdown && breakdown.total_cost_usd > 0 && (
-        <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-4 py-2 w-fit">
-          <DollarSign className="h-4 w-4 text-muted-foreground" />
+        <div className="vds-flex vds-items-center vds-gap-2 vds-rounded-lg vds-border-1 vds-border-subtle vds-bg-muted/30 vds-px-4 vds-py-2 vds-w-fit">
+          <DollarSign className="vds-h-4 vds-w-4 vds-text-dim" />
           <div>
-            <p className="text-[10px] uppercase tracking-widest text-muted-foreground font-bold">{t('usage.totalCost')}</p>
-            <p className="text-lg font-bold tabular-nums font-mono">{fmtCost(breakdown.total_cost_usd)}</p>
+            <p className="vds-text-[10px] vds-uppercase vds-tracking-widest vds-text-dim vds-font-700">{t('usage.totalCost')}</p>
+            <p className="vds-text-lg vds-font-700 vds-tabular-nums vds-font-mono">{fmtCost(breakdown.total_cost_usd)}</p>
           </div>
         </div>
       )}
 
       {agg && agg.request_count === 0 && !aggError && (
         <Card>
-          <CardContent className="p-10 text-center text-muted-foreground">
-            <p className="font-medium">{t('usage.noData')}</p>
-            <p className="text-sm mt-1">{t('usage.noDataHint')}</p>
+          <CardContent className="vds-p-10 vds-text-center vds-text-dim">
+            <p className="vds-font-500">{t('usage.noData')}</p>
+            <p className="vds-text-sm vds-mt-1">{t('usage.noDataHint')}</p>
           </CardContent>
         </Card>
       )}
@@ -125,15 +126,15 @@ export default function UsagePage() {
         <TabsList>
           <TabsTrigger value="overview">{t('usage.overview')}</TabsTrigger>
           <TabsTrigger value="by-key">
-            <Key className="h-3.5 w-3.5 mr-1.5" />
+            <Key className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
             {t('usage.byKey')}
           </TabsTrigger>
           <TabsTrigger value="by-model">
-            <Bot className="h-3.5 w-3.5 mr-1.5" />
+            <Bot className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
             {t('usage.byModel')}
           </TabsTrigger>
           <TabsTrigger value="by-provider">
-            <Server className="h-3.5 w-3.5 mr-1.5" />
+            <Server className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
             {t('usage.byProvider')}
           </TabsTrigger>
         </TabsList>
@@ -149,31 +150,31 @@ export default function UsagePage() {
         </TabsContent>
 
         {/* ── By Model ────────────────────────────────── */}
-        <TabsContent value="by-model" className="space-y-6 mt-4">
+        <TabsContent value="by-model" className="vds-space-y-6 vds-mt-4">
           <Card>
             <CardHeader>
-              <div className="flex items-center justify-between flex-wrap gap-3">
+              <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-3">
                 <div>
-                  <CardTitle className="text-base flex items-center gap-2">
-                    <Bot className="h-4 w-4 text-primary" />
+                  <CardTitle className="vds-text-base vds-flex vds-items-center vds-gap-2">
+                    <Bot className="vds-h-4 vds-w-4 vds-text-primary" />
                     {t('usage.byModel')}
                   </CardTitle>
-                  <p className="text-xs text-muted-foreground mt-0.5">{t('usage.modelCallRatio')}</p>
+                  <p className="vds-text-xs vds-text-dim vds-mt-0.5">{t('usage.modelCallRatio')}</p>
                 </div>
-                <div className="relative">
-                  <Search className="absolute left-2.5 top-2.5 h-3.5 w-3.5 text-muted-foreground" />
+                <div className="vds-relative">
+                  <Search className="vds-absolute vds-left-2.5 vds-top-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim" />
                   <Input
                     placeholder={t('usage.searchModels')}
                     value={modelFilter}
                     onChange={(e) => setModelFilter(e.target.value)}
-                    className="pl-8 h-8 w-52 text-sm"
+                    className="vds-pl-8 vds-h-8 vds-w-52 vds-text-sm"
                   />
                 </div>
               </div>
             </CardHeader>
             <CardContent>
               {!breakdown && (
-                <div className="flex h-32 items-center justify-center text-muted-foreground text-sm">{t('common.loading')}</div>
+                <div className="vds-flex vds-h-32 vds-items-center vds-justify-center vds-text-dim vds-text-sm">{t('common.loading')}</div>
               )}
               {breakdown && (
                 <ModelBreakdownTable data={breakdown.by_model} filter={modelFilter} />
@@ -187,13 +188,13 @@ export default function UsagePage() {
         </TabsContent>
 
         {/* ── By Provider ─────────────────────────────── */}
-        <TabsContent value="by-provider" className="space-y-4 mt-4">
+        <TabsContent value="by-provider" className="vds-space-y-4 vds-mt-4">
           <div>
-            <SectionLabel className="mb-4">
+            <SectionLabel className="vds-mb-4">
               {t('usage.byProvider')}
             </SectionLabel>
             {!breakdown && (
-              <div className="flex h-32 items-center justify-center text-muted-foreground text-sm">{t('common.loading')}</div>
+              <div className="vds-flex vds-h-32 vds-items-center vds-justify-center vds-text-dim vds-text-sm">{t('common.loading')}</div>
             )}
             {breakdown && <ProviderBreakdownSection data={breakdown} />}
           </div>

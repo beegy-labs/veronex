@@ -57,6 +57,16 @@ veronex:
   # MCP vector selector top-K results returned from Vespa ANN search. Default: 8
   mcpVectorTopK: ""
 
+  # Vespa environment partition key — isolates documents per environment on a shared Vespa instance.
+  # REQUIRED when multiple environments share a single Vespa — override per environment.
+  # e.g. --set veronex.vespaEnvironment=prod
+  vespaEnvironment: "prod"
+
+  # Vespa tenant partition key — sub-partitions documents within an environment by team/org.
+  # Default: "default" (single-tenant deployments).
+  # e.g. --set veronex.vespaTenantId=team-a
+  vespaTenantId: "default"
+
   otel:
     # gRPC endpoint (e.g. http://otel-collector:4317)
     endpoint: ""
@@ -111,6 +121,13 @@ veronexConsumer:
   replicaCount: 1
 
   logLevel: "info"  # RUST_LOG level
+
+  # Kafka/Redpanda auth — matches otelCollector.kafka pattern
+  kafka:
+    securityProtocol: PLAINTEXT   # PLAINTEXT | SASL_PLAINTEXT | SASL_SSL
+    saslMechanism: "SCRAM-SHA-512"
+    saslUsername: ""
+    saslPassword: ""
 
   resources:
     requests:
@@ -331,11 +348,6 @@ vespa:
   # Internal service URL — used by veronex pods
   # Override if deploying Vespa outside this chart.
   url: ""   # default: http://<release>-vespa:8080
-  # Deployment-level partition key for shared Vespa instances.
-  # Isolates this deployment's documents from others (prod, staging, dev, ...).
-  # REQUIRED when multiple deployments share a single Vespa — override per environment.
-  # e.g. --set vespa.deploymentId=prod-v1
-  deploymentId: "default"
 
 # ── Embedding service (for MCP vector selection with Vespa) ──────────────────
 # Deployed automatically when vespa.enabled=true.
@@ -410,6 +422,12 @@ externalSecrets:
       s3SecretKey: ""          # e.g. "veronex/s3-secret-key"
       geminiApiKey: ""         # e.g. "veronex/gemini-api-key" (optional)
       encryptionKey: ""        # e.g. "veronex/encryption-key" (optional)
+      kafkaUsername: ""        # e.g. "veronex/kafka-username" (optional — consumer SASL)
+      kafkaPassword: ""        # e.g. "veronex/kafka-password" (optional — consumer SASL)
+      clickhousePassword: ""   # e.g. "veronex/clickhouse-password" (optional — external CH)
+      clickhouseUser: ""       # e.g. "veronex/clickhouse-user" (optional — external CH)
+      veronexApiKey: ""        # e.g. "veronex/veronex-api-key" (optional — MCP server auth)
+      bootstrapSuperPass: ""   # e.g. "veronex/bootstrap-super-pass" (optional — initial admin password)
     refreshInterval: "1h"
 
   # Option 2: CSI Secrets Store Driver

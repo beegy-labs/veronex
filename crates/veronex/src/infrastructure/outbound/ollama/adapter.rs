@@ -1,18 +1,26 @@
 use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Instant;
 
 use anyhow::Result;
 use async_trait::async_trait;
+use dashmap::DashMap;
 use futures::Stream;
 use futures::StreamExt as _;
 use serde::Deserialize;
 
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::model_lifecycle::{
+    LifecycleOutcome, ModelLifecyclePort,
+};
 use crate::domain::constants::{MAX_LINE_BUFFER, PROVIDER_REQUEST_TIMEOUT};
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::enums::FinishReason;
-use crate::domain::value_objects::StreamToken;
+use crate::domain::errors::LifecycleError;
+use crate::domain::value_objects::{EvictionReason, ModelInstanceState, StreamToken};
 use crate::infrastructure::inbound::http::inference_helpers::is_vision_model;
+use crate::infrastructure::outbound::ollama::lifecycle::{run_probe_with_stall, LoadInFlight};
 
 pub struct OllamaAdapter {
     base_url: String,
@@ -21,30 +29,45 @@ pub struct OllamaAdapter {
     valkey: Option<fred::clients::Pool>,
     /// Provider UUID — used as part of the Valkey cache key.
     provider_id: uuid::Uuid,
+    /// VramPool SSOT — used for `is_loaded` lookup + state updates after load.
+    /// `None` in tests / static router; `ensure_ready` short-circuits to a
+    /// no-op (probe still runs so `stream_tokens` works) when not configured.
+    vram_pool: Option<Arc<dyn VramPoolPort>>,
+    /// Per-(model) load-in-flight slots. Concurrent `ensure_ready(M)` calls
+    /// coalesce on the same `LoadInFlight` so only one HTTP probe runs.
+    in_flight_loads: Arc<DashMap<String, Arc<LoadInFlight>>>,
 }
 
 // ── Context length helper ───────────────────────────────────────────────────────
 
 /// Derive the effective `num_ctx` to send to Ollama based on the model name.
 ///
-/// Ollama uses `OLLAMA_CONTEXT_LENGTH` as the global default, but the per-request
-/// `options.num_ctx` takes precedence and lets each model use its natural window:
+/// **Sync is the SSOT** — the canonical value comes from `capacity::analyzer`
+/// parsing `/api/show` (Modelfile `PARAMETER num_ctx`) into Valkey via
+/// `lookup_ctx`. This fabricate is the cold-start fallback only, used when
+/// the Valkey cache has not yet been populated. Returned values MUST equal
+/// what sync would return for the same model — otherwise lifecycle Phase 1
+/// (cache miss → fabricate) and inference Phase 2 (cache hit → sync) drift,
+/// triggering a second ollama runner subprocess for the same model.
+/// SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md` §3.5.
 ///
-/// - Models with "128k" / "200k" in their name get the matching context.
-/// - Large models (70B+) are capped at 32K to keep KV cache manageable.
-/// - Everything else defaults to 32K, which is well under the 200K global
-///   env var and avoids over-allocating KV cache for small models.
-fn model_effective_num_ctx(model: &str) -> u32 {
+/// - "200k" → **200_000** (matches Modelfile `PARAMETER num_ctx 200000`,
+///   verified against `qwen3-coder-next-200k:latest /api/show`)
+/// - "128k" → **131_072** (= 128 × 1024; standard Modelfile convention)
+/// - "1m" → **131_072** (1M models: 128K practical limit on this hardware)
+/// - 70B+ → 32_768 (KV cache budget cap)
+/// - default → 32_768 (sensible for 7B–32B models)
+pub(crate) fn model_effective_num_ctx(model: &str) -> u32 {
     let m = model.to_lowercase();
-    if m.contains("200k")                        { return 204_800; }
+    if m.contains("200k")                        { return 200_000; }
     if m.contains("128k")                        { return 131_072; }
-    if m.contains("1m")                          { return 131_072; } // 1M models: 128K practical limit
+    if m.contains("1m")                          { return 131_072; }
     if m.contains("72b") || m.contains("70b")    { return  32_768; }
-    32_768 // sensible default for 7B–32B models
+    32_768
 }
 
 /// Resolve `configured_ctx` from Valkey.  Returns `None` on any cache miss or error.
-async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: &str) -> Option<u32> {
+pub(crate) async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: &str) -> Option<u32> {
     use fred::prelude::*;
     let key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(provider_id, model);
     let raw: Option<String> = pool.get(&key).await.ok()?;
@@ -53,6 +76,25 @@ async fn lookup_ctx(pool: &fred::clients::Pool, provider_id: uuid::Uuid, model: 
         .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
         .map(|n| n as u32)
 }
+
+/// Resolve effective `num_ctx` for a model: Valkey sync SSOT first, fabricate
+/// fallback. Used by both the lifecycle port (Phase 1) and the inference port
+/// (Phase 2) so probe and chat send the same `KvSize` to ollama.
+///
+/// SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md` §3.4.
+pub async fn resolve_num_ctx(
+    pool: Option<&fred::clients::Pool>,
+    provider_id: uuid::Uuid,
+    model: &str,
+) -> u32 {
+    if let Some(p) = pool {
+        if let Some(n) = lookup_ctx(p, provider_id, model).await {
+            return n;
+        }
+    }
+    model_effective_num_ctx(model)
+}
+
 
 impl OllamaAdapter {
     #[allow(clippy::expect_used)]
@@ -65,6 +107,8 @@ impl OllamaAdapter {
                 .expect("failed to build HTTP client"),
             valkey: None,
             provider_id: uuid::Uuid::nil(),
+            vram_pool: None,
+            in_flight_loads: Arc::new(DashMap::new()),
         }
     }
 
@@ -83,7 +127,131 @@ impl OllamaAdapter {
                 .expect("failed to build HTTP client"),
             valkey: Some(valkey),
             provider_id,
+            vram_pool: None,
+            in_flight_loads: Arc::new(DashMap::new()),
         }
+    }
+
+    /// Builder: attach `VramPoolPort` so `ensure_ready` can consult and update
+    /// the SSOT. Without it, every `ensure_ready` must drive a probe.
+    pub fn with_vram_pool(mut self, pool: Arc<dyn VramPoolPort>) -> Self {
+        self.vram_pool = Some(pool);
+        self
+    }
+
+    /// Returns the provider UUID this adapter is bound to.
+    pub fn provider_id(&self) -> uuid::Uuid {
+        self.provider_id
+    }
+}
+
+// ── ModelLifecyclePort impl ─────────────────────────────────────────────────
+//
+// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §6.
+//
+// Phase-1 path. `runner.rs` invokes `ensure_ready(model)` before
+// `InferenceProviderPort::stream_tokens(job)`. Concurrent same-model calls on
+// this adapter instance coalesce on the in-flight slot.
+
+#[async_trait]
+impl ModelLifecyclePort for OllamaAdapter {
+    async fn ensure_ready(&self, model: &str) -> Result<LifecycleOutcome, LifecycleError> {
+        // 1. SSOT lookup — VramPool is authoritative; no parallel /api/ps cache.
+        if let Some(pool) = &self.vram_pool {
+            // `loaded_model_names` is per-provider; allocates a Vec but bounded by
+            // OLLAMA_MAX_LOADED_MODELS (typically 2). Cheap enough for the hot path.
+            if pool
+                .loaded_model_names(self.provider_id)
+                .iter()
+                .any(|m| m == model)
+            {
+                return Ok(LifecycleOutcome::AlreadyLoaded);
+            }
+        }
+
+        // 2. In-flight coalesce — concurrent same-model callers wait on one probe.
+        if let Some(existing) = self.in_flight_loads.get(model).map(|e| e.value().clone()) {
+            let waited_start = Instant::now();
+            existing.notify.notified().await;
+            let waited_ms = waited_start.elapsed().as_millis() as u64;
+            return existing
+                .result
+                .get()
+                .cloned()
+                .unwrap_or(Err(LifecycleError::Stalled {
+                    last_progress_ms: existing.no_progress_ms(),
+                }))
+                .map(|_| LifecycleOutcome::LoadCoalesced { waited_ms });
+        }
+
+        // 3. Resolve num_ctx from the same SSOT the inference port uses (Valkey
+        //    cache → fabricate fallback). MUST be identical to what stream_chat
+        //    will send, otherwise ollama spawns a second runner with different
+        //    KvSize for the same model. SDD §3.4.
+        let num_ctx = resolve_num_ctx(self.valkey.as_ref(), self.provider_id, model).await;
+
+        // 4. Acquire slot, drive probe with concurrent stall detection.
+        let slot = Arc::new(LoadInFlight::new());
+        self.in_flight_loads
+            .insert(model.to_string(), slot.clone());
+        let result = run_probe_with_stall(&self.client, &self.base_url, model, num_ctx, &slot).await;
+
+        // 4. Notify waiters (set + remove are idempotent — first writer wins).
+        let _ = slot.result.set(result.clone());
+        slot.notify.notify_waiters();
+        self.in_flight_loads.remove(model);
+
+        // 5. SSOT update on success. weight_mb=0 placeholder — sync_loop will
+        //    reconcile actual weight from /api/ps on its next pass. Acceptable
+        //    because routing decisions cache miss within one sync cycle (30s)
+        //    are bounded; the next request hits the warm /api/ps view.
+        if let (Ok(_), Some(pool)) = (&result, &self.vram_pool) {
+            pool.mark_model_loaded(self.provider_id, model, 0);
+        }
+
+        result
+    }
+
+    async fn instance_state(&self, model: &str) -> ModelInstanceState {
+        if let Some(pool) = &self.vram_pool {
+            if pool
+                .loaded_model_names(self.provider_id)
+                .iter()
+                .any(|m| m == model)
+            {
+                return ModelInstanceState::Loaded {
+                    loaded_at: std::time::SystemTime::now(),
+                    weight_bytes: 0,
+                };
+            }
+        }
+        if self.in_flight_loads.contains_key(model) {
+            return ModelInstanceState::Loading {
+                started_at: std::time::SystemTime::now(),
+                last_progress_at: std::time::SystemTime::now(),
+            };
+        }
+        ModelInstanceState::NotLoaded
+    }
+
+    async fn evict(&self, model: &str, _reason: EvictionReason) -> Result<(), LifecycleError> {
+        if let Some(pool) = &self.vram_pool {
+            pool.mark_model_unloaded(self.provider_id, model);
+        }
+        // Operator-driven evict via ollama: `keep_alive: 0` on a zero-token probe.
+        let url = format!("{}/api/generate", self.base_url.trim_end_matches('/'));
+        self.client
+            .post(&url)
+            .json(&serde_json::json!({
+                "model": model,
+                "prompt": "",
+                "num_predict": 0,
+                "keep_alive": 0,
+            }))
+            .send()
+            .await
+            .map_err(|e| LifecycleError::ProviderError(format!("evict: {e}")))?;
+        Ok(())
     }
 }
 
@@ -151,7 +319,6 @@ impl InferenceProviderPort for OllamaAdapter {
                 "model":   job.model_name.as_str(),
                 "prompt":  job.prompt.as_str(),
                 "stream":  false,
-                "think":   false,
                 "options": options,
             }))
             .send()
@@ -237,7 +404,6 @@ impl OllamaAdapter {
                 "model":   model,
                 "prompt":  prompt,
                 "stream":  true,
-                "think":   false,
                 "options": options,
             });
             if let Some(imgs) = images {
@@ -307,6 +473,7 @@ impl OllamaAdapter {
                         } else {
                             None
                         },
+                        is_phase_boundary: false,
                     };
 
                     if chunk.done {
@@ -408,11 +575,13 @@ impl OllamaAdapter {
                 messages
             };
 
+            // MCP ReAct is provider-agnostic: we forward `tools` and collect
+            // `tool_calls`. Ollama-specific reasoning/thinking switches belong
+            // to Ollama's own model templates — we don't set `think` here.
             let mut body = serde_json::json!({
                 "model":    model,
                 "messages": messages,
                 "stream":   true,
-                "think":    false,
                 "options":  options,
             });
 
@@ -492,6 +661,7 @@ impl OllamaAdapter {
                                     cached_tokens: None,
                                     tool_calls: Some(tc.clone()),
                                     finish_reason: None,
+                                    is_phase_boundary: false,
                                 };
                             }
 
@@ -516,6 +686,7 @@ impl OllamaAdapter {
                             } else {
                                 None
                             },
+                            is_phase_boundary: false,
                         };
                     }
 
@@ -533,8 +704,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn model_effective_num_ctx_200k() {
-        assert_eq!(model_effective_num_ctx("gemma-200k"), 204_800);
+    fn model_effective_num_ctx_200k_matches_modelfile_value() {
+        // S21: fabricate values MUST equal what sync stores for that model.
+        // qwen3-coder-next-200k:latest Modelfile has `PARAMETER num_ctx 200000`,
+        // verified via /api/show (2026-04-30). Drift to 204_800 (= 200×1024)
+        // would put fabricate and sync on different runners → double cold-load.
+        // SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md` §3.5.
+        assert_eq!(model_effective_num_ctx("gemma-200k"), 200_000);
+        assert_eq!(model_effective_num_ctx("qwen3-coder-next-200k:latest"), 200_000);
     }
 
     #[test]

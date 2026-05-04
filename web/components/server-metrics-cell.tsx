@@ -20,18 +20,18 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
   const { data, isLoading, isError, refetch, isFetching } = useQuery(serverMetricsQuery(serverId))
 
   if (isLoading) {
-    return <span className="text-xs text-muted-foreground animate-pulse">{t('common.loading')}</span>
+    return <span className="vds-text-xs vds-text-dim vds-animate-pulse">{t('common.loading')}</span>
   }
 
   if (isError || !data || !data.scrape_ok) {
     return (
-      <div className="flex items-center gap-2">
-        <Badge variant="outline" className="bg-status-error/10 text-status-error-fg border-status-error/30 text-xs font-medium">
-          <WifiOff className="h-3 w-3 mr-1.5" />{t('providers.servers.unreachable')}
+      <div className="vds-flex vds-items-center vds-gap-2">
+        <Badge variant="outline" className="vds-bg-error/10 vds-text-error vds-border-error/30 vds-text-xs vds-font-500">
+          <WifiOff className="vds-h-3 vds-w-3 vds-mr-1.5" />{t('providers.servers.unreachable')}
         </Badge>
-        <Button variant="ghost" size="icon" className="h-6 w-6 text-muted-foreground hover:text-foreground"
+        <Button variant="ghost" size="icon" className="vds-h-6 vds-w-6 vds-text-dim vds-hover:text-primary"
           aria-label={t('common.retry')} onClick={() => refetch()} disabled={isFetching} title={t('common.retry')}>
-          <RefreshCw className={isFetching ? 'h-3.5 w-3.5 animate-spin' : 'h-3.5 w-3.5'} />
+          <RefreshCw className={isFetching ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
         </Button>
       </div>
     )
@@ -42,29 +42,29 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
   const cpuPct = data.cpu_usage_pct != null ? Math.round(data.cpu_usage_pct) : null
 
   return (
-    <div className="space-y-1 text-xs">
+    <div className="vds-space-y-1 vds-text-xs">
       {/* MEM */}
-      <div className="flex items-center gap-2">
-        <span className="w-6 text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wide shrink-0">MEM</span>
-        <span className="text-text-bright font-mono tabular-nums">
-          {fmtMb(memUsed)}<span className="text-muted-foreground/70"> / {fmtMb(data.mem_total_mb)}</span>
+      <div className="vds-flex vds-items-center vds-gap-2">
+        <span className="vds-w-8 vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase vds-tracking-wide vds-flex-shrink-0 vds-whitespace-nowrap">MEM</span>
+        <span className="vds-text-bright vds-font-mono vds-tabular-nums">
+          {fmtMb(memUsed)}<span className="vds-text-dim/70"> / {fmtMb(data.mem_total_mb)}</span>
         </span>
-        <span className={`ml-auto font-semibold tabular-nums ${memPct >= RESOURCE_CRITICAL ? 'text-status-error-fg' : memPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : 'text-muted-foreground'}`}>
+        <span className={`vds-ml-auto vds-font-600 vds-tabular-nums ${memPct >= RESOURCE_CRITICAL ? 'vds-text-error' : memPct >= RESOURCE_WARNING ? 'vds-text-warning' : 'vds-text-dim'}`}>
           {memPct}%
         </span>
       </div>
 
       {/* CPU */}
       {data.cpu_logical > 0 && (
-        <div className="flex items-center gap-2">
-          <span className="w-6 text-[10px] font-semibold text-muted-foreground/70 uppercase tracking-wide shrink-0">CPU</span>
-          <span className="text-text-dim tabular-nums">
+        <div className="vds-flex vds-items-center vds-gap-2">
+          <span className="vds-w-8 vds-text-[10px] vds-font-600 vds-text-dim/70 vds-uppercase vds-tracking-wide vds-flex-shrink-0 vds-whitespace-nowrap">CPU</span>
+          <span className="vds-text-dim vds-tabular-nums">
             {data.cpu_physical != null
-              ? <>{data.cpu_physical}<span className="text-muted-foreground/60">c</span> / {data.cpu_logical}<span className="text-muted-foreground/60">t</span></>
-              : <>{data.cpu_logical}<span className="text-muted-foreground/60">t</span></>}
+              ? <>{data.cpu_physical}<span className="vds-text-dim/60">c</span> / {data.cpu_logical}<span className="vds-text-dim/60">t</span></>
+              : <>{data.cpu_logical}<span className="vds-text-dim/60">t</span></>}
           </span>
           {cpuPct != null && (
-            <span className={`ml-auto font-semibold tabular-nums ${cpuPct >= RESOURCE_CRITICAL ? 'text-status-error-fg' : cpuPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : 'text-muted-foreground'}`}>
+            <span className={`vds-ml-auto vds-font-600 vds-tabular-nums ${cpuPct >= RESOURCE_CRITICAL ? 'vds-text-error' : cpuPct >= RESOURCE_WARNING ? 'vds-text-warning' : 'vds-text-dim'}`}>
               {cpuPct}%
             </span>
           )}
@@ -75,26 +75,26 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
       {data.gpus.map((gpu) => {
         const gpuT = gpu.temp_junction_c ?? gpu.temp_c
         return (
-        <div key={gpu.card} className="flex items-center gap-2 flex-wrap">
-          <span className="w-6 text-[10px] font-semibold text-accent-gpu uppercase tracking-wide shrink-0">GPU</span>
-          <span className="text-text-dim font-mono">{gpu.card}</span>
+        <div key={gpu.card} className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap">
+          <span className="vds-w-8 vds-text-[10px] vds-font-600 vds-text-accent-gpu vds-uppercase vds-tracking-wide vds-flex-shrink-0 vds-whitespace-nowrap">GPU</span>
+          <span className="vds-text-dim vds-font-mono">{gpu.card}</span>
           {gpuT != null && (
-              <span className={`flex items-center gap-0.5 tabular-nums ${gpuT >= GPU_TEMP_CRITICAL ? 'text-status-error-fg font-bold' : 'text-text-dim'}`}>
-                <Thermometer className="h-3 w-3" />{fmtTemp(gpuT)}
+              <span className={`vds-flex vds-items-center vds-gap-0.5 vds-tabular-nums ${gpuT >= GPU_TEMP_CRITICAL ? 'vds-text-error vds-font-bold' : 'vds-text-dim'}`}>
+                <Thermometer className="vds-h-3 vds-w-3" />{fmtTemp(gpuT)}
               </span>
           )}
           {gpu.power_w != null && (
-            <span className="flex items-center gap-0.5 text-text-dim tabular-nums">
-              <Zap className="h-3 w-3 text-accent-power" />{fmtPower(gpu.power_w)}
+            <span className="vds-flex vds-items-center vds-gap-0.5 vds-text-dim vds-tabular-nums">
+              <Zap className="vds-h-3 vds-w-3 vds-text-accent-power" />{fmtPower(gpu.power_w)}
             </span>
           )}
           {gpu.vram_total_mb != null && (
-            <span className="flex items-center gap-0.5 text-muted-foreground tabular-nums">
-              <MemoryStick className="h-3 w-3" />{fmtMb(gpu.vram_used_mb ?? 0)}/{fmtMb(gpu.vram_total_mb)}
+            <span className="vds-flex vds-items-center vds-gap-0.5 vds-text-dim vds-tabular-nums">
+              <MemoryStick className="vds-h-3 vds-w-3" />{fmtMb(gpu.vram_used_mb ?? 0)}/{fmtMb(gpu.vram_total_mb)}
             </span>
           )}
           {gpu.busy_pct != null && (
-            <span className="text-muted-foreground tabular-nums">{fmtPct(gpu.busy_pct)}</span>
+            <span className="vds-text-dim vds-tabular-nums">{fmtPct(gpu.busy_pct)}</span>
           )}
         </div>
         )
@@ -116,7 +116,7 @@ export function ServerMetricsCompact({
   const { data, isError } = useQuery(serverMetricsQuery(serverId))
 
   if (isError || (data && !data.scrape_ok)) {
-    return <span className="text-[10px] text-status-error-fg italic">{t('providers.servers.unreachable')}</span>
+    return <span className="vds-text-[10px] vds-text-error vds-italic">{t('providers.servers.unreachable')}</span>
   }
   if (!data) return null
 
@@ -126,38 +126,38 @@ export function ServerMetricsCompact({
   const gpu = data.gpus[gpuIndex ?? 0] ?? null
   const gpuTemp = gpu?.temp_junction_c ?? gpu?.temp_c ?? null
   const tempCls = gpuTemp != null && gpuTemp >= GPU_TEMP_CRITICAL
-    ? 'text-status-error-fg'
+    ? 'vds-text-error'
     : gpuTemp != null && gpuTemp >= GPU_TEMP_WARNING
-    ? 'text-status-warning-fg'
-    : 'text-muted-foreground'
+    ? 'vds-text-warning'
+    : 'vds-text-dim'
 
   return (
-    <div className="mt-1.5 pt-1.5 border-t border-border/40 flex flex-wrap items-center gap-x-2.5 gap-y-0.5">
-      <span className="flex items-center gap-1">
-        <span className="text-[10px] font-semibold text-muted-foreground/60 uppercase">MEM</span>
-        <span className="tabular-nums font-mono text-[11px] text-text-dim">
-          {fmtMb(memUsed)}<span className="text-muted-foreground/40">/{fmtMb(data.mem_total_mb)}</span>
+    <div className="vds-mt-1.5 vds-pt-1.5 vds-border-t-1 vds-border-subtle/40 vds-flex vds-flex-wrap vds-items-center vds-gap-x-2.5 vds-gap-y-0.5">
+      <span className="vds-flex vds-items-center vds-gap-1">
+        <span className="vds-text-[10px] vds-font-600 vds-text-dim/60 vds-uppercase">MEM</span>
+        <span className="vds-tabular-nums vds-font-mono vds-text-2xs vds-text-dim">
+          {fmtMb(memUsed)}<span className="vds-text-dim/40">/{fmtMb(data.mem_total_mb)}</span>
         </span>
-        <span className={`text-[10px] tabular-nums ${memPct >= RESOURCE_CRITICAL ? 'text-status-error-fg' : memPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : 'text-muted-foreground/70'}`}>
+        <span className={`vds-text-[10px] vds-tabular-nums ${memPct >= RESOURCE_CRITICAL ? 'vds-text-error' : memPct >= RESOURCE_WARNING ? 'vds-text-warning' : 'vds-text-dim/70'}`}>
           {memPct}%
         </span>
       </span>
       {cpuPct != null && (
-        <span className="flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground">
-          <Cpu className="h-3 w-3 shrink-0" />
-          <span className={cpuPct >= RESOURCE_CRITICAL ? 'text-status-error-fg font-bold' : cpuPct >= RESOURCE_WARNING ? 'text-status-warning-fg' : ''}>
+        <span className="vds-flex vds-items-center vds-gap-0.5 vds-text-2xs vds-tabular-nums vds-text-dim">
+          <Cpu className="vds-h-3 vds-w-3 vds-flex-shrink-0" />
+          <span className={cpuPct >= RESOURCE_CRITICAL ? 'vds-text-error vds-font-700' : cpuPct >= RESOURCE_WARNING ? 'vds-text-warning' : ''}>
             {cpuPct}%
           </span>
         </span>
       )}
       {gpuTemp != null && (
-        <span className={`flex items-center gap-0.5 text-[11px] tabular-nums ${tempCls}`}>
-          <Thermometer className="h-3 w-3 shrink-0" />{fmtTemp(gpuTemp)}
+        <span className={`vds-flex vds-items-center vds-gap-0.5 vds-text-2xs vds-tabular-nums ${tempCls}`}>
+          <Thermometer className="vds-h-3 vds-w-3 vds-flex-shrink-0" />{fmtTemp(gpuTemp)}
         </span>
       )}
       {gpu?.power_w != null && (
-        <span className="flex items-center gap-0.5 text-[11px] tabular-nums text-muted-foreground">
-          <Zap className="h-3 w-3 shrink-0 text-accent-power" />{fmtPower(gpu.power_w)}
+        <span className="vds-flex vds-items-center vds-gap-0.5 vds-text-2xs vds-tabular-nums vds-text-dim">
+          <Zap className="vds-h-3 vds-w-3 vds-flex-shrink-0 vds-text-accent-power" />{fmtPower(gpu.power_w)}
         </span>
       )}
     </div>

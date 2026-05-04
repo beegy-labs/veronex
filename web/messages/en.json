@@ -18,7 +18,11 @@
     "audit": "Audit Log",
     "capacity": "Concurrency",
     "health": "Health",
-    "mcp": "MCP"
+    "mcp": "MCP",
+    "observe": "Observe",
+    "operate": "Operate",
+    "govern": "Govern",
+    "system": "System"
   },
   "common": {
     "all": "All",
@@ -117,7 +121,8 @@
     "activate": "Activate",
     "deactivate": "Deactivate",
     "deleting": "Deleting…",
-    "model": "Model"
+    "model": "Model",
+    "skipToMain": "Skip to main content"
   },
   "conversations": {
     "title": "Conversations",
@@ -129,7 +134,9 @@
     "source": "Source",
     "createdAt": "Created",
     "internals": "Internals",
-    "internalsEmpty": "No compression or vision data for this turn.",
+    "internalsEmpty": "No compression, vision, or MCP tool data for this turn.",
+    "compressedBadge": "Compressed ({{original}}→{{compressed}} tok, {{model}})",
+    "visionBadge": "Vision: {{model}} ({{imageCount}} img, {{tokens}} tok)",
     "compression": "Compression",
     "compressionModel": "Model",
     "originalTokens": "Original",
@@ -139,6 +146,16 @@
     "visionModel": "Model",
     "imageCount": "Images",
     "analysisTokens": "Tokens",
+    "toolCalls": "MCP Tool Calls",
+    "toolCallsBadge": "{{count}} MCP call(s)",
+    "toolCallsRound": "Round {{round}}",
+    "toolCallsLatency": "{{ms}}ms",
+    "toolCallsCacheHit": "cache",
+    "toolCallsArgs": "args",
+    "toolCallsResult": "result",
+    "toolCallsNoResult": "(no result)",
+    "toolResult": "show result",
+    "mcpCallsBadge": "{{count}} MCP",
     "backToList": "Back to conversations"
   },
   "overview": {
@@ -276,6 +293,7 @@
     "noJobsFound": "No jobs found.",
     "noError": "(no error message)",
     "noResult": "(no result stored)",
+    "toolOnlyTurnHint": "(tool-only turn — see the tool call above; the model produced no text in this round)",
     "processing": "(processing…)",
     "toolCalls": "Tool Calls",
     "agentToolCall": "The model responded with a tool call — no text output was generated.",
@@ -305,6 +323,7 @@
     "providerOllama": "Ollama",
     "providerGemini": "Gemini",
     "allSources": "All Sources",
+    "sourceApi": "API",
     "sourceTest": "Test",
     "sourceAnalyzer": "Analyzer",
     "filters": "Filters",
@@ -446,7 +465,7 @@
       "ollamaAvailableModels": "Available models",
       "ollamaNoSync": "No models synced yet. Click Sync All to fetch models.",
       "ollamaSearchModels": "Search models…",
-      "modelToggle": "Toggle {model}",
+      "modelToggle": "Toggle {{model}}",
       "viewModels": "View models",
       "noServerLinked": "no server linked",
       "searchServers": "Search servers…",
@@ -481,7 +500,27 @@
       "networkError": "Cannot reach the API server — check your network",
       "unreachableError": "Ollama server is unreachable — verify the URL and port",
       "duplicateUrl": "This URL is already registered",
-      "verifyFirst": "Verify connection before registering"
+      "verifyFirst": "Verify connection before registering",
+      "labTitle": "Advanced",
+      "labDesc": "Ollama-only policies (image input, context compression, multi-turn gates).",
+      "labImageSection": "Image Input",
+      "labMaxImageBytes": "Max image size",
+      "labMaxImageBytesDesc": "Maximum base64 size per image in a request",
+      "labCompressionModelDesc": "Ollama model used for per-turn summarization. None = reuse inference model.",
+      "labContextBudgetRatio": "Context budget ratio",
+      "labContextBudgetRatioDesc": "Fraction of configured_ctx reserved for inference input (0.1–1.0)",
+      "labCompressionTriggerTurns": "Compression trigger interval",
+      "labCompressionTriggerTurnsDesc": "Compress every N completed turns (1 = every turn)",
+      "labRecentVerbatim": "Recent verbatim window",
+      "labRecentVerbatimDesc": "Keep the last N turns uncompressed (raw)",
+      "labCompressionTimeout": "Compression timeout",
+      "labCompressionTimeoutDesc": "Max time for a single compression call (silently skipped on timeout)",
+      "labHandoffThresholdDesc": "Hand off to a new session when total tokens exceed this × configured_ctx",
+      "labMultiturnMinParamsDesc": "Models below this parameter count are rejected from multi-turn (400)",
+      "labMultiturnMinCtxDesc": "Models with max_ctx below this are rejected from multi-turn (400)",
+      "labMultiturnAllowedModelsDesc": "Only checked models may run multi-turn. All unchecked = all eligible models allowed.",
+      "labMultiturnAllModels": "All eligible",
+      "labMultiturnGateFail": "Below gate"
     },
     "capacity": {
       "title": "Concurrency Control",
@@ -752,6 +791,8 @@
     "syncLabel": "Sync",
     "stop": "Stop",
     "runAgain": "Run Again",
+    "toolsUsed": "Tools Used",
+    "toolOnlyTurn": "tool-only turn (model invoked MCP tools without producing text)",
     "retryInTest": "Retry in Test",
     "runningAs": "Running as",
     "runner": "Runner",
@@ -774,7 +815,11 @@
     "clearConversation": "Clear",
     "newSession": "New Session",
     "noSessions": "No sessions yet.",
-    "turns": "turns"
+    "turns": "turns",
+    "endpointGemini": "/v1beta/models (Gemini)",
+    "mcp": "MCP",
+    "mcpEnable": "Enable MCP",
+    "mcpDisable": "Disable MCP"
   },
   "apiDocs": {
     "title": "API Documentation",
@@ -879,24 +924,10 @@
       "audit_view": "Audit Log",
       "settings_manage": "Settings",
       "role_manage": "Role Management",
-      "model_manage": "Model Management"
-    },
-    "menu": {
-      "dashboard": "Dashboard",
-      "flow": "Network Flow",
-      "jobs": "Jobs",
-      "performance": "Performance",
-      "usage": "Usage",
-      "test": "Test",
-      "providers": "Providers",
-      "servers": "Servers",
-      "keys": "API Keys",
-      "accounts": "Accounts",
-      "audit": "Audit Log",
-      "api_docs": "API Docs"
+      "model_manage": "Model Management",
+      "mcp_manage": "MCP Management"
     },
     "permissionCount": "{{count}} permissions",
-    "menuCount": "{{count}} menus",
     "assignedUsers": "{{count}} users"
   },
   "audit": {
@@ -972,6 +1003,7 @@
     "enabled": "Enabled",
     "online": "Online",
     "offline": "Offline",
+    "editTitle": "Edit MCP Server",
     "deleteTitle": "Delete MCP Server",
     "stats": "Tool Call Statistics",
     "statsDesc": "Aggregated tool call metrics for all registered MCP servers.",
@@ -991,6 +1023,13 @@
     "toolSchemaRefresh": "Tool Schema Refresh (s)",
     "maxToolsPerRequest": "Max Tools / Request",
     "maxRoutingCacheEntries": "Max Cache Entries",
-    "embeddingModel": "Embedding Model"
+    "embeddingModel": "Embedding Model",
+    "verifyConnection": "Verify",
+    "verifying": "Verifying…",
+    "connected": "Connected",
+    "verifyDuplicate": "This URL is already registered.",
+    "verifyNetwork": "Network error — check the URL.",
+    "verifyUnreachable": "Server is not reachable.",
+    "verifyFailed": "Verification failed."
   }
 }

@@ -15,8 +15,20 @@ use handlers::auth_middleware;
 use otel::OtlpClient;
 use state::AppState;
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let worker_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(256)
+        .thread_name("veronex-analytics-worker")
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     // ── Tracing ────────────────────────────────────────────────────────────────
     tracing_subscriber::fmt()
         .with_env_filter(

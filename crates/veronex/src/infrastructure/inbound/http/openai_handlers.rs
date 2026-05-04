@@ -7,7 +7,7 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use futures::StreamExt;
 use serde::Deserialize;
-use tracing::instrument;
+use tracing::{instrument, Instrument};
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
@@ -99,6 +99,10 @@ pub struct ChatMessage {
     /// Tool result message name (some clients send this).
     #[serde(default)]
     name: Option<String>,
+    /// Ollama-compatible image list (base64). Present when clients send per-message images
+    /// (e.g. multi-turn conversation mode in the test panel).
+    #[serde(default)]
+    images: Option<Vec<String>>,
 }
 
 impl ChatMessage {
@@ -107,6 +111,24 @@ impl ChatMessage {
             Some(c) => c.into_string(),
             None => String::new(),
         }
+    }
+
+    /// Build a plain-text system message — used by gateway shims that need
+    /// to inject orientation context (e.g. current date) into the conversation
+    /// before dispatch.
+    pub fn new_system(text: String) -> Self {
+        Self {
+            role: "system".to_string(),
+            content: Some(MessageContent::Text(text)),
+            tool_calls: None,
+            tool_call_id: None,
+            name: None,
+            images: None,
+        }
+    }
+
+    pub fn role(&self) -> &str {
+        &self.role
     }
 
     /// Convert to Ollama `/api/chat` message JSON.
@@ -156,6 +178,13 @@ impl ChatMessage {
         // Pass through tool_call_id for tool-result messages
         if let Some(id) = self.tool_call_id {
             msg["tool_call_id"] = serde_json::Value::String(id);
+        }
+
+        // Pass per-message images (multi-turn conversation mode).
+        if let Some(imgs) = self.images {
+            if !imgs.is_empty() {
+                msg["images"] = serde_json::json!(imgs);
+            }
         }
 
         msg
@@ -252,6 +281,10 @@ pub struct ChatCompletionRequest {
     /// When absent, a new conversation is created if the response includes tool_calls or MCP.
     #[serde(default)]
     pub conversation_id: Option<String>,
+    /// When false, disables MCP agentic loop for this request even if MCP is globally enabled.
+    /// Defaults to true. Useful for pure inference calls that should not trigger tool-call rounds.
+    #[serde(default)]
+    pub use_mcp: Option<bool>,
 }
 
 // ── Handler ────────────────────────────────────────────────────────────────────
@@ -313,6 +346,12 @@ pub async fn chat_completions(
         }
     }
 
+    // Date-injection gateway shim: prepend a system message with the current
+    // UTC datetime so weak / older models can't fall back to their
+    // training-cutoff prior when the user asks about "today" / "오늘" /
+    // "금일". Applies to every model and every dispatch path uniformly.
+    super::inference_helpers::inject_current_datetime(&mut req.messages);
+
     // conversation_id: body field takes precedence over header
     let conversation_id = req.conversation_id.as_deref()
         .and_then(super::inference_helpers::decode_conversation_id)
@@ -324,8 +363,17 @@ pub async fn chat_completions(
             // If an MCP bridge is configured and has active server sessions,
             // run the agentic MCP loop instead of the plain Ollama proxy.
             // API key callers must have at least one MCP grant — if not, bypass to plain proxy.
-            let has_images = req.images.as_ref().is_some_and(|i| !i.is_empty());
-            if !has_images {
+            // Skip MCP only when the current request contains images — image analysis is
+            // inline passthrough. Vision models WITHOUT images still go through MCP normally
+            // so they can call tools (e.g. weather, search).
+            // Also skip if caller explicitly sets use_mcp: false.
+            let has_any_images = req.images.as_ref().is_some_and(|i| !i.is_empty())
+                || req.messages.iter().any(|m| {
+                    m.images.as_ref().is_some_and(|i| !i.is_empty())
+                        || matches!(&m.content, Some(MessageContent::Parts(parts)) if parts.iter().any(|p| p.part_type == "image_url"))
+                });
+            let skip_mcp = has_any_images || !req.use_mcp.unwrap_or(true);
+            if !skip_mcp {
                 if let Some(ref bridge) = state.mcp_bridge {
                     if bridge.should_intercept() {
                         let has_access = match caller.api_key_id() {
@@ -383,7 +431,12 @@ async fn ollama_chat_proxy(
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
     // Extract last user content as display prompt (required by InferenceJob).
-    let prompt = extract_last_user_prompt(&ollama_messages).to_string();
+    // When the user sends image(s) with no text, auto-fill a default prompt so the
+    // domain Prompt value object doesn't reject an empty string.
+    let prompt = {
+        let raw = extract_last_user_prompt(&ollama_messages);
+        if raw.is_empty() { "Describe this image in detail.".to_string() } else { raw.to_string() }
+    };
 
     // Phase 5: compress long input inline if it exceeds budget (conversation turns only)
     if conversation_id.is_some() {
@@ -411,13 +464,30 @@ async fn ollama_chat_proxy(
     }
 
     let model_str = req.model.clone();
-    // Merge top-level images with images extracted from content array parts.
+    // Collect images: top-level field + OpenAI image_url content parts from the LAST user message only.
+    // Per-message images from conversation history are already embedded in the ollama_messages JSON
+    // via into_ollama_value(); re-collecting them would cause the Ollama adapter to re-inject all
+    // historical images into the final message on every turn, confusing the model.
+    let mut ollama_messages = ollama_messages;
     let images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
+        // Pick up per-message images from the LATEST user message in this turn —
+        // this is what the frontend actually sends (images attached to the message
+        // currently being submitted). Older turns' images are ignored: the frontend
+        // strips them from history, and Ollama does not retain images across turns
+        // anyway (the assistant's prior analysis already captures image context
+        // as text). Runs for every turn including multi-turn conversations so that
+        // non-vision models always get a chance at vision fallback.
+        if let Some(last_user) = ollama_messages.iter().rev()
+            .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+        {
+            if let Some(arr) = last_user.get("images").and_then(|v| v.as_array()) {
+                imgs.extend(arr.iter().filter_map(|v| v.as_str().map(String::from)));
+            }
+        }
         if imgs.is_empty() { None } else { Some(imgs) }
     };
-    let messages = serde_json::Value::Array(ollama_messages);
     // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
     let tools = req.tools.map(serde_json::Value::Array);
 
@@ -428,23 +498,35 @@ async fn ollama_chat_proxy(
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
 
-    // For non-vision models with images: analyze via vision model, inject description.
+    // For non-vision models with images: analyze via vision model, inject description into
+    // the last user message so the text model receives the image context.
     let vision_analysis = if images.as_ref().is_some_and(|i| !i.is_empty()) {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-        super::inference_helpers::analyze_images_for_context(
+        let va = super::inference_helpers::analyze_images_for_context(
             &state.http_client,
             state.provider_registry.as_ref(),
             &model_str,
             images.as_deref().unwrap_or(&[]),
             &prompt,
             lab.vision_model.as_deref(),
-        ).await
+            &state.vision_fallback_model,
+        ).await;
+        if let Some(ref va) = va {
+            if let Some(last_user) = ollama_messages.iter_mut().rev()
+                .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
+            {
+                let existing = last_user["content"].as_str().unwrap_or("").to_string();
+                last_user["content"] = serde_json::json!(
+                    format!("[Image Analysis]\n{}\n\n{existing}", va.analysis)
+                );
+            }
+        }
+        va
     } else {
         None
     };
-    // Images are validated + compressed upstream (line ~311). If vision analysis ran, the
-    // description is already embedded in messages via the Ollama format conversion above.
-    // We don't need to re-inject here — the prompt var is used as display only.
+
+    let messages = serde_json::Value::Array(ollama_messages);
 
     let job_id = match state
         .use_case
@@ -477,8 +559,7 @@ async fn ollama_chat_proxy(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("chat_completions(ollama): submit failed: {e}");
-            use super::error::AppError;
-            return AppError::from(e).into_response();
+            return super::error::AppError::from(e).into_response();
         }
     };
 
@@ -670,14 +751,46 @@ async fn collect_completion(
 /// server-side, and re-submits until the model produces a final text response.
 ///
 /// The final response is streamed (or collected) identically to `ollama_chat_proxy`.
+/// MCP-routed chat completions handler — **streaming-first by contract**.
+///
+/// SDD: `.specs/veronex/history/inference-mcp-streaming-first.md` §5.
+///
+/// Multi-round agentic MCP loops have unbounded variance (each round ≈ 30 s,
+/// up to MAX_ROUNDS=5 → up to ~150 s). Cloudflare's 100 s origin idle-timeout
+/// means a non-streaming HTTP request that awaits the whole loop before
+/// returning will hit 524 for any non-trivial tool-using prompt — verified
+/// live on 2026-04-28 (200K-context model, "마이크론 주가" → CF 524 →
+/// CancelOnDrop fires after bridge dropped → S3 record never written → UI
+/// shows "저장된 결과 없음").
+///
+/// Tier A fix — **two layers**:
+///
+/// 1. Response is **always** SSE regardless of the client's `stream` field
+///    (per SDD §3.1 contract). Existing `sse_response()` attaches
+///    `X-Accel-Buffering: no` + `KeepAlive::new().interval(SSE_KEEP_ALIVE)`
+///    so the connection stays alive through 524 timeouts.
+///
+/// 2. **The bridge runs in a spawned task** (`tokio::spawn`). The handler
+///    returns the SSE Response *before* awaiting the loop, so axum starts
+///    flushing status + headers + first heartbeat within milliseconds of
+///    the client request. Without this, awaiting `bridge.run_loop` to
+///    completion (~150 s for tool-using prompts) blocks Response
+///    construction and 524 still fires.
+///
+/// Cancel-on-disconnect: when the client TCP drops, the SSE stream is
+/// dropped, the receiver closes, and the spawned bridge task notices via
+/// `tokio::sync::oneshot` send error or by the `state.use_case.stream(fid)`
+/// `CancelOnDrop` wrapper inside `build_sse_response`. Tier B (PR #100) then
+/// persists whatever was accumulated to S3.
 async fn mcp_ollama_chat(
     state: AppState,
     caller: InferCaller,
     req: ChatCompletionRequest,
     conversation_id: Option<uuid::Uuid>,
-    stream: bool,
+    _stream: bool,
 ) -> Response {
-    // Load previous conversation + generate conversation_id
+    // Load previous conversation + generate conversation_id (synchronous,
+    // < 50 ms in practice — no need to defer behind the SSE response).
     let mut req = req;
     let body_cid = req.conversation_id.as_deref().and_then(super::inference_helpers::decode_conversation_id);
     let (conversation_id, _session_renewed) = match load_conversation_context(&state, &caller, body_cid.or(conversation_id), &mut req.messages, &req.model).await {
@@ -688,174 +801,143 @@ async fn mcp_ollama_chat(
     let ollama_messages: Vec<serde_json::Value> =
         req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
 
-    let orchestrator_model = req.model.clone();
     let model = req.model.clone();
+    let orchestrator_model = req.model.clone();
     let include_usage = req.stream_options.as_ref()
         .and_then(|o| o.include_usage)
         .unwrap_or(false);
 
     // Defensive: mcp_bridge is Some here because should_intercept() returned true,
     // but we avoid expect() in a hot path per patterns.md.
-    let bridge = match state.mcp_bridge.as_ref() {
-        Some(b) => b,
-        None => return (
+    if state.mcp_bridge.is_none() {
+        return (
             axum::http::StatusCode::INTERNAL_SERVER_ERROR,
             Json(serde_json::json!({"error": {"message": "MCP bridge not configured", "type": "server_error"}})),
-        ).into_response(),
-    };
-
-    let loop_result = bridge.run_loop(
-        &state,
-        &caller,
-        orchestrator_model,
-        ollama_messages,
-        req.tools,
-        stream,
-        conversation_id.clone(),
-        req.stop,
-        req.seed,
-        req.response_format,
-        req.frequency_penalty,
-        req.presence_penalty,
-    ).await;
-
-    let loop_result = match loop_result {
-        Some(r) => r,
-        None => {
-            return (
-                axum::http::StatusCode::SERVICE_UNAVAILABLE,
-                Json(serde_json::json!({"error": {"message": "MCP loop failed to start", "type": "server_error"}})),
-            ).into_response();
-        }
-    };
-
-    // ── Streaming final round ─────────────────────────────────────────────────
-    // When the bridge returned a job_id instead of collected content, pipe it
-    // through the standard SSE path — identical to `ollama_chat_proxy`.
-    if let Some(final_job_id) = loop_result.final_job_id {
-        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", final_job_id.0).into();
-        let model: Arc<str> = model.into();
-        let created = chrono::Utc::now().timestamp();
-        let mut saw_tool_calls = false;
-
-        let sse = build_sse_response(&state, final_job_id, true, move |result| {
-            match result {
-                Ok(token) if token.tool_calls.is_some() => {
-                    saw_tool_calls = true;
-                    let calls = token.tool_calls.as_ref()
-                        .and_then(|v| v.as_array())
-                        .cloned()
-                        .unwrap_or_default();
-                    let openai_calls: Vec<serde_json::Value> = calls.iter().enumerate()
-                        .filter(|(_, c)| validate_tool_call(c))
-                        .map(|(i, c)| convert_tool_call(i, c))
-                        .collect();
-                    let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model.to_string()), openai_calls);
-                    vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
-                }
-                Ok(token) if token.is_final => {
-                    let reason = token.finish_reason.as_deref()
-                        .unwrap_or(if saw_tool_calls { "tool_calls" } else { FinishReason::Stop.as_str() });
-                    let finish_chunk = CompletionChunk::finish(chunk_id.to_string(), created, Some(model.to_string()), reason);
-                    let finish_event = Event::default().data(serde_json::to_string(&finish_chunk).unwrap_or_default());
-                    if include_usage {
-                        let pt = token.prompt_tokens.unwrap_or(0);
-                        let ct = token.completion_tokens.unwrap_or(0);
-                        let usage_chunk = CompletionChunk::usage_only(chunk_id.to_string(), created, Some(model.to_string()), UsageInfo {
-                            prompt_tokens: pt,
-                            completion_tokens: ct,
-                            total_tokens: pt + ct,
-                            prompt_tokens_details: PromptTokensDetails::default(),
-                            completion_tokens_details: CompletionTokensDetails::default(),
-                        });
-                        vec![finish_event, Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default())]
-                    } else {
-                        vec![finish_event]
-                    }
-                }
-                Ok(token) => {
-                    if token.value.is_empty() { return vec![]; }
-                    let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model.to_string()), token.value);
-                    vec![Event::default().data(serde_json::to_string(&chunk).unwrap_or_default())]
-                }
-                Err(e) => {
-                    let err = serde_json::json!({"error": {"message": sanitize_sse_error(&e)}});
-                    vec![Event::default().data(serde_json::to_string(&err).unwrap_or_default())]
-                }
-            }
-        });
-        return with_conversation_id(sse, conversation_id.as_ref());
+        ).into_response();
     }
 
-    // ── Stream=true but MCP collected: wrap content in SSE ───────────────────
-    // MCP bridge always collects round 0; if no tool calls were made the loop
-    // exits without a final_job_id. When the caller requested streaming we must
-    // still return an SSE response, otherwise the client receives raw JSON that
-    // it cannot parse as SSE events.
-    if stream {
-        use std::convert::Infallible;
-        let chunk_id: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
-        let model_s: Arc<str> = model.clone().into();
-        let created = chrono::Utc::now().timestamp();
-        let mut events: Vec<Event> = Vec::new();
+    // Spawn bridge.run_loop so the handler can return its SSE Response
+    // immediately. The bridge collects each round synchronously (S20 — see
+    // .specs/veronex/bridge-mcp-loop-correctness.md). For text rounds, the
+    // bridge forwards content tokens via `tap_tx` so the SSE stream below
+    // emits them token-by-token in real time. The oneshot signals end-of-loop
+    // with the final summary (finish_reason, usage, last-round non-MCP
+    // tool_calls).
+    let (bridge_done_tx, bridge_done_rx) = tokio::sync::oneshot::channel::<Option<crate::infrastructure::outbound::mcp::bridge::McpLoopResult>>();
+    let (tap_tx, mut tap_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
 
-        if !loop_result.content.is_empty() {
-            let chunk = CompletionChunk::content(chunk_id.to_string(), created, Some(model_s.to_string()), loop_result.content.clone());
-            events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+    {
+        let state = state.clone();
+        let caller = caller.clone();
+        let conversation_id = conversation_id;
+        let tools = req.tools.clone();
+        let stop = req.stop.clone();
+        let seed = req.seed;
+        let response_format = req.response_format.clone();
+        let frequency_penalty = req.frequency_penalty;
+        let presence_penalty = req.presence_penalty;
+        tokio::spawn(async move {
+            // SAFETY: mcp_bridge presence checked just above this spawn.
+            let bridge = state.mcp_bridge.as_ref().expect("mcp_bridge checked above");
+            let result = bridge.run_loop(
+                &state, &caller, orchestrator_model, ollama_messages, tools,
+                conversation_id, stop, seed,
+                response_format, frequency_penalty, presence_penalty,
+                Some(tap_tx),
+            ).await;
+            // Receiver may already be dropped (client disconnected). Discard
+            // the Err — the bridge task ran to completion regardless, and
+            // the runner has persisted each round's TurnRecord to S3.
+            let _ = bridge_done_tx.send(result);
+        }.instrument(tracing::info_span!("veronex.mcp.bridge_loop")));
+    }
+
+    // Build the SSE event stream. The Response opens immediately; the stream
+    // below interleaves tap-forwarded content chunks (text tokens as they
+    // arrive from any text round) with the final bridge summary.
+    use std::convert::Infallible;
+    let chunk_id_seed: Arc<str> = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple()).into();
+    let model_for_stream: Arc<str> = model.clone().into();
+    let created = chrono::Utc::now().timestamp();
+
+    let sse_stream = async_stream::stream! {
+        // 1. Forward tap chunks as they arrive (token-by-token streaming for
+        //    text rounds). When the bridge drops `tap_tx` (loop ended), the
+        //    channel closes and we move on to the bridge summary.
+        while let Some(content_text) = tap_rx.recv().await {
+            if !content_text.is_empty() {
+                let chunk = CompletionChunk::content(
+                    chunk_id_seed.to_string(),
+                    created,
+                    Some(model_for_stream.to_string()),
+                    content_text,
+                );
+                yield Ok::<_, Infallible>(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+            }
         }
+
+        // 2. Await the bridge summary. By construction, this resolves promptly
+        //    after `tap_tx` was dropped (same task end-of-scope).
+        let loop_result = match bridge_done_rx.await {
+            Ok(Some(r)) => r,
+            Ok(None) | Err(_) => {
+                let err = serde_json::json!({"error": {"message": "MCP loop failed to start", "type": "server_error"}});
+                yield Ok::<_, Infallible>(Event::default().event("error").data(serde_json::to_string(&err).unwrap_or_default()));
+                yield Ok(Event::default().data("[DONE]"));
+                return;
+            }
+        };
+
+        // 3. Emit any not-yet-streamed content. When tap was used (text round),
+        //    `streamed_via_tap == true` and `loop_result.content` was already
+        //    streamed — DO NOT re-emit. When no text round happened (e.g. all
+        //    rounds emitted tool_calls and the loop broke on
+        //    `mcp_calls.is_empty()` for non-MCP tools), the bridge collected
+        //    `content` as a final round summary; emit it once.
+        if !loop_result.streamed_via_tap && !loop_result.content.is_empty() {
+            let chunk = CompletionChunk::content(chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()), loop_result.content.clone());
+            yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+        }
+
+        // 4. Final-round non-MCP tool_calls (legacy passthrough — caller-supplied
+        //    tools that the model chose to call). Emit so the client can dispatch.
         if !loop_result.tool_calls.is_empty() {
             let openai_calls: Vec<serde_json::Value> = loop_result.tool_calls.iter().enumerate()
                 .filter(|(_, c)| validate_tool_call(c))
                 .map(|(i, c)| convert_tool_call(i, c))
                 .collect();
             if !openai_calls.is_empty() {
-                let chunk = CompletionChunk::tool_calls(chunk_id.to_string(), created, Some(model_s.to_string()), openai_calls);
-                events.push(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
+                let chunk = CompletionChunk::tool_calls(chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()), openai_calls);
+                yield Ok(Event::default().data(serde_json::to_string(&chunk).unwrap_or_default()));
             }
         }
+
+        // 5. Finish chunk + usage + [DONE].
         let reason = loop_result.finish_reason.as_str();
-        let finish = CompletionChunk::finish(chunk_id.to_string(), created, Some(model_s.to_string()), reason);
-        events.push(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
+        let finish = CompletionChunk::finish(chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()), reason);
+        yield Ok(Event::default().data(serde_json::to_string(&finish).unwrap_or_default()));
 
-        let sse: SseStream = Box::pin(
-            futures::stream::iter(events.into_iter().map(Ok::<_, Infallible>))
-                .chain(futures::stream::once(async { Ok(Event::default().data("[DONE]")) }))
-        );
-        return with_conversation_id(sse_response(sse), conversation_id.as_ref());
-    }
+        if include_usage {
+            let pt = loop_result.prompt_tokens;
+            let ct = loop_result.completion_tokens;
+            let usage_chunk = CompletionChunk::usage_only(
+                chunk_id_seed.to_string(), created, Some(model_for_stream.to_string()),
+                UsageInfo {
+                    prompt_tokens: pt,
+                    completion_tokens: ct,
+                    total_tokens: pt + ct,
+                    prompt_tokens_details: PromptTokensDetails::default(),
+                    completion_tokens_details: CompletionTokensDetails::default(),
+                },
+            );
+            yield Ok(Event::default().data(serde_json::to_string(&usage_chunk).unwrap_or_default()));
+        }
 
-    // ── Non-streaming response ─────────────────────────────────────────────────
-    let chunk_id = format!("chatcmpl-mcp-{}", uuid::Uuid::new_v4().simple());
-    let created = chrono::Utc::now().timestamp();
-    let total_tokens = loop_result.prompt_tokens + loop_result.completion_tokens;
+        yield Ok(Event::default().data("[DONE]"));
+    };
 
-    Json(ChatCompletion {
-        id: chunk_id,
-        object: "chat.completion",
-        created,
-        model,
-        service_tier: SERVICE_TIER_DEFAULT,
-        choices: vec![CompletionChoice {
-            index: 0,
-            message: CompletionMessage {
-                role: "assistant",
-                content: if loop_result.content.is_empty() { None } else { Some(loop_result.content) },
-                tool_calls: if loop_result.tool_calls.is_empty() { None } else { Some(loop_result.tool_calls) },
-                refusal: None,
-            },
-            finish_reason: loop_result.finish_reason,
-        }],
-        usage: UsageInfo {
-            prompt_tokens: loop_result.prompt_tokens,
-            completion_tokens: loop_result.completion_tokens,
-            total_tokens,
-            prompt_tokens_details: PromptTokensDetails::default(),
-            completion_tokens_details: CompletionTokensDetails::default(),
-        },
-        system_fingerprint: SYSTEM_FINGERPRINT,
-        conversation_id: conversation_id.as_ref().map(super::inference_helpers::to_public_id),
-        conversation_renewed: false,
-    }).into_response()
+    let sse: SseStream = Box::pin(sse_stream);
+    with_conversation_id(sse_response(sse), conversation_id.as_ref())
 }
 
 // ── Conversation context loading ─────────────────────────────────────────────
@@ -909,7 +991,7 @@ async fn load_conversation_context(
                                 if let Some(ref vk) = state.valkey_pool {
                                     use fred::prelude::*;
                                     if let Ok(json) = serde_json::to_string(&r) {
-                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(300)), None, false).await {
+                                        if let Err(e) = vk.set::<(), _, _>(&cache_key, json, Some(Expiration::EX(crate::domain::constants::CONV_CACHE_TTL_SECS)), None, false).await {
                                             tracing::warn!(key = %cache_key, error = %e, "openai: failed to warm conversation cache");
                                         }
                                     }
@@ -923,25 +1005,8 @@ async fn load_conversation_context(
 
                 // ── Multi-turn eligibility gate ───────────────────────────────
                 let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-                let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
-                    use fred::prelude::*;
-                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let mut found = None;
-                    for p in providers.iter().filter(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama) {
-                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name);
-                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
-                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
-                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
-                            {
-                                found = Some(ctx as u32);
-                                break;
-                            }
-                        }
-                    }
-                    found
-                } else {
-                    None
-                };
+                let max_ctx: Option<u32> =
+                    super::inference_helpers::lookup_model_max_ctx(&state, model_name).await;
 
                 if let Err(e) = context_assembler::check_multiturn_eligibility(model_name, max_ctx, &lab) {
                     tracing::warn!(model = model_name, code = e.code(), "multi-turn eligibility check failed");
@@ -962,13 +1027,13 @@ async fn load_conversation_context(
                 // ── Session handoff check ─────────────────────────────────────
                 if session_handoff::should_handoff(&record, configured_ctx, &lab) {
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let ollama = providers.iter().find(|p| p.provider_type == crate::domain::enums::ProviderType::Ollama);
+                    let ollama = providers.iter().find(|p| p.is_ollama());
                     if let Some(provider) = ollama {
                         let summary_model = lab.compression_model.clone()
                             .unwrap_or_else(|| model_name.to_string());
                         let timeout = lab.compression_timeout_secs as u64;
                         if let Some((new_conv_id, master_summary)) = session_handoff::perform_handoff(
-                            &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
+                            &state.http_client, &record, uuid, owner_id, date, &summary_model, &provider.url, timeout, store,
                         ).await {
                             // Prepend master summary as first message; current input follows
                             let summary_msg = ChatMessage {
@@ -979,6 +1044,7 @@ async fn load_conversation_context(
                                 name: None,
                                 tool_calls: None,
                                 tool_call_id: None,
+                                images: None,
                             };
                             let current = std::mem::take(messages);
                             *messages = std::iter::once(summary_msg).chain(current).collect();
@@ -1002,6 +1068,7 @@ async fn load_conversation_context(
                         name: None,
                         tool_calls: None,
                         tool_call_id: None,
+                        images: None,
                     })
                     .collect();
 
@@ -1040,6 +1107,15 @@ async fn load_conversation_context(
     .bind(caller.source().as_str())
     .execute(&state.pg_pool)
     .await {
+        // FK violation on account_id: the JWT references a deleted account → return 401
+        if let sqlx::Error::Database(ref db_err) = e {
+            if db_err.code().as_deref() == Some("23503") && db_err.message().contains("account_id") {
+                tracing::warn!(conversation_id = %cid, "openai: account not found — JWT stale, returning 401");
+                return Err(super::error::AppError::Unauthorized(
+                    "session expired — please log in again".into(),
+                ).into_response());
+            }
+        }
         tracing::warn!(conversation_id = %cid, error = %e, "openai: failed to upsert conversation record");
     }
 
@@ -1127,8 +1203,7 @@ async fn legacy_queue_chat(
         Ok(id) => id,
         Err(e) => {
             tracing::error!("chat_completions: submit failed: {e}");
-            use super::error::AppError;
-            return AppError::from(e).into_response();
+            return super::error::AppError::from(e).into_response();
         }
     };
 

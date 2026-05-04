@@ -49,17 +49,17 @@ export default function SetupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background">
-      <Card className="w-full max-w-sm">
+    <div className="vds-min-h-screen vds-flex vds-items-center vds-justify-center vds-bg-page">
+      <Card className="vds-w-full vds-max-w-sm">
         <CardHeader>
-          <CardTitle className="text-xl">{t('setup.title')}</CardTitle>
+          <CardTitle className="vds-text-xl">{t('setup.title')}</CardTitle>
           <CardDescription>
             {t('setup.description')}
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div className="space-y-1.5">
+          <form onSubmit={handleSubmit} className="vds-space-y-4">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="username">{t('setup.username')}</Label>
               <Input
                 id="username"
@@ -70,7 +70,7 @@ export default function SetupPage() {
                 required
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="password">{t('setup.password')}</Label>
               <Input
                 id="password"
@@ -82,7 +82,7 @@ export default function SetupPage() {
                 required
               />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="confirm">{t('setup.confirmPassword')}</Label>
               <Input
                 id="confirm"
@@ -94,9 +94,9 @@ export default function SetupPage() {
               />
             </div>
             {error && (
-              <p className="text-sm text-destructive">{error}</p>
+              <p className="vds-text-sm vds-text-destructive">{error}</p>
             )}
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button type="submit" className="vds-w-full" disabled={loading}>
               {loading ? t('setup.submitting') : t('setup.submit')}
             </Button>
           </form>

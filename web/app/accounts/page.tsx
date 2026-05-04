@@ -61,12 +61,7 @@ function AccountActiveToggle({ account }: { account: Account }) {
 const ALL_PERMISSIONS = [
   'dashboard_view', 'api_test', 'provider_manage',
   'key_manage', 'account_manage', 'audit_view', 'settings_manage',
-  'role_manage', 'model_manage',
-] as const
-
-const ALL_MENUS = [
-  'dashboard', 'flow', 'jobs', 'performance', 'usage', 'test',
-  'providers', 'servers', 'keys', 'accounts', 'audit', 'api_docs',
+  'role_manage', 'model_manage', 'mcp_manage',
 ] as const
 
 // ── Sessions modal ────────────────────────────────────────────────────────────
@@ -97,43 +92,43 @@ function AccountSessionsModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="vds-max-w-lg">
         <DialogHeader>
           <DialogTitle>{t('accounts.sessions')}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 py-1 max-h-96 overflow-y-auto">
+        <div className="vds-space-y-3 vds-py-1 vds-max-h-96 vds-overflow-y-auto">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+            <p className="vds-text-sm vds-text-dim">{t('common.loading')}</p>
           ) : sessions.length === 0 ? (
-            <p className="text-sm text-muted-foreground">{t('accounts.noSessions')}</p>
+            <p className="vds-text-sm vds-text-dim">{t('accounts.noSessions')}</p>
           ) : (
             sessions.map((s: SessionRecord) => (
-              <div key={s.id} className="flex items-start justify-between gap-2 rounded-md border px-3 py-2 text-sm">
-                <div className="min-w-0 flex-1 space-y-0.5">
-                  <div className="font-mono text-xs text-muted-foreground truncate">{s.ip_address ?? '—'}</div>
-                  <div className="text-xs text-muted-foreground">
+              <div key={s.id} className="vds-flex vds-items-start vds-justify-between vds-gap-2 vds-rounded-md vds-border-1 vds-px-3 vds-py-2 vds-text-sm">
+                <div className="vds-min-w-0 vds-flex-1 vds-space-y-0.5">
+                  <div className="vds-font-mono vds-text-xs vds-text-dim vds-truncate">{s.ip_address ?? '—'}</div>
+                  <div className="vds-text-xs vds-text-dim">
                     {t('accounts.lastUsed')}: {s.last_used_at ? fmtDatetime(s.last_used_at, tz) : t('common.never')}
                   </div>
-                  <div className="text-xs text-muted-foreground">
+                  <div className="vds-text-xs vds-text-dim">
                     {t('common.created')}: {fmtDatetime(s.created_at, tz)}
                   </div>
                 </div>
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 shrink-0 text-destructive hover:text-destructive"
+                  className="vds-h-7 vds-w-7 vds-flex-shrink-0 vds-text-destructive vds-hover:text-destructive"
                   aria-label={t('accounts.revokeSession')}
                   title={t('accounts.revokeSession')}
                   onClick={() => revokeMutation.mutate(s.id)}
                   disabled={revokeMutation.isPending}
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <Trash2 className="vds-h-3.5 vds-w-3.5" />
                 </Button>
               </div>
             ))
           )}
         </div>
-        <DialogFooter className="gap-2">
+        <DialogFooter className="vds-gap-2">
           {sessions.length > 0 && (
             <Button
               variant="destructive"
@@ -207,12 +202,12 @@ function CreateAccountModal({
           <DialogHeader>
             <DialogTitle>{t('accounts.accountCreated')}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
+          <div className="vds-space-y-3 vds-py-2">
+            <div className="vds-rounded-lg vds-border-1 vds-border-warning/30 vds-bg-warning/10 vds-p-4 vds-text-warning vds-text-sm">
               {t('accounts.saveKeyWarning')}
             </div>
-            <div className="flex items-center gap-2 rounded-md border bg-muted px-3 py-2">
-              <code className="flex-1 font-mono text-xs break-all select-all">{created.test_api_key}</code>
+            <div className="vds-flex vds-items-center vds-gap-2 vds-rounded-md vds-border-1 vds-bg-muted vds-px-3 vds-py-2">
+              <code className="vds-flex-1 vds-font-mono vds-text-xs vds-break-all vds-select-all">{created.test_api_key}</code>
               <CopyButton text={created.test_api_key} />
             </div>
           </div>
@@ -230,54 +225,54 @@ function CreateAccountModal({
         <DialogHeader>
           <DialogTitle>{t('accounts.createAccount')}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-3 py-1">
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+        <div className="vds-space-y-3 vds-py-1">
+          <div className="vds-grid vds-grid-cols-2 vds-gap-3">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="create-account-username">{t('accounts.username')}</Label>
               <Input id="create-account-username" value={username} onChange={(e) => setUsername(e.target.value)} autoComplete="username" />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="create-account-name">{t('accounts.fullName')}</Label>
               <Input id="create-account-name" value={name} onChange={(e) => setName(e.target.value)} />
             </div>
           </div>
-          <div className="space-y-1.5">
+          <div className="vds-space-y-1.5">
             <Label htmlFor="create-account-password">{t('accounts.password')}</Label>
             <Input id="create-account-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="vds-grid vds-grid-cols-2 vds-gap-3">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="create-account-email">{t('accounts.email')}</Label>
               <Input id="create-account-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1.5">
               <Label>{t('accounts.role')}</Label>
-              <div className="space-y-1.5 rounded-md border p-2 max-h-32 overflow-y-auto">
+              <div className="vds-space-y-1.5 vds-rounded-md vds-border-1 vds-p-2 vds-max-h-32 vds-overflow-y-auto">
                 {roles.map(r => (
-                  <label key={r.id} className="flex items-center gap-2 text-sm cursor-pointer">
+                  <label key={r.id} className="vds-flex vds-items-center vds-gap-2 vds-text-sm vds-cursor-pointer">
                     <Checkbox
                       checked={selectedRoleIds.includes(r.id)}
                       onCheckedChange={() => toggleRole(r.id)}
                     />
                     <span>{r.name}</span>
-                    {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
+                    {r.is_system && <Badge variant="secondary" className="vds-text-[10px] vds-h-4 vds-px-1 vds-whitespace-nowrap">{t('roles.system')}</Badge>}
                   </label>
                 ))}
               </div>
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
+          <div className="vds-grid vds-grid-cols-2 vds-gap-3">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="create-account-department">{t('accounts.department')}</Label>
               <Input id="create-account-department" value={department} onChange={(e) => setDepartment(e.target.value)} />
             </div>
-            <div className="space-y-1.5">
+            <div className="vds-space-y-1.5">
               <Label htmlFor="create-account-position">{t('accounts.position')}</Label>
               <Input id="create-account-position" value={position} onChange={(e) => setPosition(e.target.value)} />
             </div>
           </div>
           {mutation.isError && (
-            <p className="text-sm text-destructive">
+            <p className="vds-text-sm vds-text-destructive">
               {mutation.error instanceof Error ? mutation.error.message : t('accounts.createFailed')}
             </p>
           )}
@@ -312,14 +307,14 @@ function RoleEditorModal({
   const isSystem = role?.is_system ?? false
   const [name, setName] = useState(role?.name ?? '')
   const [perms, setPerms] = useState<string[]>(role?.permissions ?? [])
-  const [menus, setMenus] = useState<string[]>(role?.menus ?? [])
 
   const mutation = useApiMutation(
     async (_: void) => {
+      // Menu visibility derives from permissions (see lib/route-permissions.ts).
       if (isNew) {
-        await api.createRole({ name, permissions: perms, menus })
+        await api.createRole({ name, permissions: perms })
       } else if (role) {
-        await api.updateRole(role.id, { name: name !== role.name ? name : undefined, permissions: perms, menus })
+        await api.updateRole(role.id, { name: name !== role.name ? name : undefined, permissions: perms })
       }
     },
     { invalidateKey: ['roles'], onSuccess: () => onClose() },
@@ -328,31 +323,28 @@ function RoleEditorModal({
   function togglePerm(p: string) {
     setPerms(prev => prev.includes(p) ? prev.filter(x => x !== p) : [...prev, p])
   }
-  function toggleMenu(m: string) {
-    setMenus(prev => prev.includes(m) ? prev.filter(x => x !== m) : [...prev, m])
-  }
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="vds-max-w-lg">
         <DialogHeader>
           <DialogTitle>
             {isNew ? t('roles.createRole') : t('roles.editRole')}
-            {isSystem && <Badge variant="secondary" className="ml-2 whitespace-nowrap">{t('roles.system')}</Badge>}
+            {isSystem && <Badge variant="secondary" className="vds-ml-2 vds-whitespace-nowrap">{t('roles.system')}</Badge>}
           </DialogTitle>
         </DialogHeader>
-        <div className="space-y-4 py-1">
-          <div className="space-y-1.5">
+        <div className="vds-space-y-4 vds-py-1">
+          <div className="vds-space-y-1.5">
             <Label htmlFor="role-name">{t('roles.roleName')}</Label>
             <Input id="role-name" value={name} onChange={e => setName(e.target.value)} disabled={isSystem} />
           </div>
 
           {/* Permissions section */}
-          <div className="space-y-1.5">
+          <div className="vds-space-y-1.5">
             <Label>{t('roles.permissions')}</Label>
-            <div className="grid grid-cols-2 gap-2 rounded-md border p-3">
+            <div className="vds-grid vds-grid-cols-2 vds-gap-2 vds-rounded-md vds-border-1 vds-p-3">
               {ALL_PERMISSIONS.map(p => (
-                <label key={p} className="flex items-center gap-2 text-sm cursor-pointer">
+                <label key={p} className="vds-flex vds-items-center vds-gap-2 vds-text-sm vds-cursor-pointer">
                   <Checkbox
                     checked={perms.includes(p)}
                     onCheckedChange={() => togglePerm(p)}
@@ -364,25 +356,8 @@ function RoleEditorModal({
             </div>
           </div>
 
-          {/* Menus section */}
-          <div className="space-y-1.5">
-            <Label>{t('roles.menus')}</Label>
-            <div className="grid grid-cols-3 gap-2 rounded-md border p-3">
-              {ALL_MENUS.map(m => (
-                <label key={m} className="flex items-center gap-2 text-sm cursor-pointer">
-                  <Checkbox
-                    checked={menus.includes(m)}
-                    onCheckedChange={() => toggleMenu(m)}
-                    disabled={isSystem}
-                  />
-                  <span>{t(`roles.menu.${m}` as Parameters<typeof t>[0])}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
           {mutation.isError && (
-            <p className="text-sm text-destructive">
+            <p className="vds-text-sm vds-text-destructive">
               {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
             </p>
           )}
@@ -431,30 +406,30 @@ function EditRolesModal({
 
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-sm">
+      <DialogContent className="vds-max-w-sm">
         <DialogHeader>
           <DialogTitle>{t('roles.editRole')} — {account.username}</DialogTitle>
         </DialogHeader>
-        <div className="space-y-2 py-1">
+        <div className="vds-space-y-2 vds-py-1">
           {roles.map(r => (
-            <label key={r.id} className="flex items-center gap-2.5 rounded-md border px-3 py-2 cursor-pointer hover:bg-accent/50 transition-colors">
+            <label key={r.id} className="vds-flex vds-items-center vds-gap-2.5 vds-rounded-md vds-border-1 vds-px-3 vds-py-2 vds-cursor-pointer vds-hover:bg-hover/50 vds-transition-colors">
               <Checkbox
                 checked={selectedRoleIds.includes(r.id)}
                 onCheckedChange={() => toggleRole(r.id)}
               />
-              <div className="flex-1 min-w-0">
-                <div className="text-sm font-medium flex items-center gap-1.5">
+              <div className="vds-flex-1 vds-min-w-0">
+                <div className="vds-text-sm vds-font-500 vds-flex vds-items-center vds-gap-1.5">
                   {r.name}
-                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
+                  {r.is_system && <Badge variant="secondary" className="vds-text-[10px] vds-h-4 vds-px-1 vds-whitespace-nowrap">{t('roles.system')}</Badge>}
                 </div>
-                <div className="text-xs text-muted-foreground">
-                  {t('roles.permissionCount', { count: r.permissions.length })} · {t('roles.menuCount', { count: r.menus.length })}
+                <div className="vds-text-xs vds-text-dim">
+                  {t('roles.permissionCount', { count: r.permissions.length })}
                 </div>
               </div>
             </label>
           ))}
           {mutation.isError && (
-            <p className="text-sm text-destructive">
+            <p className="vds-text-sm vds-text-destructive">
               {mutation.error instanceof Error ? mutation.error.message : t('common.error')}
             </p>
           )}
@@ -477,13 +452,13 @@ function AccountStatusPills({ accounts }: { accounts: Account[] }) {
   const { t } = useTranslation()
   const activeCount = useMemo(() => accounts.filter(a => a.is_active).length, [accounts])
   return (
-    <div className="flex items-center gap-2 flex-wrap mt-2">
-      <StatusPill icon={<Users className="h-3 w-3 shrink-0" />} count={accounts.length} label={t('accounts.registered')} />
+    <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap vds-mt-2">
+      <StatusPill icon={<Users className="vds-h-3 vds-w-3 vds-flex-shrink-0" />} count={accounts.length} label={t('accounts.registered')} />
       {activeCount > 0 && (
         <StatusPill
-          icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+          icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-flex-shrink-0" />}
           count={activeCount} label={t('common.active')}
-          className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+          className="vds-bg-success/10 vds-border-1 vds-border-success/30 vds-text-success"
         />
       )}
     </div>
@@ -505,14 +480,14 @@ function RolesTab() {
   )
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between">
+    <div className="vds-space-y-4">
+      <div className="vds-flex vds-items-center vds-justify-between">
         <div>
-          <h2 className="text-lg font-semibold">{t('roles.title')}</h2>
-          <p className="text-sm text-muted-foreground">{t('roles.description')}</p>
+          <h2 className="vds-text-lg vds-font-600">{t('roles.title')}</h2>
+          <p className="vds-text-sm vds-text-dim">{t('roles.description')}</p>
         </div>
         <Button size="sm" onClick={() => setEditRole(null)}>
-          <Plus className="h-4 w-4 mr-1.5" />
+          <Plus className="vds-h-4 vds-w-4 vds-mr-1.5" />
           {t('roles.createRole')}
         </Button>
       </div>
@@ -526,53 +501,53 @@ function RolesTab() {
       )}
 
       {isLoading ? (
-        <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+        <p className="vds-text-sm vds-text-dim">{t('common.loading')}</p>
       ) : isError ? (
-        <p className="text-sm text-destructive">{t('common.error')}</p>
+        <p className="vds-text-sm vds-text-destructive">{t('common.error')}</p>
       ) : roles.length === 0 ? (
         <DataTableEmpty>{t('roles.noRoles')}</DataTableEmpty>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="vds-grid vds-gap-3 vds-sm:grid-cols-2">
           {roles.map((r: RoleSummary) => (
-            <Card key={r.id} className="relative">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-sm font-medium flex items-center gap-2">
+            <Card key={r.id} className="vds-relative">
+              <CardHeader className="vds-pb-2">
+                <CardTitle className="vds-text-sm vds-font-500 vds-flex vds-items-center vds-gap-2">
                   {r.name}
-                  {r.is_system && <Badge variant="secondary" className="text-[10px] h-4 px-1 whitespace-nowrap">{t('roles.system')}</Badge>}
+                  {r.is_system && <Badge variant="secondary" className="vds-text-[10px] vds-h-4 vds-px-1 vds-whitespace-nowrap">{t('roles.system')}</Badge>}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-2 pb-3">
-                <div className="flex flex-wrap gap-1">
+              <CardContent className="vds-space-y-2 vds-pb-3">
+                <div className="vds-flex vds-flex-wrap vds-gap-1">
                   {r.permissions.map(p => (
-                    <Badge key={p} variant="outline" className="text-[10px] font-normal whitespace-nowrap">
+                    <Badge key={p} variant="outline" className="vds-text-[10px] vds-font-400 vds-whitespace-nowrap">
                       {t(`roles.perm.${p}` as Parameters<typeof t>[0])}
                     </Badge>
                   ))}
                 </div>
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>{t('roles.menuCount', { count: r.menus.length })} · {t('roles.assignedUsers', { count: r.account_count })}</span>
+                <div className="vds-flex vds-items-center vds-justify-between vds-text-xs vds-text-dim">
+                  <span>{t('roles.assignedUsers', { count: r.account_count })}</span>
                   {!r.is_system && (
-                    <div className="flex items-center gap-0.5">
+                    <div className="vds-flex vds-items-center vds-gap-0.5">
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-6 w-6"
+                        className="vds-h-6 vds-w-6"
                         aria-label={t('common.edit')}
                         title={t('common.edit')}
                         onClick={() => setEditRole(r)}
                       >
-                        <Settings2 className="h-3 w-3" />
+                        <Settings2 className="vds-h-3 vds-w-3" />
                       </Button>
                       <Button
                         variant="ghost"
                         size="icon"
-                        className="h-6 w-6 text-destructive hover:text-destructive"
+                        className="vds-h-6 vds-w-6 vds-text-destructive vds-hover:text-destructive"
                         aria-label={t('common.delete')}
                         title={t('common.delete')}
                         onClick={() => setDeleteTarget(r)}
                         disabled={r.account_count > 0}
                       >
-                        <Trash2 className="h-3 w-3" />
+                        <Trash2 className="vds-h-3 vds-w-3" />
                       </Button>
                     </div>
                   )}
@@ -601,7 +576,7 @@ function RolesTab() {
 // ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function AccountsPage() {
-  usePageGuard('accounts')
+  usePageGuard('account_manage')
   const { t } = useTranslation()
   const { tz } = useTimezone()
   const canManageRoles = hasPermission('role_manage')
@@ -632,24 +607,24 @@ export default function AccountsPage() {
   )
 
   return (
-    <div className="flex flex-col gap-6 p-6 max-w-5xl mx-auto">
+    <div className="vds-flex vds-flex-col vds-gap-6 vds-p-6 vds-max-w-5xl vds-mx-auto">
       {/* Tab switcher (only for super users) */}
       {canManageRoles && (
-        <div className="flex gap-1 border-b border-border">
+        <div className="vds-flex vds-gap-1 vds-border-b-1 vds-border-subtle">
           <button
             type="button"
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === 'accounts' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
+            className={`vds-px-4 vds-py-2 vds-text-sm vds-font-500 vds-border-b-2 vds-transition-colors ${
+ tab === 'accounts' ? 'vds-border-primary vds-text-primary' : 'vds-border-transparent vds-text-dim vds-hover:text-primary'
+ }`}
             onClick={() => setTab('accounts')}
           >
             {t('accounts.title')}
           </button>
           <button
             type="button"
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-              tab === 'roles' ? 'border-primary text-foreground' : 'border-transparent text-muted-foreground hover:text-foreground'
-            }`}
+            className={`vds-px-4 vds-py-2 vds-text-sm vds-font-500 vds-border-b-2 vds-transition-colors ${
+ tab === 'roles' ? 'vds-border-primary vds-text-primary' : 'vds-border-transparent vds-text-dim vds-hover:text-primary'
+ }`}
             onClick={() => setTab('roles')}
           >
             {t('roles.title')}
@@ -664,13 +639,13 @@ export default function AccountsPage() {
       {tab === 'accounts' && (
         <>
           <div>
-            <div className="flex items-center justify-between">
-              <h1 className="text-xl font-semibold">{t('accounts.title')}</h1>
-              <Button size="sm" onClick={() => setShowCreate(true)} className="shrink-0">
-                <Plus className="h-4 w-4 mr-1.5" />{t('accounts.createAccount')}
+            <div className="vds-flex vds-items-center vds-justify-between">
+              <h1 className="vds-text-xl vds-font-600">{t('accounts.title')}</h1>
+              <Button size="sm" onClick={() => setShowCreate(true)} className="vds-flex-shrink-0">
+                <Plus className="vds-h-4 vds-w-4 vds-mr-1.5" />{t('accounts.createAccount')}
               </Button>
             </div>
-            <p className="text-sm text-muted-foreground mt-0.5">{t('accounts.description')}</p>
+            <p className="vds-text-sm vds-text-dim vds-mt-0.5">{t('accounts.description')}</p>
             {accounts.length > 0 && (
               <AccountStatusPills accounts={accounts} />
             )}
@@ -696,15 +671,15 @@ export default function AccountsPage() {
           {/* Reset token display */}
           {resetToken && (
             <Dialog open onOpenChange={() => setResetToken(null)}>
-              <DialogContent className="max-w-lg">
+              <DialogContent className="vds-max-w-lg">
                 <DialogHeader>
                   <DialogTitle>{t('accounts.resetLink')}</DialogTitle>
                 </DialogHeader>
-                <div className="rounded-lg border border-status-warning/30 bg-status-warning/10 p-4 text-status-warning-fg text-sm">
+                <div className="vds-rounded-lg vds-border-1 vds-border-warning/30 vds-bg-warning/10 vds-p-4 vds-text-warning vds-text-sm">
                   {t('accounts.tokenWarning')}
                 </div>
-                <div className="rounded-lg bg-muted p-3 flex items-center gap-2">
-                  <code className="flex-1 font-mono text-xs break-all select-all">{resetToken}</code>
+                <div className="vds-rounded-lg vds-bg-muted vds-p-3 vds-flex vds-items-center vds-gap-2">
+                  <code className="vds-flex-1 vds-font-mono vds-text-xs vds-break-all vds-select-all">{resetToken}</code>
                   <CopyButton text={resetToken} />
                 </div>
                 <DialogFooter>
@@ -715,86 +690,86 @@ export default function AccountsPage() {
           )}
 
           {isLoading ? (
-            <p className="text-sm text-muted-foreground">{t('common.loading')}</p>
+            <p className="vds-text-sm vds-text-dim">{t('common.loading')}</p>
           ) : isError ? (
-            <p className="text-sm text-destructive">{t('common.error')}</p>
+            <p className="vds-text-sm vds-text-destructive">{t('common.error')}</p>
           ) : accounts.length === 0 ? (
             <DataTableEmpty>{t('accounts.noAccounts')}</DataTableEmpty>
           ) : (
             <DataTable minWidth="700px">
               <TableHeader>
                 <TableRow>
-                  <TableHead className="whitespace-nowrap">{t('accounts.username')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('accounts.name')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('accounts.role')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('accounts.department')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('accounts.status')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('accounts.lastLogin')}</TableHead>
-                  <TableHead className="whitespace-nowrap">{t('accounts.actions')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.username')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.name')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.role')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.department')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.status')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.lastLogin')}</TableHead>
+                  <TableHead className="vds-whitespace-nowrap">{t('accounts.actions')}</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {acctPageItems.map((a: Account) => (
                   <TableRow key={a.id}>
-                    <TableCell className="font-mono text-xs">{a.username}</TableCell>
+                    <TableCell className="vds-font-mono vds-text-xs">{a.username}</TableCell>
                     <TableCell>{a.name}</TableCell>
                     <TableCell>
-                      <div className="flex flex-wrap gap-1">
+                      <div className="vds-flex vds-flex-wrap vds-gap-1">
                         {a.roles.map(r => (
-                          <Badge key={r.id} variant={r.name === 'super' ? 'default' : 'secondary'} className="whitespace-nowrap">
+                          <Badge key={r.id} variant={r.name === 'super' ? 'default' : 'secondary'} className="vds-whitespace-nowrap">
                             {r.name}
                           </Badge>
                         ))}
                       </div>
                     </TableCell>
-                    <TableCell className="text-muted-foreground text-sm">{a.department ?? '—'}</TableCell>
+                    <TableCell className="vds-text-dim vds-text-sm">{a.department ?? '—'}</TableCell>
                     <TableCell>
                       <AccountActiveToggle account={a} />
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">
+                    <TableCell className="vds-text-xs vds-text-dim">
                       {a.last_login_at ? fmtDatetime(a.last_login_at, tz) : t('common.never')}
                     </TableCell>
                     <TableCell>
-                      <div className="flex items-center gap-1">
+                      <div className="vds-flex vds-items-center vds-gap-1">
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7"
+                          className="vds-h-7 vds-w-7"
                           aria-label={t('roles.editRole')}
                           title={t('roles.editRole')}
                           onClick={() => setEditRolesTarget(a)}
                         >
-                          <Settings2 className="h-3.5 w-3.5" />
+                          <Settings2 className="vds-h-3.5 vds-w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7"
+                          className="vds-h-7 vds-w-7"
                           aria-label={t('accounts.sessions')}
                           title={t('accounts.sessions')}
                           onClick={() => setSessionsAccountId(a.id)}
                         >
-                          <Shield className="h-3.5 w-3.5" />
+                          <Shield className="vds-h-3.5 vds-w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7"
+                          className="vds-h-7 vds-w-7"
                           aria-label={t('accounts.resetLink')}
                           title={t('accounts.resetLink')}
                           onClick={() => resetMutation.mutate(a.id)}
                         >
-                          <Link className="h-3.5 w-3.5" />
+                          <Link className="vds-h-3.5 vds-w-3.5" />
                         </Button>
                         <Button
                           variant="ghost"
                           size="icon"
-                          className="h-7 w-7 text-destructive hover:text-destructive"
+                          className="vds-h-7 vds-w-7 vds-text-destructive vds-hover:text-destructive"
                           aria-label={t('common.delete')}
                           title={t('common.delete')}
                           onClick={() => setDeleteTarget(a)}
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <Trash2 className="vds-h-3.5 vds-w-3.5" />
                         </Button>
                       </div>
                     </TableCell>
@@ -804,17 +779,17 @@ export default function AccountsPage() {
             </DataTable>
           )}
           {accounts.length > 0 && acctTotalPages > 1 && (
-            <div className="flex items-center justify-end gap-2">
-              <span className="text-xs text-muted-foreground tabular-nums">
+            <div className="vds-flex vds-items-center vds-justify-end vds-gap-2">
+              <span className="vds-text-xs vds-text-dim vds-tabular-nums">
                 {acctSafePage * ACCT_PAGE_SIZE + 1}–{Math.min((acctSafePage + 1) * ACCT_PAGE_SIZE, accounts.length)} / {accounts.length}
               </span>
-              <Button variant="outline" size="icon" className="h-7 w-7" disabled={acctSafePage <= 0}
+              <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={acctSafePage <= 0}
                 onClick={() => setAcctPage(p => p - 1)}>
-                <ChevronLeft className="h-3.5 w-3.5" />
+                <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
               </Button>
-              <Button variant="outline" size="icon" className="h-7 w-7" disabled={acctSafePage >= acctTotalPages - 1}
+              <Button variant="outline" size="icon" className="vds-h-7 vds-w-7" disabled={acctSafePage >= acctTotalPages - 1}
                 onClick={() => setAcctPage(p => p + 1)}>
-                <ChevronRight className="h-3.5 w-3.5" />
+                <ChevronRight className="vds-h-3.5 vds-w-3.5" />
               </Button>
             </div>
           )}

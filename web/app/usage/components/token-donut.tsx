@@ -18,13 +18,13 @@ export function TokenDonut({ prompt, completion }: { prompt: number; completion:
   ], [prompt, completion, total, t])
   if (total === 0) return null
   return (
-    <Card className="h-full">
+    <Card className="vds-h-full">
       <CardHeader>
-        <CardTitle className="text-base">{t('usage.tokenComposition')}</CardTitle>
-        <p className="text-xs text-muted-foreground">{t('usage.tokenCompositionDesc')}</p>
+        <CardTitle className="vds-text-base">{t('usage.tokenComposition')}</CardTitle>
+        <p className="vds-text-xs vds-text-dim">{t('usage.tokenCompositionDesc')}</p>
       </CardHeader>
       <CardContent>
-        <div className="flex items-center gap-8">
+        <div className="vds-flex vds-items-center vds-gap-8">
           <DonutChart
             data={[
               { name: t('usage.promptTokens'),     value: prompt,     fill: tokens.brand.primary },
@@ -35,22 +35,22 @@ export function TokenDonut({ prompt, completion }: { prompt: number; completion:
             outerRadius={60}
             formatter={fmtCompact}
           />
-          <div className="flex-1 space-y-4">
+          <div className="vds-flex-1 vds-space-y-4">
             {data.map((d, i) => (
               <div key={d.name}>
-                <div className="flex items-center justify-between mb-1">
-                  <div className="flex items-center gap-2">
-                    <span className="inline-block h-2.5 w-2.5 rounded-full flex-shrink-0"
+                <div className="vds-flex vds-items-center vds-justify-between vds-mb-1">
+                  <div className="vds-flex vds-items-center vds-gap-2">
+                    <span className="vds-inline-block vds-h-2.5 vds-w-2.5 vds-rounded-full vds-flex-shrink-0"
                       style={{ background: i === 0 ? tokens.brand.primary : tokens.status.info }} />
-                    <span className="text-xs font-bold uppercase tracking-widest text-muted-foreground">{d.name}</span>
+                    <span className="vds-text-xs vds-font-700 vds-uppercase vds-tracking-widest vds-text-dim">{d.name}</span>
                   </div>
-                  <span className="text-sm font-mono font-bold">{d.pct}%</span>
+                  <span className="vds-text-sm vds-font-mono vds-font-700">{d.pct}%</span>
                 </div>
                 <ProgressBar pct={d.pct} colorStyle={i === 0 ? tokens.brand.primary : tokens.status.info} />
-                <p className="text-xs text-muted-foreground mt-1">{t('usage.nTokens', { n: fmtCompact(d.value) })}</p>
+                <p className="vds-text-xs vds-text-dim vds-mt-1">{t('usage.nTokens', { n: fmtCompact(d.value) })}</p>
               </div>
             ))}
-            <p className="text-xs text-muted-foreground pt-1 border-t border-border">
+            <p className="vds-text-xs vds-text-dim vds-pt-1 vds-border-t-1 vds-border-subtle">
               {t('usage.totalNTokens', { n: fmtCompact(total) })}
             </p>
           </div>

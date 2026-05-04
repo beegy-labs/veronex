@@ -7,7 +7,8 @@ use uuid::Uuid;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::inference_provider::LlmProviderPort;
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::LlmProvider;
@@ -26,6 +27,7 @@ pub struct ConcreteProviderDispatch {
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     valkey_pool: Option<fred::clients::Pool>,
+    vram_pool: Option<Arc<dyn VramPoolPort>>,
 }
 
 impl ConcreteProviderDispatch {
@@ -35,8 +37,16 @@ impl ConcreteProviderDispatch {
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
         ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         valkey_pool: Option<fred::clients::Pool>,
+        vram_pool: Option<Arc<dyn VramPoolPort>>,
     ) -> Self {
-        Self { registry, gemini_policy_repo, model_selection_repo, ollama_model_repo, valkey_pool }
+        Self {
+            registry,
+            gemini_policy_repo,
+            model_selection_repo,
+            ollama_model_repo,
+            valkey_pool,
+            vram_pool,
+        }
     }
 }
 
@@ -46,8 +56,8 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         get_ollama_available_vram_mb(provider, self.valkey_pool.as_ref()).await
     }
 
-    fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn InferenceProviderPort> {
-        make_adapter(provider, self.valkey_pool.as_ref())
+    fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn LlmProviderPort> {
+        make_adapter(provider, self.valkey_pool.as_ref(), self.vram_pool.clone())
     }
 
     async fn pick_and_build(
@@ -55,7 +65,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         provider_type: &ProviderType,
         model_name: &str,
         tier_filter: Option<&str>,
-    ) -> Result<(Arc<dyn InferenceProviderPort>, Uuid, bool)> {
+    ) -> Result<(Arc<dyn LlmProviderPort>, Uuid, bool)> {
         let cfg = pick_best_provider(
             &*self.registry,
             self.gemini_policy_repo.as_deref(),
@@ -69,7 +79,11 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         .await?;
         let provider_id = cfg.id;
         let is_free_tier = cfg.is_free_tier;
-        Ok((make_adapter(&cfg, self.valkey_pool.as_ref()), provider_id, is_free_tier))
+        Ok((
+            make_adapter(&cfg, self.valkey_pool.as_ref(), self.vram_pool.clone()),
+            provider_id,
+            is_free_tier,
+        ))
     }
 
     async fn increment_gemini_counters(&self, provider_id: Uuid, model: &str) -> Result<()> {

@@ -18,7 +18,11 @@
     "audit": "監査ログ",
     "capacity": "同時実行制御",
     "health": "ヘルス",
-    "mcp": "MCP"
+    "mcp": "MCP",
+    "observe": "観測",
+    "operate": "運用",
+    "govern": "ガバナンス",
+    "system": "システム"
   },
   "common": {
     "all": "すべて",
@@ -117,7 +121,8 @@
     "activate": "有効化",
     "deactivate": "無効化",
     "deleting": "削除中…",
-    "model": "モデル"
+    "model": "モデル",
+    "skipToMain": "メインコンテンツへスキップ"
   },
   "conversations": {
     "title": "会話",
@@ -129,7 +134,9 @@
     "source": "ソース",
     "createdAt": "作成日時",
     "internals": "内部データ",
-    "internalsEmpty": "このターンには圧縮またはVisionデータがありません。",
+    "internalsEmpty": "このターンには圧縮・Vision・MCPツールのデータがありません。",
+    "compressedBadge": "圧縮済み ({original}→{compressed} tok, {model})",
+    "visionBadge": "Vision: {model} ({imageCount}枚, {tokens} tok)",
     "compression": "圧縮",
     "compressionModel": "モデル",
     "originalTokens": "元のトークン",
@@ -139,6 +146,16 @@
     "visionModel": "モデル",
     "imageCount": "画像数",
     "analysisTokens": "トークン",
+    "toolCalls": "MCPツール呼び出し",
+    "toolCallsBadge": "MCP呼び出し {count}件",
+    "toolCallsRound": "ラウンド {round}",
+    "toolCallsLatency": "{ms}ms",
+    "toolCallsCacheHit": "キャッシュ",
+    "toolCallsArgs": "引数",
+    "toolCallsResult": "結果",
+    "toolCallsNoResult": "(結果なし)",
+    "toolResult": "結果を表示",
+    "mcpCallsBadge": "MCP {{count}}回",
     "backToList": "会話一覧へ戻る"
   },
   "overview": {
@@ -276,6 +293,7 @@
     "noJobsFound": "ジョブが見つかりません。",
     "noError": "(エラーメッセージなし)",
     "noResult": "(結果が保存されていません)",
+    "toolOnlyTurnHint": "(ツール呼び出しのみのターン — 上のツール呼び出しを参照。このラウンドでモデルはテキストを生成しませんでした)",
     "processing": "(処理中…)",
     "toolCalls": "ツール呼び出し",
     "agentToolCall": "モデルがツール呼び出しで応答しました — テキスト出力は生成されていません。",
@@ -309,6 +327,7 @@
     "tasks": "タスク",
     "conversations": "会話",
     "allSources": "全ソース",
+    "sourceApi": "API",
     "sourceTest": "テスト",
     "sourceAnalyzer": "アナライザー",
     "conversationId": "会話",
@@ -481,7 +500,27 @@
       "verifyFirst": "登録前に接続を確認してください",
       "modelSelection": "モデル選択",
       "modelSelectionDesc": "このバックエンドにルーティングするモデルのみ有効にしてください。",
-      "enabledCount": "{{enabled}}/{{total}} 有効"
+      "enabledCount": "{{enabled}}/{{total}} 有効",
+      "labTitle": "詳細設定",
+      "labDesc": "Ollama パス専用ポリシー (画像入力、コンテキスト圧縮、マルチターン要件)。",
+      "labImageSection": "画像入力",
+      "labMaxImageBytes": "画像最大サイズ",
+      "labMaxImageBytesDesc": "リクエストあたりの画像のBase64最大サイズ",
+      "labCompressionModelDesc": "ターン毎の要約に使用するOllamaモデル。なし = 推論モデルを再利用。",
+      "labContextBudgetRatio": "コンテキスト予算比率",
+      "labContextBudgetRatioDesc": "推論入力に割り当てる configured_ctx の比率 (0.1–1.0)",
+      "labCompressionTriggerTurns": "圧縮トリガー間隔",
+      "labCompressionTriggerTurnsDesc": "Nターンごとに圧縮実行 (1 = 毎ターン)",
+      "labRecentVerbatim": "原文保持ターン数",
+      "labRecentVerbatimDesc": "直近 N ターンは圧縮せず原文を保持",
+      "labCompressionTimeout": "圧縮タイムアウト",
+      "labCompressionTimeoutDesc": "単一圧縮呼び出しの最大時間 (超過時は静かにスキップ)",
+      "labHandoffThresholdDesc": "この比率 × configured_ctx を超えると新セッションへ移行",
+      "labMultiturnMinParamsDesc": "このパラメータ数未満のモデルはマルチターン拒否 (400)",
+      "labMultiturnMinCtxDesc": "max_ctx がこの値未満のモデルはマルチターン拒否 (400)",
+      "labMultiturnAllowedModelsDesc": "選択されたモデルのみマルチターン許可。全て解除時はすべての適格モデルを許可。",
+      "labMultiturnAllModels": "適格な全モデル",
+      "labMultiturnGateFail": "要件未満"
     },
     "capacity": {
       "title": "並行処理制御",
@@ -752,6 +791,8 @@
     "syncLabel": "同期",
     "stop": "停止",
     "runAgain": "再実行",
+    "toolsUsed": "使用ツール",
+    "toolOnlyTurn": "ツールのみのターン（モデルがテキスト応答なしでMCPツールを呼び出し）",
     "retryInTest": "テストで再実行",
     "runningAs": "実行者",
     "runner": "実行者",
@@ -774,7 +815,11 @@
     "clearConversation": "クリア",
     "newSession": "新しいセッション",
     "noSessions": "セッションがありません。",
-    "turns": "ターン"
+    "turns": "ターン",
+    "endpointGemini": "/v1beta/models (Gemini)",
+    "mcp": "MCP",
+    "mcpEnable": "MCPを有効化",
+    "mcpDisable": "MCPを無効化"
   },
   "apiDocs": {
     "title": "APIドキュメント",
@@ -879,24 +924,10 @@
       "audit_view": "監査ログ",
       "settings_manage": "設定",
       "role_manage": "ロール管理",
-      "model_manage": "モデル管理"
-    },
-    "menu": {
-      "dashboard": "ダッシュボード",
-      "flow": "ネットワークフロー",
-      "jobs": "ジョブ",
-      "performance": "パフォーマンス",
-      "usage": "使用量",
-      "test": "テスト",
-      "providers": "プロバイダー",
-      "servers": "サーバー",
-      "keys": "APIキー",
-      "accounts": "アカウント",
-      "audit": "監査ログ",
-      "api_docs": "APIドキュメント"
+      "model_manage": "モデル管理",
+      "mcp_manage": "MCP管理"
     },
     "permissionCount": "{{count}}個の権限",
-    "menuCount": "{{count}}個のメニュー",
     "assignedUsers": "{{count}}人のユーザー"
   },
   "audit": {
@@ -972,6 +1003,7 @@
     "enabled": "有効",
     "online": "オンライン",
     "offline": "オフライン",
+    "editTitle": "MCPサーバーを編集",
     "deleteTitle": "MCPサーバーを削除",
     "stats": "ツール呼び出し統計",
     "statsDesc": "登録されたすべてのMCPサーバーのツール呼び出し集計メトリクスです。",
@@ -991,6 +1023,13 @@
     "toolSchemaRefresh": "ツールスキーマ更新 (秒)",
     "maxToolsPerRequest": "リクエストあたりの最大ツール数",
     "maxRoutingCacheEntries": "最大キャッシュエントリ数",
-    "embeddingModel": "埋め込みモデル"
+    "embeddingModel": "埋め込みモデル",
+    "verifyConnection": "接続確認",
+    "verifying": "確認中…",
+    "connected": "接続済み",
+    "verifyDuplicate": "このURLはすでに登録されています。",
+    "verifyNetwork": "ネットワークエラー — URLを確認してください。",
+    "verifyUnreachable": "サーバーに接続できません。",
+    "verifyFailed": "接続確認に失敗しました。"
   }
 }

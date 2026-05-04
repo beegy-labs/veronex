@@ -7,6 +7,7 @@ on:
       - 'crates/veronex-embed/**'
       - 'Cargo.toml'
       - 'Cargo.lock'
+      - 'crates/veronex-embed/Dockerfile'
       - '.github/workflows/ci-embed.yml'
   workflow_dispatch:
     inputs:
@@ -28,7 +29,20 @@ jobs:
   build:
     name: Build Embed
     runs-on: arc-runner-set
-    timeout-minutes: 60
+    timeout-minutes: 30
+    env:
+      # See ci-rust.yml — same sccache pass-through pattern. Compile lives
+      # inside the embed Dockerfile, runner only orchestrates buildx.
+      SCCACHE_BUCKET: sccache
+      SCCACHE_ENDPOINT: ${{ secrets.SCCACHE_ENDPOINT }}
+      SCCACHE_REGION: us-east-1
+      SCCACHE_S3_USE_SSL: "true"
+      SCCACHE_S3_KEY_PREFIX: veronex/
+      AWS_ACCESS_KEY_ID: ${{ secrets.SCCACHE_AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.SCCACHE_AWS_SECRET_ACCESS_KEY }}
+    outputs:
+      tag: ${{ steps.meta.outputs.tag }}
+      skipped: ${{ steps.check_image.outputs.exists }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -37,12 +51,11 @@ jobs:
         run: |
           for i in $(seq 1 30); do
             docker info >/dev/null 2>&1 && exit 0
-            echo "Waiting for Docker daemon... ($i/30)"
             sleep 2
           done
-          echo "Docker daemon not available after 60s"
           exit 1
-      - uses: docker/setup-buildx-action@v3
+      # buildx baseline pre-created by runner pod's init container —
+      # see ci-rust.yml comment.
       - uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
@@ -68,7 +81,6 @@ jobs:
         run: |
           if [ "${{ inputs.force_build }}" = "true" ]; then
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Force build requested, skipping image check"
             exit 0
           fi
           TAG="${{ steps.meta.outputs.tag }}"
@@ -77,21 +89,125 @@ jobs:
             "https://${{ env.REGISTRY }}/api/v1/packages/beegy-labs/container/veronex-embed/${TAG}")
           if [ "$RESPONSE" = "200" ]; then
             echo "exists=true" >> $GITHUB_OUTPUT
-            echo "Image ${TAG} already exists, skipping build"
           else
             echo "exists=false" >> $GITHUB_OUTPUT
-            echo "Image ${TAG} not found, proceeding with build"
           fi
 
-      - uses: docker/build-push-action@v5
+      - name: Prepare sccache env
         if: steps.check_image.outputs.exists != 'true'
+        run: |
+          {
+            echo "export SCCACHE_BUCKET=${SCCACHE_BUCKET:-sccache}"
+            echo "export SCCACHE_ENDPOINT=$SCCACHE_ENDPOINT"
+            echo "export SCCACHE_REGION=${SCCACHE_REGION:-us-east-1}"
+            echo "export SCCACHE_S3_USE_SSL=${SCCACHE_S3_USE_SSL:-false}"
+            echo "export SCCACHE_S3_KEY_PREFIX=${SCCACHE_S3_KEY_PREFIX:-veronex/}"
+            echo "export AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID"
+            echo "export AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY"
+            echo "export RUSTC_WRAPPER=sccache"
+            echo "export CARGO_INCREMENTAL=0"
+          } > /tmp/sccache.env
+
+      # Direct `docker buildx build` (matches ci-rust.yml) with shell-level
+      # retry to survive transient gitea/Garage upload flakes. Past failure
+      # mode (run #25041854130, sha 71c430f): 7-min layer push to gitea →
+      # `error writing layer blob: failed to do request: Put .../blobs/uploads/...`
+      # → buildkit aborts the whole image push. Retrying succeeds because
+      # blobs are content-addressed: already-uploaded digests are skipped.
+      #
+      # Cache-to is run as a best-effort second pass: if image push succeeds
+      # but cache export fails, the image is still in registry — only the
+      # buildcache tag misses an update (next build pays for one extra
+      # `cargo chef cook` step but is otherwise unaffected).
+      - name: Build and push embed image
+        if: steps.check_image.outputs.exists != 'true'
+        run: |
+          TAGS="${{ steps.meta.outputs.tags }}"
+          TAG_ARGS=""
+          IFS=',' read -ra T <<< "$TAGS"
+          for t in "${T[@]}"; do TAG_ARGS="$TAG_ARGS --tag $t"; done
+
+          BUILDCACHE_REF="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache"
+
+          push_with_retry() {
+            for attempt in 1 2 3; do
+              echo "::group::Build + push attempt $attempt (with cache-to)"
+              if docker buildx build \
+                --file ./crates/veronex-embed/Dockerfile \
+                $TAG_ARGS \
+                --secret id=sccache_env,src=/tmp/sccache.env \
+                --cache-from "type=registry,ref=${BUILDCACHE_REF}" \
+                --cache-to "type=registry,ref=${BUILDCACHE_REF},mode=max" \
+                --push \
+                .; then
+                echo "::endgroup::"
+                return 0
+              fi
+              echo "::endgroup::"
+              echo "::warning::attempt $attempt failed; backing off $((attempt * 30))s"
+              sleep $((attempt * 30))
+            done
+            return 1
+          }
+
+          push_image_only() {
+            echo "::group::Fallback — image push without cache-to"
+            docker buildx build \
+              --file ./crates/veronex-embed/Dockerfile \
+              $TAG_ARGS \
+              --secret id=sccache_env,src=/tmp/sccache.env \
+              --cache-from "type=registry,ref=${BUILDCACHE_REF}" \
+              --push \
+              .
+            local rc=$?
+            echo "::endgroup::"
+            return $rc
+          }
+
+          if push_with_retry; then
+            exit 0
+          fi
+
+          echo "::warning::push_with_retry exhausted — trying fallback (no cache-to)"
+          if push_image_only; then
+            echo "::warning::image pushed without cache export — buildcache stale, next build slower"
+            exit 0
+          fi
+          echo "::error::image push failed after retries + fallback"
+          exit 1
+
+  deploy:
+    name: Update GitOps
+    needs: build
+    if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
+    runs-on: arc-runner-set
+    steps:
+      - uses: actions/checkout@v4
         with:
-          context: .
-          file: ./crates/veronex-embed/Dockerfile
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+          repository: beegy-labs/platform-gitops
+          ref: develop
+          token: ${{ secrets.GH_PAT }}
+      - name: Update image tag
+        run: |
+          TAG="${{ needs.build.outputs.tag }}"
+          case "${{ github.ref_name }}" in
+            main)    FILE="clusters/home/values/veronex-prod-values.yaml" ;;
+            develop) FILE="clusters/home/values/veronex-dev-values.yaml" ;;
+            *)       exit 0 ;;
+          esac
+          sed -i "/^embed:/,/^[a-z]/{s/tag: .*/tag: \"${TAG}\"/}" "$FILE"
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(veronex): update embed image tag to ${{ needs.build.outputs.tag }}"
+          for i in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
 
   cleanup:
     name: Cleanup Old Images

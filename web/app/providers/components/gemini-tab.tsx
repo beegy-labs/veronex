@@ -1,11 +1,10 @@
 'use client'
 
-import { useState, useMemo, useOptimistic, startTransition } from 'react'
+import { useState, useMemo } from 'react'
 import type { Provider } from '@/lib/types'
-import { Plus, Trash2, RefreshCw, Key, ShieldCheck, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
+import { Plus, Trash2, RefreshCw, Key, ListFilter, Pencil, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
 import {
   TableBody,
@@ -30,30 +29,6 @@ import { ApiKeyCell, ModelSelectionModal } from './modals'
 import { PAGE_SIZE } from './ollama-sections'
 import { GeminiStatusSyncSection, GeminiSyncSection } from './gemini-sections'
 
-// ── Gemini provider active toggle with optimistic update ───────────────────────
-
-function GeminiProviderActiveToggle({
-  provider,
-  onToggleActive,
-  toggleActivePending,
-}: {
-  provider: Provider
-  onToggleActive: (b: Provider) => void
-  toggleActivePending: boolean
-}) {
-  const { t } = useTranslation()
-  const [optimistic, setOptimistic] = useOptimistic(provider.is_active, (_, v: boolean) => v)
-  return (
-    <Switch
-      checked={optimistic}
-      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); onToggleActive(provider) })}
-      disabled={toggleActivePending}
-      title={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
-      aria-label={optimistic ? t('providers.disableProvider') : t('providers.enableProvider')}
-    />
-  )
-}
-
 // ── Tab: Gemini providers + policies ───────────────────────────────────────────
 
 export function GeminiTab({
@@ -64,8 +39,6 @@ export function GeminiTab({
   onEdit,
   onSync,
   syncPending,
-  onToggleActive,
-  toggleActivePending,
   onDelete,
   deleteIsPending,
 }: {
@@ -76,8 +49,6 @@ export function GeminiTab({
   onEdit: (b: Provider) => void
   onSync: (id: string) => void
   syncPending: boolean
-  onToggleActive: (b: Provider) => void
-  toggleActivePending: boolean
   onDelete: (id: string, name: string) => void
   deleteIsPending: boolean
 }) {
@@ -85,7 +56,6 @@ export function GeminiTab({
   const { tz } = useTimezone()
   const gemini = useMemo(() => getGeminiProviders(providers), [providers])
   const geminiCounts = useMemo(() => countByStatus(gemini), [gemini])
-  const activeCount = useMemo(() => gemini.filter(b => b.is_active).length, [gemini])
   const onlineCount = geminiCounts['online'] ?? 0
   const degradedCount = geminiCounts['degraded'] ?? 0
   const offlineCount = geminiCounts['offline'] ?? 0
@@ -100,63 +70,56 @@ export function GeminiTab({
   }, [gemini, geminiPage])
 
   return (
-    <div className="space-y-8">
-      <div className="space-y-4">
-        <div className="flex items-start justify-between">
+    <div className="vds-space-y-8">
+      <div className="vds-space-y-4">
+        <div className="vds-flex vds-items-start vds-justify-between">
           <div>
-            <h2 className="text-base font-semibold text-text-bright">{t('providers.gemini.title')}</h2>
+            <h2 className="vds-text-base vds-font-600 vds-text-bright">{t('providers.gemini.title')}</h2>
             {providers ? (
-              <div className="flex items-center gap-2 flex-wrap mt-1.5">
-                <StatusPill icon={<Key className="h-3 w-3 shrink-0" />} count={gemini.length} label={t('providers.servers.registered')} />
-                {activeCount > 0 && (
-                  <StatusPill
-                    icon={<ShieldCheck className="h-3 w-3 shrink-0" />}
-                    count={activeCount} label={t('common.active')}
-                    className="bg-primary/10 border border-primary/30 text-primary"
-                  />
-                )}
+              <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap vds-mt-1.5">
+                <StatusPill icon={<Key className="vds-h-3 vds-w-3 vds-flex-shrink-0" />} count={gemini.length} label={t('providers.servers.registered')} />
                 {onlineCount > 0 && (
                   <StatusPill
-                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-success shrink-0" />}
+                    icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-success vds-flex-shrink-0" />}
                     count={onlineCount} label={t('common.online')}
-                    className="bg-status-success/10 border border-status-success/30 text-status-success-fg"
+                    className="vds-bg-success/10 vds-border-1 vds-border-success/30 vds-text-success"
                   />
                 )}
                 {degradedCount > 0 && (
                   <StatusPill
-                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-warning shrink-0" />}
+                    icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-warning vds-flex-shrink-0" />}
                     count={degradedCount} label={t('common.degraded')}
-                    className="bg-status-warning/10 border border-status-warning/30 text-status-warning-fg"
+                    className="vds-bg-warning/10 vds-border-1 vds-border-warning/30 vds-text-warning"
                   />
                 )}
                 {offlineCount > 0 && (
                   <StatusPill
-                    icon={<span className="h-1.5 w-1.5 rounded-full bg-status-error shrink-0" />}
+                    icon={<span className="vds-h-1.5 vds-w-1.5 vds-rounded-full vds-bg-error vds-flex-shrink-0" />}
                     count={offlineCount} label={t('common.offline')}
-                    className="bg-status-error/10 border border-status-error/30 text-status-error-fg"
+                    className="vds-bg-error/10 vds-border-1 vds-border-error/30 vds-text-error"
                   />
                 )}
               </div>
             ) : (
-              <p className="text-sm text-muted-foreground mt-0.5 animate-pulse">{t('common.loading')}</p>
+              <p className="vds-text-sm vds-text-dim vds-mt-0.5 vds-animate-pulse">{t('common.loading')}</p>
             )}
           </div>
-          <Button onClick={onRegister} className="shrink-0">
-            <Plus className="h-4 w-4 mr-2" />{t('providers.gemini.registerProvider')}
+          <Button onClick={onRegister} className="vds-flex-shrink-0">
+            <Plus className="vds-h-4 vds-w-4 vds-mr-2" />{t('providers.gemini.registerProvider')}
           </Button>
         </div>
 
         {isLoading && (
-          <div className="flex h-32 items-center justify-center text-muted-foreground text-sm animate-pulse">
+          <div className="vds-flex vds-h-32 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
             {t('providers.gemini.loadingProviders')}
           </div>
         )}
 
         {error && (
-          <Card className="border-destructive/40 bg-destructive/5">
-            <CardContent className="p-5 text-destructive">
-              <p className="font-semibold">{t('providers.gemini.failedProviders')}</p>
-              <p className="text-sm mt-1 opacity-75">
+          <Card className="vds-border-destructive/40 vds-bg-destructive/5">
+            <CardContent className="vds-p-5 vds-text-destructive">
+              <p className="vds-font-600">{t('providers.gemini.failedProviders')}</p>
+              <p className="vds-text-sm vds-mt-1 vds-opacity-75">
                 {error instanceof Error ? error.message : t('common.unknownError')}
               </p>
             </CardContent>
@@ -164,11 +127,11 @@ export function GeminiTab({
         )}
 
         {!isLoading && gemini.length === 0 && !error && (
-          <Card className="border-dashed">
-            <CardContent className="p-10 text-center text-muted-foreground">
-              <Key className="h-10 w-10 mx-auto mb-3 opacity-25" />
-              <p className="font-medium text-text-dim">{t('providers.gemini.noBackends')}</p>
-              <p className="text-sm mt-1 text-muted-foreground/70">{t('providers.gemini.noBackendsHint')}</p>
+          <Card className="vds-border-dashed">
+            <CardContent className="vds-p-10 vds-text-center vds-text-dim">
+              <Key className="vds-h-10 vds-w-10 vds-mx-auto vds-mb-3 vds-opacity-25" />
+              <p className="vds-font-500 vds-text-dim">{t('providers.gemini.noBackends')}</p>
+              <p className="vds-text-sm vds-mt-1 vds-text-dim/70">{t('providers.gemini.noBackendsHint')}</p>
             </CardContent>
           </Card>
         )}
@@ -177,81 +140,73 @@ export function GeminiTab({
           <DataTable
             minWidth="760px"
             footer={geminiTotalPages > 1 ? (
-              <div className="flex items-center justify-between px-6 py-2">
-                <span className="text-xs text-muted-foreground">
+              <div className="vds-flex vds-items-center vds-justify-between vds-px-6 vds-py-2">
+                <span className="vds-text-xs vds-text-dim">
                   {geminiPageStart + 1}–{Math.min(geminiPageStart + PAGE_SIZE, gemini.length)} / {gemini.length}
                 </span>
-                <div className="flex items-center gap-1">
-                  <Button variant="outline" size="icon" className="h-7 w-7"
+                <div className="vds-flex vds-items-center vds-gap-1">
+                  <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                     aria-label={t('common.prevPage')}
                     onClick={() => setGeminiPage((p) => Math.max(1, p - 1))} disabled={geminiSafePage <= 1}>
-                    <ChevronLeft className="h-3.5 w-3.5" />
+                    <ChevronLeft className="vds-h-3.5 vds-w-3.5" />
                   </Button>
-                  <span className="text-xs text-muted-foreground px-1">{geminiSafePage} / {geminiTotalPages}</span>
-                  <Button variant="outline" size="icon" className="h-7 w-7"
+                  <span className="vds-text-xs vds-text-dim vds-px-1">{geminiSafePage} / {geminiTotalPages}</span>
+                  <Button variant="outline" size="icon" className="vds-h-7 vds-w-7"
                     aria-label={t('common.nextPage')}
                     onClick={() => setGeminiPage((p) => Math.min(geminiTotalPages, p + 1))} disabled={geminiSafePage >= geminiTotalPages}>
-                    <ChevronRight className="h-3.5 w-3.5" />
+                    <ChevronRight className="vds-h-3.5 vds-w-3.5" />
                   </Button>
                 </div>
               </div>
             ) : undefined}
           >
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
-                <TableHead className="whitespace-nowrap">{t('providers.gemini.name')}</TableHead>
-                <TableHead className="whitespace-nowrap">{t('providers.gemini.apiKey')}</TableHead>
-                <TableHead className="whitespace-nowrap">{t('providers.gemini.freeTier')}</TableHead>
-                <TableHead className="whitespace-nowrap">{t('providers.gemini.activeToggle')}</TableHead>
-                <TableHead className="whitespace-nowrap">{t('providers.gemini.status')}</TableHead>
-                <TableHead className="whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
-                <TableHead className="text-right whitespace-nowrap">{t('keys.actions')}</TableHead>
+              <TableRow className="vds-hover:bg-transparent">
+                <TableHead className="vds-whitespace-nowrap">{t('providers.gemini.name')}</TableHead>
+                <TableHead className="vds-whitespace-nowrap">{t('providers.gemini.apiKey')}</TableHead>
+                <TableHead className="vds-whitespace-nowrap">{t('providers.gemini.freeTier')}</TableHead>
+                <TableHead className="vds-whitespace-nowrap">{t('providers.gemini.status')}</TableHead>
+                <TableHead className="vds-whitespace-nowrap">{t('providers.servers.registeredAt')}</TableHead>
+                <TableHead className="vds-text-right vds-whitespace-nowrap">{t('keys.actions')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {geminiPageItems.map((b) => (
-                <TableRow key={b.id} className={!b.is_active ? 'opacity-50' : ''}>
+                <TableRow key={b.id}>
                   <TableCell>
-                    <div className="font-semibold text-text-bright">{b.name}</div>
+                    <div className="vds-font-600 vds-text-bright">{b.name}</div>
                   </TableCell>
                   <TableCell>
                     <ApiKeyCell providerId={b.id} masked={b.api_key_masked} />
                   </TableCell>
                   <TableCell>
                     {b.is_free_tier ? (
-                      <Badge variant="outline" className="bg-status-warning/15 text-status-warning-fg border-status-warning/30 text-[10px] px-2 py-0.5 whitespace-nowrap">
+                      <Badge variant="outline" className="vds-bg-warning/15 vds-text-warning vds-border-warning/30 vds-text-[10px] vds-px-2 vds-py-0.5 vds-whitespace-nowrap">
                         {t('providers.gemini.freeTier')}
                       </Badge>
                     ) : (
-                      <Badge variant="outline" className="bg-status-success/15 text-status-success-fg border-status-success/30 text-[10px] px-2 py-0.5 whitespace-nowrap">
+                      <Badge variant="outline" className="vds-bg-success/15 vds-text-success vds-border-success/30 vds-text-[10px] vds-px-2 vds-py-0.5 vds-whitespace-nowrap">
                         {t('providers.gemini.paid')}
                       </Badge>
                     )}
                   </TableCell>
                   <TableCell>
-                    <GeminiProviderActiveToggle
-                      provider={b}
-                      onToggleActive={onToggleActive}
-                      toggleActivePending={toggleActivePending}
-                    />
-                  </TableCell>
-                  <TableCell>
                     <StatusBadge status={b.status} />
                   </TableCell>
-                  <TableCell className="text-xs text-muted-foreground whitespace-nowrap">
+                  <TableCell className="vds-text-xs vds-text-dim vds-whitespace-nowrap">
                     {fmtDateOnly(b.registered_at, tz)}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="vds-text-right">
                     <TooltipProvider delayDuration={200}>
-                      <div className="flex items-center justify-end gap-1">
+                      <div className="vds-flex vds-items-center vds-justify-end vds-gap-1">
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-text-bright"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-text-bright"
                               aria-label={t('common.sync')}
                               onClick={() => onSync(b.id)}
                               disabled={syncPending}>
-                              <RefreshCw className="h-4 w-4" />
+                              <RefreshCw className="vds-h-4 vds-w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t('common.sync')}</TooltipContent>
@@ -260,10 +215,10 @@ export function GeminiTab({
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button variant="ghost" size="icon"
-                                className="h-8 w-8 text-muted-foreground hover:text-accent-gpu hover:bg-accent-gpu/10"
+                                className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-accent-gpu vds-hover:bg-hover-gpu/10"
                                 aria-label={t('providers.gemini.modelSelection')}
                                 onClick={() => setModelSelectionProvider(b)}>
-                                <ListFilter className="h-4 w-4" />
+                                <ListFilter className="vds-h-4 vds-w-4" />
                               </Button>
                             </TooltipTrigger>
                             <TooltipContent>{t('providers.gemini.modelSelection')}</TooltipContent>
@@ -272,10 +227,10 @@ export function GeminiTab({
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-primary hover:bg-primary/10"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-primary vds-hover:bg-primary/10"
                               aria-label={t('providers.gemini.editTitle')}
                               onClick={() => onEdit(b)}>
-                              <Pencil className="h-4 w-4" />
+                              <Pencil className="vds-h-4 vds-w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t('providers.gemini.editTitle')}</TooltipContent>
@@ -283,11 +238,11 @@ export function GeminiTab({
                         <Tooltip>
                           <TooltipTrigger asChild>
                             <Button variant="ghost" size="icon"
-                              className="h-8 w-8 text-muted-foreground hover:text-status-error-fg hover:bg-status-error/10"
+                              className="vds-h-8 vds-w-8 vds-text-dim vds-hover:text-error vds-hover:bg-error/10"
                               aria-label={t('providers.removeProvider')}
                               onClick={() => onDelete(b.id, b.name)}
                               disabled={deleteIsPending}>
-                              <Trash2 className="h-4 w-4" />
+                              <Trash2 className="vds-h-4 vds-w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent>{t('providers.removeProvider')}</TooltipContent>

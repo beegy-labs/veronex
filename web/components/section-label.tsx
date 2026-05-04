@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
  * Usage:
  *   <SectionLabel>Tokens per hour</SectionLabel>
  *   <SectionLabel as="h2">Infrastructure</SectionLabel>
- *   <SectionLabel className="mb-4">Model usage</SectionLabel>
+ *   <SectionLabel className="vds-mb-4">Model usage</SectionLabel>
  */
 export function SectionLabel({
   children,
@@ -18,7 +18,7 @@ export function SectionLabel({
   as?: 'p' | 'h2' | 'h3' | 'span'
 }) {
   return (
-    <Tag className={cn('text-[11px] font-black uppercase tracking-[0.3em] text-muted-foreground mb-3', className)}>
+    <Tag className={cn('vds-text-2xs vds-font-black vds-uppercase vds-tracking-[0.3em] vds-text-dim vds-mb-3', className)}>
       {children}
     </Tag>
   )

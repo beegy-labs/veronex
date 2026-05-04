@@ -106,6 +106,7 @@ impl From<sqlx::Error> for AppError {
 impl From<crate::domain::errors::DomainError> for AppError {
     fn from(e: crate::domain::errors::DomainError) -> Self {
         use crate::domain::errors::DomainError;
+        use crate::infrastructure::outbound::persistence::job_repository::AccountNotFoundError;
         match e {
             DomainError::Validation(msg) => Self::BadRequest(msg),
             DomainError::NotFound(msg) => Self::NotFound(msg),
@@ -114,12 +115,20 @@ impl From<crate::domain::errors::DomainError> for AppError {
             DomainError::InvalidKey => Self::Unauthorized("invalid API key".into()),
             DomainError::Forbidden(msg) => Self::Forbidden(msg),
             DomainError::Conflict(msg) => Self::Conflict(msg),
-            DomainError::RateLimitExceeded(_) => Self::TooManyRequests { retry_after: 60 },
+            DomainError::RateLimitExceeded(_) => Self::TooManyRequests {
+                retry_after: crate::domain::constants::RATE_LIMIT_RETRY_AFTER_SECS,
+            },
             DomainError::ProviderUnavailable(msg) | DomainError::InferenceFailed(msg) => {
                 Self::ServiceUnavailable(msg)
             }
             DomainError::QueueFull(msg) => Self::ServiceUnavailable(msg),
             DomainError::Configuration(msg) => Self::Internal(anyhow::anyhow!(msg)),
+            DomainError::Crypto(msg) => Self::Internal(anyhow::anyhow!("crypto: {msg}")),
+            // AccountNotFoundError inside Internal → JWT references a deleted account → 401.
+            // The frontend auth-guard receives 401 and clears the stale token, redirecting to login.
+            DomainError::Internal(ref inner) if inner.is::<AccountNotFoundError>() => {
+                Self::Unauthorized("session expired — please log in again".into())
+            }
             DomainError::Internal(e) => Self::Internal(e),
         }
     }

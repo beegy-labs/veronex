@@ -4,6 +4,8 @@ use axum::middleware;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use tower_http::cors::{AllowOrigin, CorsLayer};
+use tower_http::compression::CompressionLayer;
+use tower_http::sensitive_headers::SetSensitiveRequestHeadersLayer;
 use tower_http::timeout::TimeoutLayer;
 use tower_http::trace::TraceLayer;
 
@@ -163,6 +165,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/keys/{key_id}/mcp/{server_id}", delete(key_mcp_access_handlers::revoke_key_mcp_access))
         // MCP server management
         .route("/v1/mcp/servers", get(mcp_handlers::list_mcp_servers).post(mcp_handlers::register_mcp_server))
+        .route("/v1/mcp/servers/verify", post(mcp_handlers::verify_mcp_server))
         .route("/v1/mcp/servers/{id}", patch(mcp_handlers::patch_mcp_server).delete(mcp_handlers::delete_mcp_server))
         // MCP call statistics
         .route("/v1/mcp/stats", get(mcp_handlers::get_mcp_stats))
@@ -350,13 +353,15 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
         .route("/v1/auth/refresh", post(auth_handlers::refresh))
         .route("/v1/auth/reset-password", post(auth_handlers::reset_password))
         // JWT-protected admin routes — 30 s timeout (SSE-free CRUD only)
+        // CompressionLayer is safe here: no streaming endpoints in this subtree.
         .merge(
             build_jwt_router()
                 .route_layer(middleware::from_fn_with_state(
                     state.clone(),
                     jwt_auth,
                 ))
-                .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, JWT_ROUTER_TIMEOUT)),
+                .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, JWT_ROUTER_TIMEOUT))
+                .layer(CompressionLayer::new()),
         )
         // Dashboard SSE — JWT auth but no timeout (stream runs until client disconnects)
         .merge(
@@ -382,6 +387,16 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
         .layer(DefaultBodyLimit::max(super::constants::JSON_BODY_LIMIT))
         .layer(cors)
         .layer(middleware::map_response(security_headers))
+        // Redact secrets from TraceLayer span fields. Layer order matters:
+        // SetSensitiveRequestHeadersLayer must be applied BEFORE (i.e. layer
+        // call comes AFTER, since tower wraps in reverse) TraceLayer so the
+        // headers are marked sensitive when the trace span captures them.
         .layer(TraceLayer::new_for_http())
+        .layer(SetSensitiveRequestHeadersLayer::new([
+            axum::http::header::AUTHORIZATION,
+            axum::http::header::COOKIE,
+            axum::http::header::PROXY_AUTHORIZATION,
+            axum::http::HeaderName::from_static("x-api-key"),
+        ]))
         .with_state(state)
 }

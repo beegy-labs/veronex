@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::Instrument;
 
 use dashmap::DashMap;
 use tokio::sync::{broadcast, Notify};
@@ -22,12 +23,12 @@ use crate::domain::entities::{InferenceJob, LlmProvider};
 use crate::domain::enums::{JobStatus, KeyTier, ProviderType, ThrottleLevel};
 use crate::domain::value_objects::JobStatusEvent;
 use crate::domain::constants::{
-    GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
-    MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ERROR_BACKOFF,
-    QUEUE_POLL_INTERVAL,
+    job_owner_key, GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY,
+    JOB_OWNER_TTL_SECS, MODEL_LOCALITY_BONUS_MB, NO_PROVIDER_BACKOFF, QUEUE_ACTIVE,
+    QUEUE_ERROR_BACKOFF, QUEUE_POLL_INTERVAL,
     LOCALITY_BONUS_MS, ZSET_PEEK_K, ZSET_PEEK_K_MAX,
+    NO_PROVIDER_ATTEMPTS_PREFIX, MAX_NO_PROVIDER_ATTEMPTS,
 };
-use crate::infrastructure::outbound::valkey_keys as vk_keys;
 use crate::application::ports::outbound::concurrency_port::VramPermit;
 
 use super::JobEntry;
@@ -61,10 +62,10 @@ async fn filter_candidates(
 
     let all = registry.list_all().await.unwrap_or_default();
 
-    // Stage 1: active + type + tier (standby providers included — woken on demand)
+    // Stage 1: type + tier (standby providers included — woken on demand)
     let mut candidates: Vec<_> = all.into_iter()
         .filter(|b| {
-            b.is_active && b.provider_type == provider_type
+            b.provider_type == provider_type
                 && !matches!(gemini_tier, Some(GEMINI_TIER_FREE) if !b.is_free_tier)
         })
         .collect();
@@ -83,24 +84,22 @@ async fn filter_candidates(
                 if !filtered.is_empty() { candidates = filtered; }
             }
 
-    // Stage 3: model selection (disabled models) — parallel lookups
+    // Stage 3: model selection (disabled models) — denylist semantics.
+    // Only providers where the model is EXPLICITLY disabled (is_enabled=false) are excluded.
+    // Models absent from provider_selected_models default to enabled (cold-start safe).
     if let Some(repo) = model_selection_repo {
         let futs: Vec<_> = candidates.iter()
             .map(|b| {
                 let id = b.id;
-                async move { (id, repo.list_enabled(id).await) }
+                async move { (id, repo.list_disabled(id).await) }
             })
             .collect();
         let results = futures::future::join_all(futs).await;
         let mut filtered = Vec::with_capacity(candidates.len());
         for (b, (_, res)) in candidates.into_iter().zip(results) {
             match res {
-                Ok(enabled) if !enabled.is_empty() => {
-                    if enabled.iter().any(|s| s == model) {
-                        filtered.push(b);
-                    } else {
-                        tracing::debug!(provider_id = %b.id, %model, "model disabled, skipping");
-                    }
+                Ok(disabled) if disabled.iter().any(|s| s == model) => {
+                    tracing::debug!(provider_id = %b.id, %model, "model explicitly disabled, skipping");
                 }
                 _ => filtered.push(b),
             }
@@ -174,34 +173,74 @@ fn score_and_claim(
         } else { b.1.cmp(&a.1) }
     });
 
-    scored.into_iter()
-        .filter(|(_, avail)| *avail > 0)
-        .find_map(|(provider, _)| {
-            if !cb.is_allowed(provider.id) { return None; }
-            match thermal.get_level(provider.id) {
-                ThrottleLevel::Hard | ThrottleLevel::Cooldown => return None,
-                ThrottleLevel::Soft if vram.provider_active_requests(provider.id) > 0 => return None,
-                ThrottleLevel::RampUp => {
-                    // Phase 8: Cooldown ramp-up — force max_concurrent=1 during RampUp.
-                    // AIMD loop will gradually increase back to normal.
-                    let current_mc = vram.max_concurrent(provider.id, model);
-                    if current_mc > 1 {
-                        // Save pre-Hard snapshot if not already saved
-                        if vram.pre_hard_max_concurrent(provider.id, model) == 0 {
-                            vram.set_pre_hard_max_concurrent(provider.id, model, current_mc);
-                        }
-                        vram.set_max_concurrent(provider.id, model, 1);
+    // Track each candidate's rejection reason. When score_and_claim returns None,
+    // we emit ONE info log with the full breakdown so silent dispatch stalls
+    // (the symptom that produced "model load did not complete within 600s") become
+    // immediately diagnosable from logs without bumping log level.
+    let mut rejections: Vec<(Uuid, &'static str)> = Vec::with_capacity(scored.len());
+    let mut claim: Option<(LlmProvider, VramPermit)> = None;
+
+    for (provider, avail) in scored {
+        if avail <= 0 {
+            rejections.push((provider.id, "no_vram_avail"));
+            continue;
+        }
+        if !cb.is_allowed(provider.id) {
+            rejections.push((provider.id, "circuit_breaker_open"));
+            continue;
+        }
+        match thermal.get_level(provider.id) {
+            ThrottleLevel::Hard => {
+                rejections.push((provider.id, "thermal_hard"));
+                continue;
+            }
+            ThrottleLevel::Cooldown => {
+                rejections.push((provider.id, "thermal_cooldown"));
+                continue;
+            }
+            ThrottleLevel::Soft if vram.provider_active_requests(provider.id) > 0 => {
+                rejections.push((provider.id, "thermal_soft_busy"));
+                continue;
+            }
+            ThrottleLevel::RampUp => {
+                // Phase 8: Cooldown ramp-up — force max_concurrent=1 during RampUp.
+                // AIMD loop will gradually increase back to normal.
+                let current_mc = vram.max_concurrent(provider.id, model);
+                if current_mc > 1 {
+                    // Save pre-Hard snapshot if not already saved
+                    if vram.pre_hard_max_concurrent(provider.id, model) == 0 {
+                        vram.set_pre_hard_max_concurrent(provider.id, model, current_mc);
                     }
+                    vram.set_max_concurrent(provider.id, model, 1);
                 }
-                _ => {}
             }
-            // Wake standby provider on demand (instant Scale-Out recovery)
-            if vram.is_standby(provider.id) {
-                vram.set_standby(provider.id, false);
-                tracing::info!(provider_id = %provider.id, %model, "dispatch: woke standby provider on demand");
+            _ => {}
+        }
+        // Wake standby provider on demand (instant Scale-Out recovery)
+        if vram.is_standby(provider.id) {
+            vram.set_standby(provider.id, false);
+            tracing::info!(provider_id = %provider.id, %model, "dispatch: woke standby provider on demand");
+        }
+        match vram.try_reserve(provider.id, model) {
+            Some(permit) => {
+                claim = Some((provider, permit));
+                break;
             }
-            vram.try_reserve(provider.id, model).map(|permit| (provider, permit))
-        })
+            None => {
+                rejections.push((provider.id, "try_reserve_none"));
+            }
+        }
+    }
+
+    if claim.is_none() && !rejections.is_empty() {
+        tracing::info!(
+            %model,
+            rejections = ?rejections,
+            "dispatch: no provider claimed (all candidates rejected)"
+        );
+    }
+
+    claim
 }
 
 // ── Fail job when no provider is available ────────────────────────────────────
@@ -254,54 +293,58 @@ pub(super) fn spawn_job_direct(
     event_tx: broadcast::Sender<JobStatusEvent>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
+    mcp_lifecycle_phase_enabled: bool,
 ) {
-    tokio::spawn(async move {
-        let (adapter, provider_id, is_free) = match provider_dispatch
-            .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
-            .await
-        {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::error!(job_id = %uuid, "no provider: {e}");
-                fail_job_no_provider(&jobs, &job_repo, &valkey, uuid, &e.to_string()).await;
+    tokio::spawn(
+        async move {
+            let (adapter, provider_id, is_free) = match provider_dispatch
+                .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
+                .await
+            {
+                Ok(r) => r,
+                Err(e) => {
+                    tracing::error!(job_id = %uuid, "no provider: {e}");
+                    fail_job_no_provider(&jobs, &job_repo, &valkey, uuid, &e.to_string()).await;
+                    return;
+                }
+            };
+    
+            if !circuit_breaker.is_allowed(provider_id) {
+                tracing::warn!(job_id = %uuid, "direct spawn skipped — circuit open");
                 return;
             }
-        };
-
-        if !circuit_breaker.is_allowed(provider_id) {
-            tracing::warn!(job_id = %uuid, "direct spawn skipped — circuit open");
-            return;
-        }
-        match thermal.get_level(provider_id) {
-            ThrottleLevel::Hard | ThrottleLevel::Cooldown => { tracing::warn!(job_id = %uuid, "direct spawn skipped — hard/cooldown throttle"); return; }
-            ThrottleLevel::Soft if vram_pool.provider_active_requests(provider_id) > 0 => {
-                tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle"); return;
+            match thermal.get_level(provider_id) {
+                ThrottleLevel::Hard | ThrottleLevel::Cooldown => { tracing::warn!(job_id = %uuid, "direct spawn skipped — hard/cooldown throttle"); return; }
+                ThrottleLevel::Soft if vram_pool.provider_active_requests(provider_id) > 0 => {
+                    tracing::debug!(job_id = %uuid, "direct spawn skipped — soft throttle"); return;
+                }
+                _ => {}
             }
-            _ => {}
-        }
-
-        let permit = match vram_pool.try_reserve(provider_id, job.model_name.as_str()) {
-            Some(p) => p,
-            None => { tracing::warn!(job_id = %uuid, "direct spawn skipped — VRAM unavailable"); return; }
-        };
-
-        match run_job(
-            jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
-            provider_dispatch, uuid, job, Some(provider_id), is_free,
-            event_tx, instance_id, cancel_notifiers,
-        ).await {
-            Ok(Some(latency_ms)) => {
-                circuit_breaker.on_success(provider_id);
-                circuit_breaker.record_latency(provider_id, latency_ms as u64);
+    
+            let permit = match vram_pool.try_reserve(provider_id, job.model_name.as_str()) {
+                Some(p) => p,
+                None => { tracing::warn!(job_id = %uuid, "direct spawn skipped — VRAM unavailable"); return; }
+            };
+    
+            match run_job(
+                jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
+                provider_dispatch, uuid, job, Some(provider_id), is_free,
+                event_tx, instance_id, cancel_notifiers, mcp_lifecycle_phase_enabled,
+            ).await {
+                Ok(Some(latency_ms)) => {
+                    circuit_breaker.on_success(provider_id);
+                    circuit_breaker.record_latency(provider_id, latency_ms as u64);
+                }
+                Ok(None) => {} // cancelled or ownership lost
+                Err(e) => {
+                    tracing::error!(job_id = %uuid, "inference job failed: {e}");
+                    circuit_breaker.on_failure(provider_id);
+                }
             }
-            Ok(None) => {} // cancelled or ownership lost
-            Err(e) => {
-                tracing::error!(job_id = %uuid, "inference job failed: {e}");
-                circuit_breaker.on_failure(provider_id);
-            }
+            drop(permit);
         }
-        drop(permit);
-    });
+        .instrument(tracing::info_span!("veronex.inference.dispatcher.spawn")),
+    );
 }
 
 // ── Queue dispatcher loop ───────────────────────────────────────────────────
@@ -326,6 +369,7 @@ pub(super) async fn queue_dispatcher_loop(
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     shutdown: CancellationToken,
+    mcp_lifecycle_phase_enabled: bool,
 ) {
     tracing::info!("queue dispatcher started — ZSET scoring (locality + age × perf_factor)");
 
@@ -372,6 +416,7 @@ pub(super) async fn queue_dispatcher_loop(
                             assigned_provider_id: None,
                             vision_analysis: None,
                             compression_handle: None,
+                            persisted_to_s3: Arc::new(std::sync::atomic::AtomicBool::new(false)),
                         });
                         (j, None, None)
                     }
@@ -434,17 +479,34 @@ pub(super) async fn queue_dispatcher_loop(
             ).await;
 
             if candidates.is_empty() {
-                // No eligible provider → atomically remove from ZSET and fail
-                let queue_active = vk_keys::queue_active();
-                let claimed = valkey.zset_claim(&job_id_str, &queue_active, model).await.unwrap_or(false);
+                // No eligible provider — retry up to MAX_NO_PROVIDER_ATTEMPTS before failing.
+                // Leaves the job in ZSET so it is retried on the next dispatcher tick.
+                // This handles transient conditions: sync loop mid-run, providers momentarily
+                // offline, or a new model not yet indexed in provider_selected_models.
+                let attempt_key = format!("{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id_str}");
+                let attempts = valkey.incr_by(&attempt_key, 1).await.unwrap_or(MAX_NO_PROVIDER_ATTEMPTS);
+                if attempts < MAX_NO_PROVIDER_ATTEMPTS {
+                    tracing::debug!(%uuid, %model, attempts, "no candidates — will retry on next tick");
+                    continue;
+                }
+
+                // Exceeded retry limit — permanently fail.
+                let claimed = valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await.unwrap_or(false);
                 if claimed {
                     valkey.active_lease_remove(&job_id_str).await
                         .unwrap_or_else(|e| tracing::warn!(%uuid, error = %e, "dispatcher: active_lease_remove failed"));
+                    let _ = valkey.kv_del(&attempt_key).await;
                     let vk_opt: Option<Arc<dyn ValkeyPort>> = Some(valkey.clone());
                     fail_job_no_provider(&jobs, &job_repo, &vk_opt, uuid, "no eligible provider for this model").await;
                     dispatched = true;
                 }
                 continue;
+            }
+
+            // Reset no-provider counter on successful candidate resolution.
+            {
+                let attempt_key = format!("{NO_PROVIDER_ATTEMPTS_PREFIX}:{job_id_str}");
+                let _ = valkey.kv_del(&attempt_key).await;
             }
 
             let claimed_provider = score_and_claim(
@@ -459,8 +521,7 @@ pub(super) async fn queue_dispatcher_loop(
             };
 
             // Atomic ZSET claim (ZREM + ZADD active + DECR demand)
-            let queue_active = vk_keys::queue_active();
-            match valkey.zset_claim(&job_id_str, &queue_active, model).await {
+            match valkey.zset_claim(&job_id_str, QUEUE_ACTIVE, model).await {
                 Ok(true) => { /* claimed successfully */ }
                 Ok(false) => {
                     // Another instance already took it — release VRAM and try next
@@ -482,7 +543,7 @@ pub(super) async fn queue_dispatcher_loop(
                 e.assigned_provider_id = Some(pid);
             }
 
-            let owner_key = crate::domain::constants::job_owner_key(uuid);
+            let owner_key = job_owner_key(uuid);
             if let Err(e) = valkey.kv_set(&owner_key, instance_id.as_ref(), JOB_OWNER_TTL_SECS, false).await {
                 tracing::warn!(%uuid, key = %owner_key, error = %e, "dispatcher: failed to set job owner key");
             }
@@ -496,60 +557,67 @@ pub(super) async fn queue_dispatcher_loop(
                 instance_id.clone(), cancel_notifiers.clone(),
             );
 
-            tokio::spawn(async move {
-                let _permit = permit;
-
-                // Keepalive: renew lease every LEASE_RENEW_INTERVAL_SECS
-                let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
-                let vk_ka = vk_c.clone();
-                let job_id_ka = job_id_str.clone();
-                tokio::spawn(async move {
-                    let interval = std::time::Duration::from_secs(
-                        crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
-                    );
-                    loop {
-                        tokio::select! {
-                            biased;
-                            _ = &mut ka_stop_rx => break,
-                            _ = tokio::time::sleep(interval) => {
-                                let deadline = (chrono::Utc::now().timestamp_millis() as u64)
-                                    + crate::domain::constants::LEASE_TTL_MS;
-                                match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
-                                    Ok(false) => break, // already removed (completed or reaped)
-                                    Ok(true) => {}
-                                    Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+            tokio::spawn(
+                async move {
+                    let _permit = permit;
+    
+                    // Keepalive: renew lease every LEASE_RENEW_INTERVAL_SECS
+                    let (ka_stop_tx, mut ka_stop_rx) = tokio::sync::oneshot::channel::<()>();
+                    let vk_ka = vk_c.clone();
+                    let job_id_ka = job_id_str.clone();
+                    tokio::spawn(
+                        async move {
+                            let interval = std::time::Duration::from_secs(
+                                crate::domain::constants::LEASE_RENEW_INTERVAL_SECS,
+                            );
+                            loop {
+                                tokio::select! {
+                                    biased;
+                                    _ = &mut ka_stop_rx => break,
+                                    _ = tokio::time::sleep(interval) => {
+                                        let deadline = (chrono::Utc::now().timestamp_millis() as u64)
+                                            + crate::domain::constants::LEASE_TTL_MS;
+                                        match vk_ka.active_lease_renew(&job_id_ka, deadline).await {
+                                            Ok(false) => break, // already removed (completed or reaped)
+                                            Ok(true) => {}
+                                            Err(e) => tracing::warn!(job_id = %job_id_ka, "lease renew failed: {e}"),
+                                        }
+                                    }
                                 }
                             }
                         }
+                        .instrument(tracing::debug_span!("dispatcher.keepalive")),
+                    );
+    
+                    match run_job(
+                        jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
+                        pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
+                        mcp_lifecycle_phase_enabled,
+                    ).await {
+                        Ok(Some(latency_ms)) => {
+                            cb_c.on_success(pid);
+                            cb_c.record_latency(pid, latency_ms as u64);
+                        }
+                        Ok(None) => {} // cancelled or ownership lost
+                        Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
                     }
-                });
-
-                match run_job(
-                    jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
-                    pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
-                ).await {
-                    Ok(Some(latency_ms)) => {
-                        cb_c.on_success(pid);
-                        cb_c.record_latency(pid, latency_ms as u64);
+    
+                    let _ = ka_stop_tx.send(());
+    
+                    // Remove from active ZSET (replaces list_remove on QUEUE_PROCESSING)
+                    if let Err(e) = vk_c.active_lease_remove(&job_id_str).await {
+                        tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from active queue");
                     }
-                    Ok(None) => {} // cancelled or ownership lost
-                    Err(e) => { tracing::error!(%uuid, %pid, "job failed: {e}"); cb_c.on_failure(pid); }
+                    // Clean up attempts counter
+                    let attempts_key = crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS;
+                    let _ = vk_c.kv_del(&format!("{attempts_key}:{job_id_str}")).await;
+    
+                    if let Err(e) = vk_c.kv_del(&owner_key).await {
+                        tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
+                    }
                 }
-
-                let _ = ka_stop_tx.send(());
-
-                // Remove from active ZSET (replaces list_remove on QUEUE_PROCESSING)
-                if let Err(e) = vk_c.active_lease_remove(&job_id_str).await {
-                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to remove job from active queue");
-                }
-                // Clean up attempts counter
-                let attempts_key = crate::domain::constants::QUEUE_ACTIVE_ATTEMPTS;
-                let _ = vk_c.kv_del(&format!("{attempts_key}:{job_id_str}")).await;
-
-                if let Err(e) = vk_c.kv_del(&owner_key).await {
-                    tracing::warn!(%uuid, error = %e, "dispatcher: failed to delete job owner key");
-                }
-            });
+                .instrument(tracing::info_span!("veronex.inference.dispatcher.spawn")),
+            );
 
             dispatched = true;
             break;

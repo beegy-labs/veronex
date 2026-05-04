@@ -201,6 +201,90 @@ mod tests {
     use crate::application::ports::outbound::model_capacity_repository::ThroughputStats;
     use proptest::prelude::*;
 
+    // ── S22 VRAM total SSOT priority — see SDD §5 ─────────────────────────────
+
+    #[test]
+    fn vram_total_priority_operator_value_wins_over_agent_and_hw() {
+        // Operator registered 117_760 MB. Agent / DRM / mem_available all
+        // present and lower — operator value MUST win (CDD L699 "confirmed").
+        let total = resolve_vram_total_mb(
+            117_760,            // provider DB
+            Some(117_760),      // agent mirror
+            1024,               // DRM dedicated (APU)
+            60_000,             // mem_available (APU)
+            "amd",
+        );
+        assert_eq!(total, 117_760, "operator-registered SSOT must win over auto-detected values");
+    }
+
+    #[test]
+    fn vram_total_priority_apu_passthrough_when_operator_unset() {
+        // Operator value 0 (unset). APU host: DRM=1024, mem_avail=60000.
+        // → APU branch returns mem_available_mb (auto-detect).
+        let total = resolve_vram_total_mb(
+            0,                  // provider DB unset
+            None,               // no agent mirror
+            1024,               // DRM dedicated
+            60_000,             // mem_available
+            "amd",
+        );
+        assert_eq!(total, 60_000, "APU pass-through must use mem_available_mb when operator unset");
+    }
+
+    #[test]
+    fn vram_total_priority_dedicated_gpu_passthrough_when_operator_unset() {
+        // Operator value 0. Non-APU host (e.g. discrete NVIDIA): DRM=24576.
+        // → uses DRM directly.
+        let total = resolve_vram_total_mb(
+            0,
+            None,
+            24_576,
+            32_000,
+            "nvidia",
+        );
+        assert_eq!(total, 24_576, "non-APU pass-through must use DRM dedicated value");
+    }
+
+    #[test]
+    fn vram_total_priority_returns_zero_when_everything_unset() {
+        // No operator value, no agent, no hw metrics → 0 (pass-through to
+        // ollama enforcement via vram_pool::try_reserve total=0 branch).
+        let total = resolve_vram_total_mb(0, None, 0, 0, "");
+        assert_eq!(total, 0);
+    }
+
+    #[test]
+    fn vram_total_priority_agent_used_when_operator_zero_but_agent_has_value() {
+        // Operator value 0 but agent has it (rare — agent's discovery label
+        // can briefly carry a value before provider DB sync). Agent wins
+        // over auto-detect; this guards the staleness window.
+        let total = resolve_vram_total_mb(
+            0,
+            Some(117_760),
+            1024,
+            60_000,
+            "amd",
+        );
+        assert_eq!(total, 117_760, "agent-pushed mirror used when operator=0 and agent has value");
+    }
+
+    #[test]
+    fn vram_total_priority_regression_guard_drm_must_not_override_operator() {
+        // Sentinel against `4891fbc` regression: hw.vram_total_mb (DRM) must
+        // NOT take precedence over a non-zero operator value, even on APU
+        // where DRM reads 1024 MB.
+        let total = resolve_vram_total_mb(
+            117_760,            // operator
+            Some(60_000),       // agent (different value — operator still wins)
+            1024,               // DRM dedicated — must NOT win
+            60_000,             // mem_available — must NOT win
+            "amd",
+        );
+        assert_eq!(total, 117_760);
+        // Negative test: if the priority chain is ever inverted, this would
+        // return 1024 (DRM) or 60_000 (APU mem_available) instead.
+    }
+
     fn make_arch(layers: u32, kv_heads: u32, head_dim: u32, max_ctx: u32, cfg_ctx: u32) -> ModelArchProfile {
         ModelArchProfile { num_layers: layers, num_kv_heads: kv_heads, head_dim: head_dim, max_ctx: max_ctx, configured_ctx: cfg_ctx }
     }
@@ -612,6 +696,35 @@ Respond ONLY with valid JSON:
     Ok(serde_json::from_str(raw).unwrap_or_default())
 }
 
+// ── VRAM total source-of-truth priority ─────────────────────────────────────
+//
+// Priority order (CDD `docs/llm/inference/capacity.md` L699 — "confirmed total
+// VRAM (0 = unknown → pass-through)"; SDD `vram-total-ssot-priority-restoration.md`):
+//
+//   1. operator-registered `provider_total_vram_mb` (declared envelope, SSOT)
+//   2. agent-pushed mirror (`agent_total_vram_mb`)
+//   3. pass-through auto-detect: APU `mem_available_mb` (if AMD APU with
+//      DRM dedicated < 50% of system RAM), else DRM dedicated `drm_vram_mb`
+//
+// Returning 0 (everything unset) is acceptable — `vram_pool::try_reserve`
+// treats `total = 0` as pass-through and delegates capacity to ollama.
+fn resolve_vram_total_mb(
+    provider_total_vram_mb: i64,
+    agent_total_vram_mb: Option<u64>,
+    drm_vram_mb: u64,
+    mem_available_mb: u64,
+    gpu_vendor: &str,
+) -> u64 {
+    if provider_total_vram_mb > 0 {
+        return provider_total_vram_mb as u64;
+    }
+    if let Some(v) = agent_total_vram_mb.filter(|&v| v > 0) {
+        return v;
+    }
+    let is_apu = gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2;
+    if is_apu { mem_available_mb } else { drm_vram_mb }
+}
+
 // ── Per-provider unified sync ────────────────────────────────────────────────
 
 #[allow(clippy::too_many_arguments)]
@@ -638,6 +751,16 @@ pub async fn sync_provider(
         // Only restore if VramPool still shows the default (100) — i.e., not yet bumped by OOM.
         if current == 100 && budget.safety_permil as u32 != 100 {
             vram_pool.set_safety_permil(provider_id, budget.safety_permil as u32);
+        }
+    }
+
+    // 0b. Restore AIMD max_concurrent from DB (VramPool is in-memory; learned limits are lost on restart).
+    // Only seeds entries that are still 0 (unlimited = uninitialised) to avoid overwriting live AIMD state.
+    if let Ok(profiles) = capacity_repo.list_by_provider(provider_id).await {
+        for p in profiles {
+            if p.max_concurrent > 0 && vram_pool.max_concurrent(provider_id, &p.model_name) == 0 {
+                vram_pool.set_max_concurrent(provider_id, &p.model_name, p.max_concurrent as u32);
+            }
         }
     }
 
@@ -680,7 +803,7 @@ pub async fn sync_provider(
         use fred::prelude::*;
         let cache_key = crate::infrastructure::outbound::valkey_keys::provider_models(provider_id);
         let json = serde_json::to_string(&model_names).unwrap_or_default();
-        let ttl = crate::infrastructure::inbound::http::constants::MODELS_CACHE_TTL;
+        let ttl = crate::domain::constants::MODELS_CACHE_TTL_SECS;
         pool.set(&cache_key, &json, Some(Expiration::EX(ttl)), None, false).await
             .unwrap_or_else(|e| tracing::warn!(error = %e, %cache_key, "Valkey SET provider_models cache failed"));
     }
@@ -719,30 +842,34 @@ pub async fn sync_provider(
     } else {
         None
     };
-    let drm_vram_mb = hw.as_ref().map(|h| h.vram_total_mb as u64)
-        .filter(|&v| v > 0)
-        .unwrap_or_else(|| {
-            // Prefer agent-reported total_vram_mb (from discovery labels / provider DB),
-            // fall back to provider DB field directly.
-            agent_total_vram_mb.filter(|&v| v > 0).unwrap_or({
-                if provider_total_vram_mb > 0 { provider_total_vram_mb as u64 } else { 0 }
-            })
-        });
-
-    // APU / unified-memory detection: AMD Ryzen AI (iGPU) and similar APUs report only
-    // the dedicated BIOS-allocated VRAM via DRM (e.g. 1024 MiB), while Ollama transparently
-    // uses shared system RAM. Use mem_available_mb from node-exporter as the real capacity.
+    // Priority chain for `vram_total_mb` — see SDD
+    // `.specs/veronex/vram-total-ssot-priority-restoration.md` §3.1 and CDD
+    // `docs/llm/inference/capacity.md` L699 ("confirmed total VRAM (0 = unknown
+    // → pass-through)").
+    //
+    // 1st: operator-registered value in `llm_providers.total_vram_mb` (SSOT —
+    //      the operator declared envelope; AIMD + safety_permil + ollama OOM
+    //      handle dynamic correction within this envelope).
+    // 2nd: agent-pushed mirror (same DB value, refreshed via discovery labels;
+    //      covers analyzer cache-miss races).
+    // 3rd: pass-through auto-detect (DRM dedicated, or APU unified-memory via
+    //      node-exporter `mem_available_mb`) — used only when operator left
+    //      the value unset (registration without explicit total).
+    //
+    // The previous chain (regression in commit `4891fbc`) put DRM 1st which
+    // silently overrode operator intent on APU hosts (DRM = 1024 MiB → APU
+    // branch fed transient `mem_available_mb` to vram_pool, blocking dispatch
+    // when other tenants used system RAM).
     let mem_available_mb = hw.as_ref().map(|h| h.mem_available_mb as u64).unwrap_or(0u64);
-    let is_apu = hw.as_ref().is_some_and(|h| {
-        h.gpu_vendor == "amd" && drm_vram_mb > 0 && mem_available_mb > drm_vram_mb * 2
-    });
-    let vram_total_mb = if is_apu {
-        // APU unified memory: use node-exporter mem_available_mb as total VRAM.
-        // safety_permil in VramPool.compute_available() handles the buffer.
-        mem_available_mb
-    } else {
-        drm_vram_mb
-    };
+    let drm_vram_mb_raw = hw.as_ref().map(|h| h.vram_total_mb as u64).unwrap_or(0);
+    let gpu_vendor = hw.as_ref().map(|h| h.gpu_vendor.as_str()).unwrap_or("");
+    let vram_total_mb = resolve_vram_total_mb(
+        provider_total_vram_mb,
+        agent_total_vram_mb,
+        drm_vram_mb_raw,
+        mem_available_mb,
+        gpu_vendor,
+    );
 
     let temp_c = hw.as_ref().map(|h| h.max_temp_c());
 
@@ -752,8 +879,20 @@ pub async fn sync_provider(
     // of score_and_claim before try_reserve is ever attempted.
     vram_pool.set_total_vram(provider_id, vram_total_mb);
 
+    // Stable sync: gradually recover safety margin (undo OOM bumps).
+    // Runs every successful sync cycle on every provider type — not gated on APU.
+    // Previously this only fired inside the `is_apu && mem_available_mb > 0`
+    // branch below, which left non-APU providers (dedicated GPU like ollama-1.kr1)
+    // with zero recovery path: every transient OOM monotonically pushed
+    // safety_permil up to the 500-permil cap with no way back to baseline.
+    vram_pool.decay_safety_permil(provider_id);
+
     // APU mem drift: if mem_available_mb changed >15% from last observed value,
     // reset AIMD learning epoch for all loaded models to prevent stale baselines.
+    // APU detection here matches `resolve_vram_total_mb`'s pass-through branch
+    // (kept independent so drift tracking runs even when the operator-registered
+    // total takes priority over auto-detect).
+    let is_apu = gpu_vendor == "amd" && drm_vram_mb_raw > 0 && mem_available_mb > drm_vram_mb_raw * 2;
     if is_apu && mem_available_mb > 0 {
         let last = vram_pool.last_mem_available_mb(provider_id);
         if last > 0 {
@@ -771,22 +910,20 @@ pub async fn sync_provider(
                     vram_pool.set_baseline_tps(provider_id, &model_name, 0);
                     vram_pool.set_baseline_p95_ms(provider_id, &model_name, 0);
                 }
-            } else {
-                // Stable sync: gradually recover safety margin (undo OOM bumps).
-                vram_pool.decay_safety_permil(provider_id);
             }
-            // Persist safety_permil after any change (OOM bump or decay).
-            let current_permil = vram_pool.safety_permil(provider_id) as i32;
-            let budget = crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudget {
-                provider_id,
-                safety_permil: current_permil,
-                vram_total_source: "node_exporter".to_string(),
-                kv_cache_type: "q8_0".to_string(),
-            };
-            vram_budget_repo.upsert(&budget).await.ok();
         }
         vram_pool.set_last_mem_available_mb(provider_id, mem_available_mb as u32);
     }
+
+    // Persist safety_permil after any change (OOM bump or decay).
+    let current_permil = vram_pool.safety_permil(provider_id) as i32;
+    let budget = crate::application::ports::outbound::provider_vram_budget_repository::ProviderVramBudget {
+        provider_id,
+        safety_permil: current_permil,
+        vram_total_source: "node_exporter".to_string(),
+        kv_cache_type: "q8_0".to_string(),
+    };
+    vram_budget_repo.upsert(&budget).await.ok();
 
     // ── Governor: reset dispatch_blocked and governor_cap for all loaded models ──
     for name in vram_pool.loaded_model_names(provider_id) {
@@ -801,22 +938,33 @@ pub async fn sync_provider(
     if governor_active {
         // Pass 1 — identify candidates: active_count > 0 OR demand_counter > 0.
         let loaded_names = vram_pool.loaded_model_names(provider_id);
-        let mut candidate_names: Vec<String> = Vec::new();
 
-        for name in &loaded_names {
-            let active = vram_pool.active_requests(provider_id, name);
-            let demand: u64 = if let Some(pool) = valkey_pool {
-                use fred::prelude::*;
-                let v: Result<Option<String>, _> =
-                    pool.get(&crate::domain::constants::demand_key(name)).await;
-                v.ok().flatten().and_then(|s| s.parse().ok()).unwrap_or(0)
+        // Single MGET batches all demand counters into one Valkey round-trip
+        // (was N sequential GETs per loaded model).
+        let demands: Vec<u64> = if let Some(pool) = valkey_pool {
+            use fred::prelude::*;
+            let keys: Vec<String> = loaded_names.iter()
+                .map(|n| crate::infrastructure::outbound::valkey_keys::demand_counter(n))
+                .collect();
+            if keys.is_empty() {
+                Vec::new()
             } else {
-                0
-            };
-            if active > 0 || demand > 0 {
-                candidate_names.push(name.clone());
+                let raw: Vec<Option<String>> = pool.mget(keys).await.unwrap_or_default();
+                raw.into_iter()
+                    .map(|opt| opt.and_then(|s| s.parse().ok()).unwrap_or(0))
+                    .collect()
             }
-        }
+        } else {
+            vec![0u64; loaded_names.len()]
+        };
+
+        let candidate_names: Vec<String> = loaded_names.iter()
+            .zip(demands.iter().chain(std::iter::repeat(&0u64)))
+            .filter(|(name, demand)| {
+                vram_pool.active_requests(provider_id, name) > 0 || **demand > 0
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
 
         // Pass 2 — batch-fetch oldest enqueue_at_ms per candidate model.
         // Uses QUEUE_MODEL_MAP (job_id → model) + QUEUE_ENQUEUE_AT (job_id → enqueue_at_ms)
@@ -1011,12 +1159,16 @@ pub async fn sync_provider(
                     } else {
                         num_parallel
                     };
-                    let initial = vram_slots.min(MAX_COMPUTE_CAP).saturating_sub(committed).max(1);
+                    let initial = vram_slots.min(MAX_COMPUTE_CAP).saturating_sub(committed).max(1).min(num_parallel);
                     vram_pool.set_max_concurrent(provider_id, &model.name, initial);
                 }
                 if stats.p95_latency_ms > 0.0 {
                     vram_pool.set_baseline_p95_ms(provider_id, &model.name, stats.p95_latency_ms as u32);
                 }
+            } else if current_limit == 0 {
+                // Cold start: no data yet (brand-new model). Initialize max_concurrent to
+                // num_parallel (top-down CDD spec) so AIMD has a starting point to decrease from.
+                vram_pool.set_max_concurrent(provider_id, &model.name, num_parallel);
             }
         } else if stats.sample_count >= 3 && !governor_active {
             // Governor active → suppress AIMD increase/decrease (fair-share cap is the final value)
@@ -1101,7 +1253,7 @@ pub async fn sync_provider(
                 "configured_ctx": arch.configured_ctx,
                 "max_ctx": arch.max_ctx,
             }).to_string();
-            pool.set(&ctx_key, ctx_json, Some(Expiration::EX(600)), None, false).await
+            pool.set(&ctx_key, ctx_json, Some(Expiration::EX(crate::domain::constants::OLLAMA_MODEL_CTX_TTL_SECS)), None, false).await
                 .unwrap_or_else(|e| tracing::warn!(error = %e, %ctx_key, "Valkey SET ctx cache failed"));
         }
 
@@ -1170,7 +1322,8 @@ pub async fn sync_provider(
                     }
                     // LLM correction is increase-only: floor = current, ceil = current+2.
                     // AIMD is solely responsible for decreases; LLM can only nudge upward.
-                    let upper = num_parallel * 2;
+                    // SDD: max_concurrent must not exceed num_parallel.
+                    let upper = num_parallel;
                     let current = vram_pool.max_concurrent(provider_id, &mr.model);
                     let change_floor = current; // never decrease via LLM
                     let change_ceil = current.saturating_add(2);
@@ -1269,6 +1422,43 @@ pub async fn run_sync_loop(
             if elapsed_secs < settings.sync_interval_secs as i64 {
                 continue;
             }
+
+            // ── Demand gate ───────────────────────────────────────────────────
+            // Skip the periodic tick when the cluster has been idle from real
+            // user traffic AND every selected model already has a profile row.
+            // Manual triggers always bypass. Bypass also when at least one
+            // selected model is unprofiled — a freshly added model still needs
+            // its first probe even before any user traffic.
+            //
+            // SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §6.
+            // Rationale: pre-fix the analyzer probed every `sync_interval_secs`
+            // regardless of demand, occupying the same Ollama provider's
+            // single-concurrency slots that user MCP rounds need. Combined with
+            // the homelab low-power policy ("idle 시 unload"), unconditional
+            // ticks waste energy AND race user requests for VRAM.
+            const ANALYZER_IDLE_SKIP_SECS: i64 = 1800; // 30 min of no real traffic
+            let user_idle_secs: i64 = if let Some(repo) = job_repo.as_ref() {
+                repo.seconds_since_last_user_job()
+                    .await
+                    .ok()
+                    .flatten()
+                    .unwrap_or(i64::MAX)
+            } else {
+                i64::MAX
+            };
+            if user_idle_secs > ANALYZER_IDLE_SKIP_SECS {
+                let has_unprofiled = capacity_repo
+                    .has_unprofiled_selected_models()
+                    .await
+                    .unwrap_or(false);
+                if !has_unprofiled {
+                    tracing::debug!(
+                        idle_secs = user_idle_secs,
+                        "analyzer: skipping tick (no recent user traffic, all selected models profiled)"
+                    );
+                    continue;
+                }
+            }
         }
 
         let Ok(_permit) = sync_lock.clone().acquire_owned().await else {
@@ -1279,7 +1469,7 @@ pub async fn run_sync_loop(
         let all_providers = registry.list_all().await.unwrap_or_default();
         let ollama_providers: Vec<_> = all_providers
             .into_iter()
-            .filter(|p| p.is_active && p.provider_type == ProviderType::Ollama)
+            .filter(|p| p.is_ollama())
             .collect();
 
         use std::sync::atomic::{AtomicBool, Ordering as AtomicOrdering};

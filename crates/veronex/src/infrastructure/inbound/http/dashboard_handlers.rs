@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::Instrument;
 use std::convert::Infallible;
 
 use axum::extract::{Extension, Path, Query, State};
@@ -7,7 +8,7 @@ use axum::response::sse::Event;
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::NaiveDate;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::application::ports::outbound::analytics_repository::PerformanceMetrics;
 use crate::domain::enums::AccountRole;
@@ -19,6 +20,7 @@ use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
+use super::constants::{PROVIDER_GEMINI, PROVIDER_OLLAMA};
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
@@ -424,7 +426,7 @@ pub async fn get_capacity(
         .provider_registry
         .list_page(&search, None, limit, offset)
         .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!(e.to_string())))?;
+        .map_err(AppError::Internal)?;
 
     let provider_ids: Vec<uuid::Uuid> = providers_page.iter().map(|p| p.id).collect();
     let all_entries = state
@@ -488,8 +490,11 @@ pub async fn get_capacity_cluster(
 pub async fn get_capacity_settings(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
-    let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
-    let available_models = fetch_all_provider_models(&state).await;
+    // Two independent fetches; run concurrently.
+    let (settings, available_models) = tokio::join!(
+        async { state.capacity_settings_repo.get().await.unwrap_or_default() },
+        fetch_all_provider_models(&state),
+    );
     Json(SyncSettingsResponse::from_settings(settings, available_models)).into_response()
 }
 
@@ -529,17 +534,14 @@ pub async fn patch_capacity_settings(
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
-    let mut result: HashMap<String, Vec<String>> = HashMap::new();
-
-    // ── Ollama: read from already-synced ollama_model_repo (no HTTP) ───
-    if let Ok(models) = state.ollama_model_repo.list_all().await && !models.is_empty() {
-        result.insert("ollama".to_string(), models);
-    }
-
-    // ── Gemini: show models only when lab feature is enabled ──
-    let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-    if lab.gemini_function_calling {
-        // Try DB first (synced models)
+    // Ollama list is independent of lab settings + Gemini fetch — race them
+    // concurrently to halve the wall-clock for this dashboard endpoint.
+    let ollama_fut = state.ollama_model_repo.list_all();
+    let gemini_fut = async {
+        let lab = state.lab_settings_repo.get().await.unwrap_or_default();
+        if !lab.gemini_function_calling {
+            return Vec::<String>::new();
+        }
         let mut gemini_models: Vec<String> = state.gemini_model_repo
             .list()
             .await
@@ -547,20 +549,24 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
             .into_iter()
             .map(|m| m.model_name)
             .collect();
-
-        // Fallback: fetch from Gemini API if DB is empty
         if gemini_models.is_empty()
             && let Ok(Some(api_key)) = state.gemini_sync_config_repo.get_api_key().await
             && let Ok(models) = super::gemini_helpers::fetch_gemini_models(&state.http_client, &api_key).await
         {
             gemini_models = models;
         }
+        gemini_models
+    };
 
-        if !gemini_models.is_empty() {
-            result.insert("gemini".to_string(), gemini_models);
-        }
+    let (ollama_result, gemini_models) = tokio::join!(ollama_fut, gemini_fut);
+
+    let mut result: HashMap<String, Vec<String>> = HashMap::new();
+    if let Ok(models) = ollama_result && !models.is_empty() {
+        result.insert(PROVIDER_OLLAMA.to_string(), models);
     }
-
+    if !gemini_models.is_empty() {
+        result.insert(PROVIDER_GEMINI.to_string(), gemini_models);
+    }
     result
 }
 
@@ -684,12 +690,25 @@ pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::respo
     }
 }
 
+/// Deserializer for `Option<Option<T>>` that distinguishes absent from null:
+/// - absent key  → `None`          (don't update this field)
+/// - `null` value → `Some(None)`   (clear the field to NULL)
+/// - value        → `Some(Some(v))` (set the field to v)
+fn deserialize_nullable<'de, T, D>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
 #[derive(serde::Deserialize)]
 pub struct PatchLabSettingsBody {
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
     pub context_compression_enabled: Option<bool>,
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub compression_model: Option<Option<String>>,
     pub context_budget_ratio: Option<f32>,
     pub compression_trigger_turns: Option<i32>,
@@ -698,6 +717,7 @@ pub struct PatchLabSettingsBody {
     pub multiturn_min_params: Option<i32>,
     pub multiturn_min_ctx: Option<i32>,
     pub multiturn_allowed_models: Option<Vec<String>>,
+    #[serde(default, deserialize_with = "deserialize_nullable")]
     pub vision_model: Option<Option<String>>,
     pub handoff_enabled: Option<bool>,
     pub handoff_threshold: Option<f32>,
@@ -776,13 +796,16 @@ pub async fn trigger_session_grouping(
 
     let pg_pool = state.pg_pool.clone();
     let cutoff  = body.before_date;
-    tokio::spawn(async move {
-        let _permit = permit; // held until the task completes
-        match group_sessions_before(&pg_pool, cutoff).await {
-            Ok(n)  => tracing::info!(grouped = n, cutoff = ?cutoff, "manual session grouping complete"),
-            Err(e) => tracing::warn!("manual session grouping failed: {e}"),
+    tokio::spawn(
+        async move {
+            let _permit = permit; // held until the task completes
+            match group_sessions_before(&pg_pool, cutoff).await {
+                Ok(n)  => tracing::info!(grouped = n, cutoff = ?cutoff, "manual session grouping complete"),
+                Err(e) => tracing::warn!("manual session grouping failed: {e}"),
+            }
         }
-    });
+        .instrument(tracing::info_span!("veronex.dashboard_handlers.spawn")),
+    );
 
     emit_audit(&state, &claims, "trigger", "session_grouping",
         "session_grouping", "session_grouping",

@@ -20,21 +20,9 @@ pub struct CompressedTurn {
 
 // ── Vision ───────────────────────────────────────────────────────────────────
 
-/// Result of the vision pre-processing call for an image-bearing turn.
-///
-/// Stored in `TurnRecord` before inference runs so that future compression
-/// can preserve the image context as text rather than losing it entirely.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct VisionAnalysis {
-    /// Image analysis text produced by the vision model (~200 tokens).
-    pub analysis: String,
-    /// Model used for analysis (e.g. "llava:7b").
-    pub vision_model: String,
-    /// Number of images analyzed.
-    pub image_count: u32,
-    /// Token count of the analysis output.
-    pub analysis_tokens: u32,
-}
+// `VisionAnalysis` is a pure value object used by domain entities; defined in
+// `domain::value_objects` and re-exported here for outbound-port ergonomics.
+pub use crate::domain::value_objects::VisionAnalysis;
 
 // ── Session handoff ──────────────────────────────────────────────────────────
 

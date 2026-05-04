@@ -1,7 +1,8 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
+import { useTimeRange } from '@/components/time-range-context'
 import { performanceQuery, usageBreakdownQuery, analyticsQuery } from '@/lib/queries'
 import {
   LineChart, Line, BarChart, Bar,
@@ -18,7 +19,7 @@ import StatsCard from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
-import { TIME_LABEL_MAP, TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
+import { TIME_LABEL_MAP, TimeRangeSelector } from '@/components/time-range-selector'
 import { fmtHourLabel } from '@/lib/date'
 import { useTimezone } from '@/components/timezone-provider'
 import { ModelLatencySection } from './components/model-latency-section'
@@ -27,10 +28,10 @@ import { tokens } from '@/lib/design-tokens'
 
 /* ─── page ────────────────────────────────────────────────── */
 export default function PerformancePage() {
-  usePageGuard('performance')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
   const { tz } = useTimezone()
-  const [range, setRange] = useState<TimeRange>({ hours: 24 })
+  const { range, setRange } = useTimeRange()
   const hours = range.hours
 
   const { data, isLoading, error } = useQuery(performanceQuery(hours))
@@ -78,32 +79,32 @@ export default function PerformancePage() {
   }, [breakdown?.by_model, analytics?.models])
 
   return (
-    <div className="space-y-6">
+    <div className="vds-space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between flex-wrap gap-4">
+      <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('performance.title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{t('performance.description')}</p>
+          <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('performance.title')}</h1>
+          <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('performance.description')}</p>
         </div>
         <TimeRangeSelector value={range} onChange={setRange} />
       </div>
 
       {/* ClickHouse unavailable */}
       {error && (
-        <Card className="border-status-warning/30 bg-status-warning/10">
-          <CardContent className="p-5">
-            <p className="font-semibold text-status-warning-fg">{t('performance.analyticsUnavailable')}</p>
-            <p className="text-sm mt-1 text-status-warning-fg/80">{t('performance.clickhouseDisabled')}</p>
+        <Card className="vds-border-warning/30 vds-bg-warning/10">
+          <CardContent className="vds-p-5">
+            <p className="vds-font-600 vds-text-warning">{t('performance.analyticsUnavailable')}</p>
+            <p className="vds-text-sm vds-mt-1 vds-text-warning/80">{t('performance.clickhouseDisabled')}</p>
           </CardContent>
         </Card>
       )}
 
       {isLoading && (
-        <div className="grid grid-cols-3 sm:grid-cols-5 gap-4">
+        <div className="vds-grid vds-grid-cols-3 vds-sm:grid-cols-5 vds-gap-4">
           {Array.from({ length: 5 }).map((_, i) => (
-            <Card key={i}><CardContent className="p-6">
-              <div className="h-3 w-24 rounded bg-muted animate-pulse mb-4" />
-              <div className="h-8 w-16 rounded bg-muted animate-pulse" />
+            <Card key={i}><CardContent className="vds-p-6">
+              <div className="vds-h-3 vds-w-24 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-4" />
+              <div className="vds-h-8 vds-w-16 vds-rounded vds-bg-muted vds-animate-pulse" />
             </CardContent></Card>
           ))}
         </div>
@@ -111,9 +112,9 @@ export default function PerformancePage() {
 
       {!error && !isLoading && !hasData && (
         <Card>
-          <CardContent className="p-10 text-center text-muted-foreground">
-            <p className="font-medium">{t('performance.noData')}</p>
-            <p className="text-sm mt-1">{t('performance.noDataHint')}</p>
+          <CardContent className="vds-p-10 vds-text-center vds-text-dim">
+            <p className="vds-font-500">{t('performance.noData')}</p>
+            <p className="vds-text-sm vds-mt-1">{t('performance.noDataHint')}</p>
           </CardContent>
         </Card>
       )}
@@ -121,65 +122,65 @@ export default function PerformancePage() {
       {!error && data && hasData && (
         <>
           {/* ── KPI cards (5) ───────────────────────────────── */}
-          <div className="grid grid-cols-3 sm:grid-cols-5 gap-4">
+          <div className="vds-grid vds-grid-cols-3 vds-sm:grid-cols-5 vds-gap-4">
             <StatsCard
               title={t('performance.p50')}
               value={fmtMs(data.p50_latency_ms)}
               subtitle={`${t('common.last')} ${currentLabel}`}
-              icon={<Timer className="h-5 w-5" />}
+              icon={<Timer className="vds-h-5 vds-w-5" />}
             />
             <StatsCard
               title={t('performance.p95')}
               value={fmtMs(data.p95_latency_ms)}
               subtitle={`${t('common.last')} ${currentLabel}`}
-              icon={<TrendingUp className="h-5 w-5" />}
+              icon={<TrendingUp className="vds-h-5 vds-w-5" />}
             />
             <StatsCard
               title={t('performance.p99')}
               value={fmtMs(data.p99_latency_ms)}
               subtitle={`avg ${fmtMs(data.avg_latency_ms)}`}
-              icon={<TrendingUp className="h-5 w-5" />}
+              icon={<TrendingUp className="vds-h-5 vds-w-5" />}
             />
             <StatsCard
               title={t('performance.successRate')}
               value={fmtPct(data.success_rate)}
               subtitle={`${fmtCompact(data.total_requests)} ${t('overview.requests')}`}
-              icon={<CheckCircle className="h-5 w-5" />}
+              icon={<CheckCircle className="vds-h-5 vds-w-5" />}
             />
             <StatsCard
               title={t('performance.errors')}
               value={fmtCompact(errorCount)}
               subtitle={`${t('common.last')} ${currentLabel}`}
-              icon={<AlertTriangle className="h-5 w-5" style={errorCount > 0 ? { color: tokens.status.error } : undefined} />}
+              icon={<AlertTriangle className="vds-h-5 vds-w-5" style={errorCount > 0 ? { color: tokens.status.error } : undefined} />}
             />
           </div>
 
           {/* ── Analytics TPS card (if available) ──────── */}
           {analytics && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <div className="vds-grid vds-grid-cols-2 vds-sm:grid-cols-4 vds-gap-4">
               <StatsCard
                 title={t('usage.avgTps')}
                 value={fmtTps(analytics.avg_tps)}
                 subtitle={t('usage.avgTpsDesc')}
-                icon={<Zap className="h-5 w-5" />}
+                icon={<Zap className="vds-h-5 vds-w-5" />}
               />
               <StatsCard
                 title={t('usage.avgPromptTokens')}
                 value={analytics.avg_prompt_tokens > 0 ? fmtCompact(analytics.avg_prompt_tokens) : '—'}
                 subtitle={t('usage.tokensPerReq')}
-                icon={<Timer className="h-5 w-5" />}
+                icon={<Timer className="vds-h-5 vds-w-5" />}
               />
               <StatsCard
                 title={t('usage.avgCompletionTokens')}
                 value={analytics.avg_completion_tokens > 0 ? fmtCompact(analytics.avg_completion_tokens) : '—'}
                 subtitle={t('usage.tokensPerReq')}
-                icon={<Timer className="h-5 w-5" />}
+                icon={<Timer className="vds-h-5 vds-w-5" />}
               />
               <StatsCard
                 title={t('performance.totalRequests')}
                 value={fmtCompact(data.total_requests)}
                 subtitle={`${t('common.last')} ${currentLabel}`}
-                icon={<CheckCircle className="h-5 w-5" />}
+                icon={<CheckCircle className="vds-h-5 vds-w-5" />}
               />
             </div>
           )}
@@ -199,8 +200,8 @@ export default function PerformancePage() {
               {/* ── Avg latency trend ─────────────────────── */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">{t('performance.avgLatencyHour')}</CardTitle>
-                  <p className="text-xs text-muted-foreground">
+                  <CardTitle className="vds-text-base">{t('performance.avgLatencyHour')}</CardTitle>
+                  <p className="vds-text-xs vds-text-dim">
                     {t('performance.p95ReferenceLine')}: {fmtMs(data.p95_latency_ms)}
                   </p>
                 </CardHeader>
@@ -232,11 +233,11 @@ export default function PerformancePage() {
               {/* ── Throughput: total / success / errors ─────── */}
               <Card>
                 <CardHeader>
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-base">{t('performance.throughputHour')}</CardTitle>
+                  <div className="vds-flex vds-items-center vds-justify-between">
+                    <CardTitle className="vds-text-base">{t('performance.throughputHour')}</CardTitle>
                     {errorCount > 0 && (
-                      <span className="flex items-center gap-1.5 text-xs text-status-error-fg">
-                        <AlertTriangle className="h-3.5 w-3.5" />
+                      <span className="vds-flex vds-items-center vds-gap-1.5 vds-text-xs vds-text-error">
+                        <AlertTriangle className="vds-h-3.5 vds-w-3.5" />
                         {fmtCompact(errorCount)} {t('performance.errors')}
                       </span>
                     )}
@@ -261,10 +262,10 @@ export default function PerformancePage() {
               {chartData.some((d) => d.tps > 0) && (
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">{t('performance.tpsHour')}</CardTitle>
+                    <CardTitle className="vds-text-base">{t('performance.tpsHour')}</CardTitle>
                     {analytics && analytics.avg_tps > 0 && (
-                      <p className="text-xs text-muted-foreground">
-                        {t('usage.avgTps')}: <span className="font-semibold text-foreground">{fmtTps(analytics.avg_tps)}</span>
+                      <p className="vds-text-xs vds-text-dim">
+                        {t('usage.avgTps')}: <span className="vds-font-600 vds-text-primary">{fmtTps(analytics.avg_tps)}</span>
                       </p>
                     )}
                   </CardHeader>
@@ -292,7 +293,7 @@ export default function PerformancePage() {
               {/* ── Error Rate / Hour ─────────────────────────── */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">{t('performance.errorRateTrend')}</CardTitle>
+                  <CardTitle className="vds-text-base">{t('performance.errorRateTrend')}</CardTitle>
                 </CardHeader>
                 <CardContent>
                   <ResponsiveContainer width="100%" height={180}>

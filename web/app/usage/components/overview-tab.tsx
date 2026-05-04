@@ -51,13 +51,13 @@ export function OverviewTab({ agg, analytics, perf, currentLabel }: OverviewTabP
   )
 
   return (
-    <div className="space-y-6 mt-4">
+    <div className="vds-space-y-6 vds-mt-4">
       {/* Global trend */}
       {globalTrendData.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{t('performance.throughputHour')}</CardTitle>
-            <p className="text-xs text-muted-foreground">{t('common.last')} {currentLabel}</p>
+            <CardTitle className="vds-text-base">{t('performance.throughputHour')}</CardTitle>
+            <p className="vds-text-xs vds-text-dim">{t('common.last')} {currentLabel}</p>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={220}>
@@ -88,38 +88,38 @@ export function OverviewTab({ agg, analytics, perf, currentLabel }: OverviewTabP
       )}
 
       {/* Token donut + analytics KPIs */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+      <div className="vds-grid vds-grid-cols-1 vds-xl:grid-cols-2 vds-gap-6">
         {agg && agg.total_tokens > 0 && (
           <TokenDonut prompt={agg.prompt_tokens} completion={agg.completion_tokens} />
         )}
         {analytics && (
-          <Card className="h-full">
+          <Card className="vds-h-full">
             <CardHeader>
-              <CardTitle className="text-base">{t('usage.analyticsTitle')}</CardTitle>
-              <p className="text-xs text-muted-foreground">{t('usage.analyticsDesc')}</p>
+              <CardTitle className="vds-text-base">{t('usage.analyticsTitle')}</CardTitle>
+              <p className="vds-text-xs vds-text-dim">{t('usage.analyticsDesc')}</p>
             </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="rounded-lg border border-border p-3 text-center">
-                  <Zap className="h-4 w-4 mx-auto mb-1.5 text-muted-foreground" />
-                  <p className="text-xl font-bold tabular-nums">
+            <CardContent className="vds-space-y-4">
+              <div className="vds-grid vds-grid-cols-1 vds-sm:grid-cols-3 vds-gap-3">
+                <div className="vds-rounded-lg vds-border-1 vds-border-subtle vds-p-3 vds-text-center">
+                  <Zap className="vds-h-4 vds-w-4 vds-mx-auto vds-mb-1.5 vds-text-dim" />
+                  <p className="vds-text-xl vds-font-700 vds-tabular-nums">
                     {fmtTps(analytics.avg_tps)}
                   </p>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-0.5">{t('usage.avgTps')}</p>
+                  <p className="vds-text-[10px] vds-text-dim vds-uppercase vds-tracking-widest vds-mt-0.5">{t('usage.avgTps')}</p>
                 </div>
-                <div className="rounded-lg border border-border p-3 text-center">
-                  <MessageSquare className="h-4 w-4 mx-auto mb-1.5 text-muted-foreground" />
-                  <p className="text-xl font-bold tabular-nums">
+                <div className="vds-rounded-lg vds-border-1 vds-border-subtle vds-p-3 vds-text-center">
+                  <MessageSquare className="vds-h-4 vds-w-4 vds-mx-auto vds-mb-1.5 vds-text-dim" />
+                  <p className="vds-text-xl vds-font-700 vds-tabular-nums">
                     {analytics.avg_prompt_tokens > 0 ? fmtCompact(analytics.avg_prompt_tokens) : '—'}
                   </p>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-0.5">{t('usage.avgPromptTokens')}</p>
+                  <p className="vds-text-[10px] vds-text-dim vds-uppercase vds-tracking-widest vds-mt-0.5">{t('usage.avgPromptTokens')}</p>
                 </div>
-                <div className="rounded-lg border border-border p-3 text-center">
-                  <Bot className="h-4 w-4 mx-auto mb-1.5 text-muted-foreground" />
-                  <p className="text-xl font-bold tabular-nums">
+                <div className="vds-rounded-lg vds-border-1 vds-border-subtle vds-p-3 vds-text-center">
+                  <Bot className="vds-h-4 vds-w-4 vds-mx-auto vds-mb-1.5 vds-text-dim" />
+                  <p className="vds-text-xl vds-font-700 vds-tabular-nums">
                     {analytics.avg_completion_tokens > 0 ? fmtCompact(analytics.avg_completion_tokens) : '—'}
                   </p>
-                  <p className="text-[10px] text-muted-foreground uppercase tracking-widest mt-0.5">{t('usage.avgCompletionTokens')}</p>
+                  <p className="vds-text-[10px] vds-text-dim vds-uppercase vds-tracking-widest vds-mt-0.5">{t('usage.avgCompletionTokens')}</p>
                 </div>
               </div>
               <FinishReasonsCard data={analytics} />
@@ -132,8 +132,8 @@ export function OverviewTab({ agg, analytics, perf, currentLabel }: OverviewTabP
       {analytics && modelDistData.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">{t('usage.modelDistTitle')}</CardTitle>
-            <p className="text-xs text-muted-foreground">{t('common.last')} {currentLabel}</p>
+            <CardTitle className="vds-text-base">{t('usage.modelDistTitle')}</CardTitle>
+            <p className="vds-text-xs vds-text-dim">{t('common.last')} {currentLabel}</p>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={Math.max(160, modelDistData.length * 36)}>

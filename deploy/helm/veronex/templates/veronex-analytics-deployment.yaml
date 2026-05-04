@@ -51,10 +51,24 @@ spec:
                   key: ANALYTICS_SECRET
             - name: CLICKHOUSE_URL
               value: {{ include "veronex.clickhouseUrl" . | quote }}
+            {{- $secretName := .Values.externalSecrets.existingSecretName | default (printf "%s-veronex-secrets" .Release.Name) }}
+            {{- if or .Values.externalSecrets.eso.enabled .Values.externalSecrets.csi.enabled .Values.externalSecrets.existingSecretName }}
+            - name: CLICKHOUSE_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: CLICKHOUSE_USER
+            - name: CLICKHOUSE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ $secretName }}
+                  key: CLICKHOUSE_PASSWORD
+            {{- else }}
             - name: CLICKHOUSE_USER
               value: {{ include "veronex.clickhouseUser" . | quote }}
             - name: CLICKHOUSE_PASSWORD
               value: {{ include "veronex.clickhousePassword" . | quote }}
+            {{- end }}
             - name: CLICKHOUSE_DB
               value: {{ include "veronex.clickhouseDb" . | quote }}
             - name: OTEL_HTTP_ENDPOINT

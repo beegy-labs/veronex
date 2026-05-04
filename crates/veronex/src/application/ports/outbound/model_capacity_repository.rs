@@ -50,4 +50,19 @@ pub trait ModelCapacityRepository: Send + Sync {
         model: &str,
         window_hours: u32,
     ) -> Result<Option<ThroughputStats>>;
+
+    /// Returns true if any selected provider/model pair has no `model_vram_profiles`
+    /// row yet. The capacity analyzer's demand gate uses this to bypass idle-skip
+    /// when a freshly-selected model still needs an initial probe.
+    /// SDD: `.specs/veronex/history/inference-mcp-per-round-persist.md` §6.
+    async fn has_unprofiled_selected_models(&self) -> Result<bool>;
+
+    /// Returns the minimum `configured_ctx` across all `model_vram_profiles`
+    /// rows for `model`. Used by the context-budget pre-flight (S17) at
+    /// request entry, before the dispatcher has chosen a provider — the
+    /// budget must fit even on the smallest-ctx provider that may be
+    /// selected. Filters values below the 4096 sanity floor; `None` when
+    /// no row exists.
+    /// SDD: `.specs/veronex/history/conversation-context-compression.md` §3.
+    async fn min_configured_ctx_for_model(&self, model: &str) -> Result<Option<u32>>;
 }

@@ -11,7 +11,7 @@ services:
     ports:
       - "5433:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql
       - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-veronex} -d veronex"]
@@ -139,7 +139,8 @@ services:
       S3_IMAGE_PUBLIC_URL: http://localhost:9010/veronex-images
       S3_REGION: us-east-1
       VESPA_URL: http://vespa:8080
-      VESPA_DEPLOYMENT_ID: ${VESPA_DEPLOYMENT_ID:-local-dev}
+      VESPA_ENVIRONMENT: ${VESPA_ENVIRONMENT:-local-dev}
+      VESPA_TENANT_ID: ${VESPA_TENANT_ID:-default}
       VALKEY_KEY_PREFIX: ${VALKEY_KEY_PREFIX:-}
       EMBED_URL: http://veronex-embed:3200
       KAFKA_BROKER: redpanda:9092
@@ -249,6 +250,7 @@ services:
       # analyze_image tool — route through Veronex gateway instead of calling Ollama directly
       VERONEX_URL: http://veronex:3000
       VERONEX_API_KEY: ${VERONEX_API_KEY:-}
+      ANALYZE_IMAGE_MODEL: ${ANALYZE_IMAGE_MODEL:-qwen3-vl:8b}
     ports:
       - "3100:3100"
     depends_on:
@@ -340,6 +342,7 @@ services:
       dockerfile: crates/veronex-consumer/Dockerfile
     environment:
       KAFKA_BROKER: redpanda:9092
+      KAFKA_SECURITY_PROTOCOL: PLAINTEXT
       CLICKHOUSE_HTTP_URL: http://clickhouse:8123
       CLICKHOUSE_DB: veronex
       CLICKHOUSE_USER: ${CLICKHOUSE_USER:-veronex}

@@ -222,4 +222,11 @@ fn main() {
     println!("cargo:warning=veronex-geo: geo.bin = {} KB (compressed)", compressed.len() / 1024);
 
     std::fs::write(&out_path, compressed).unwrap();
+
+    // Tier 3 fix (.specs/veronex/ci-build-optimization.md): expose the
+    // OUT_DIR path as a compile-time const so the runtime reads geo.bin
+    // from disk instead of `include_bytes!`-embedding 10 MB into every
+    // binary that links the veronex-mcp lib (rust-lang/rust#65818).
+    // Production overrides this with the `GEO_DATA_PATH` env var.
+    println!("cargo:rustc-env=GEO_DATA_BUILD_PATH={}", out_path.display());
 }

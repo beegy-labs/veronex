@@ -149,6 +149,24 @@ Env vars: `CLICKHOUSE_URL`, `CLICKHOUSE_USER`, `CLICKHOUSE_PASSWORD`, `CLICKHOUS
 
 ---
 
+## veronex-consumer Resource Bounds
+
+`available_parallelism()` reads host CPU and ignores cgroup limits — on a 16-core node this allocated 16 worker + 128 blocking threads regardless of the pod's 500m CPU. Combined with librdkafka defaults (1 GiB-per-partition prefetch queue × 9 partitions for 3 audit topics), startup OOM-killed at any reasonable container limit. The crate now caps both axes at the source.
+
+| Knob | Value | Why |
+|------|-------|-----|
+| `tokio worker_threads` | 2 | matches 500m CPU (cgroup-aware sizing) |
+| `tokio max_blocking_threads` | 8 | I/O-bound INSERT path — small fixed pool |
+| `queued.max.messages.kbytes` | 4096 (4 MiB) | per-partition prefetch cap (default 1 GiB) |
+| `queued.min.messages` | 1000 | smaller prefetch target (default 100k) |
+| `fetch.message.max.bytes` | 524288 (512 KiB) | single-message cap |
+| `fetch.max.bytes` | 4 194 304 (4 MiB) | per-fetch response cap |
+| `receive.message.max.bytes` | 8 388 608 (8 MiB) | protocol payload cap (≥ fetch) |
+
+Worst-case memory budget at 9 partitions × 4 MiB queue + tokio stacks + ClickHouse pool + `MAX_BATCH=500` buffers ≈ **~110 MiB**. Helm `consumer.resources.limits.memory` should be ~256Mi (2× safety margin). Audit messages are metadata-only (≤ ~50 KiB observed) so the 512 KiB single-message cap leaves a 10× margin — large prompt/response payloads do not flow through OTel topics (they go to S3 `veronex-messages` and Postgres `conversations`).
+
+---
+
 ## Verification
 
 ```bash

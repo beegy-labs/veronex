@@ -1,4 +1,5 @@
 use mimalloc::MiMalloc;
+use tracing::Instrument;
 
 #[global_allocator]
 static GLOBAL: MiMalloc = MiMalloc;
@@ -24,9 +25,25 @@ use veronex::infrastructure::inbound::http::state::AppState;
 use veronex::infrastructure::outbound::persistence::database;
 
 // ── Entry point ────────────────────────────────────────────────────
+//
+// Manual runtime builder per patterns/async.md § tokio — LTS Pin.
+// `#[tokio::main]` hides worker-count and blocking-pool sizing, which are
+// load-bearing tuning knobs for a 10K-provider API server.
 
-#[tokio::main]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
+    let worker_threads = std::thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4);
+    let rt = tokio::runtime::Builder::new_multi_thread()
+        .worker_threads(worker_threads)
+        .max_blocking_threads(512)
+        .thread_name("veronex-worker")
+        .enable_all()
+        .build()?;
+    rt.block_on(async_main())
+}
+
+async fn async_main() -> Result<()> {
     init_tracing();
 
     let config = bootstrap::AppConfig::from_env();
@@ -37,7 +54,7 @@ async fn main() -> Result<()> {
     // ── PostgreSQL ─────────────────────────────────────────────────
     let masked_db_url = mask_database_url(&config.database_url);
     tracing::info!("connecting to postgres at {masked_db_url}");
-    let pg_pool = database::connect(&config.database_url).await?;
+    let pg_pool = database::connect(&config.database_url, config.pg_pool_max).await?;
     tracing::info!("postgres ready");
 
     // ── Valkey (optional) ──────────────────────────────────────────
@@ -45,11 +62,7 @@ async fn main() -> Result<()> {
         use fred::prelude::*;
         tracing::info!("connecting to valkey at {url}");
         let valkey_config = Config::from_url(url)?;
-        let valkey_pool_size: usize = std::env::var("VALKEY_POOL_SIZE")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(6);
-        let pool = Pool::new(valkey_config, None, None, None, valkey_pool_size)?;
+        let pool = Pool::new(valkey_config, None, None, None, config.valkey_pool_size)?;
         pool.init().await?;
         tracing::info!("valkey ready");
         Some(pool)
@@ -59,10 +72,7 @@ async fn main() -> Result<()> {
     };
 
     // ── Infrastructure context ─────────────────────────────────────
-    let instance_id: Arc<str> = Arc::from(
-        std::env::var("VERONEX_INSTANCE_ID")
-            .unwrap_or_else(|_| uuid::Uuid::now_v7().to_string()),
-    );
+    let instance_id: Arc<str> = Arc::from(config.instance_id.as_str());
     tracing::info!(instance_id = %instance_id, "instance identity generated");
     let infra = bootstrap::InfraContext {
         valkey_pool,
@@ -95,12 +105,11 @@ async fn main() -> Result<()> {
     // ── Wire MCP vector selector (requires VESPA_URL + EMBED_URL) ─────
     let (mcp_vector_selector, mcp_tool_indexer) = {
         use veronex_mcp::vector::{EmbedClient, McpToolIndexer, McpVectorSelector, VespaClient};
-        match (std::env::var("VESPA_URL").ok(), std::env::var("EMBED_URL").ok()) {
+        match (config.vespa_url.as_ref(), config.embed_url.as_ref()) {
             (Some(vespa_url), Some(embed_url)) => {
-                let vespa = VespaClient::new(&vespa_url);
-                let embed = EmbedClient::new(&embed_url);
-                let top_k = std::env::var("MCP_VECTOR_TOP_K")
-                    .ok().and_then(|v| v.parse().ok()).unwrap_or(16usize);
+                let vespa = VespaClient::new(vespa_url);
+                let embed = EmbedClient::new(embed_url);
+                let top_k = config.mcp_vector_top_k;
                 let valkey_arc = valkey_pool.as_ref()
                     .map(|v| std::sync::Arc::new(v.clone()));
                 if let Some(valkey_arc) = valkey_arc {
@@ -145,11 +154,13 @@ async fn main() -> Result<()> {
         .fetch_all(&pg_pool)
         .await
         .unwrap_or_default();
-        for s in servers {
+        // Connect to every enabled MCP server concurrently — startup wall-clock
+        // becomes max(per-server) instead of sum.
+        futures::future::join_all(servers.iter().map(|s| async {
             if let Err(e) = session_mgr.connect(s.id, &s.slug, &s.url, s.timeout_secs as u16).await {
                 tracing::warn!(id = %s.id, error = %e, "MCP startup connect failed");
             }
-        }
+        })).await;
         Some(Arc::new(bridge))
     } else {
         None
@@ -199,10 +210,8 @@ async fn main() -> Result<()> {
         mcp_bridge,
         mcp_vector_selector,
         mcp_tool_indexer,
-        login_rate_limit: std::env::var("LOGIN_RATE_LIMIT")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(10),
+        login_rate_limit: config.login_rate_limit as u64,
+        vision_fallback_model: Arc::from(config.vision_fallback_model.as_str()),
         instance_id,
         kafka_broker_admin_url: config.kafka_broker.as_ref().map(|broker| {
             // Convert kafka broker address to Redpanda admin URL.
@@ -214,45 +223,62 @@ async fn main() -> Result<()> {
         clickhouse_user: config.clickhouse_user.as_deref().map(Arc::from),
         clickhouse_password: config.clickhouse_password.as_deref().map(Arc::from),
         clickhouse_db: config.clickhouse_db.as_deref().map(Arc::from),
-        vespa_deployment_id: Arc::from(config.vespa_deployment_id.as_str()),
+        vespa_environment: Arc::from(config.vespa_environment.as_str()),
+        vespa_tenant_id: Arc::from(config.vespa_tenant_id.as_str()),
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────
-    // Periodically refresh tool cache for all connected MCP servers.
+    // Periodically refresh tool cache for all connected MCP servers,
+    // and reconnect any enabled server whose session is missing — so a
+    // transient boot failure (gateway cold-start, pod-readiness race) does
+    // not leave MCP dead until the next pod restart.
     // Interval (25s) keeps L2 Valkey entry alive before its 35s TTL.
     if state.mcp_bridge.is_some() {
         let state_clone = state.clone();
         let cancel_clone = shutdown.clone();
-        tokio::spawn(async move {
-            use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
-            // Initial discovery on startup
-            for server_id in state_clone.mcp_bridge.as_ref().map(|b| b.session_manager.server_ids()).unwrap_or_default() {
-                discover_tools_startup(&state_clone, server_id).await;
-            }
-            // Periodic refresh
-            let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
-            interval.tick().await; // skip the immediate tick
-            loop {
-                tokio::select! {
-                    _ = interval.tick() => {
-                        if let Some(ref b) = state_clone.mcp_bridge {
-                            for server_id in b.session_manager.server_ids() {
-                                if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
-                                    if let Some(ref indexer) = state_clone.mcp_tool_indexer {
-                                        let indexer = indexer.clone();
-                                        let deployment_id = state_clone.vespa_deployment_id.to_string();
-                                        tokio::spawn(async move {
-                                            indexer.index_server_tools(&deployment_id, "global", server_id, &tools).await;
-                                        });
+        tokio::spawn(
+            async move {
+                use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+                // Initial discovery on startup — fan out so the boot wall-clock
+                // is dominated by the slowest MCP server, not their sum.
+                let server_ids = state_clone.mcp_bridge.as_ref()
+                    .map(|b| b.session_manager.server_ids())
+                    .unwrap_or_default();
+                futures::future::join_all(
+                    server_ids.into_iter().map(|sid| discover_tools_startup(&state_clone, sid)),
+                ).await;
+                // Periodic refresh + missing-session reconnect
+                let mut interval = tokio::time::interval(MCP_TOOL_REFRESH_INTERVAL);
+                interval.tick().await; // skip the immediate tick
+                loop {
+                    tokio::select! {
+                        _ = interval.tick() => {
+                            if let Some(ref b) = state_clone.mcp_bridge {
+                                reconcile_mcp_sessions(&state_clone, b).await;
+                                for server_id in b.session_manager.server_ids() {
+                                    if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
+                                        if let Some(ref indexer) = state_clone.mcp_tool_indexer {
+                                            let indexer = indexer.clone();
+                                            let environment = state_clone.vespa_environment.to_string();
+                                            let tenant_id = state_clone.vespa_tenant_id.to_string();
+                                            use tracing::Instrument as _;
+                                            tokio::spawn(
+                                                async move {
+                                                    indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
+                                                }
+                                                .instrument(tracing::debug_span!("mcp.tool_indexer.index_server")),
+                                            );
+                                        }
                                     }
                                 }
                             }
                         }
+                        _ = cancel_clone.cancelled() => break,
                     }
-                    _ = cancel_clone.cancelled() => break,
                 }
             }
-        });
+            .instrument(tracing::info_span!("veronex.main.spawn")),
+        );
     }
 
     // Capture for shutdown deregister (state is moved into build_app).
@@ -338,6 +364,57 @@ async fn shutdown_signal() {
     tokio::select! {
         _ = ctrl_c => {}
         _ = terminate => {}
+    }
+}
+
+// ── MCP session reconciler ──────────────────────────────────────────
+
+/// Connect any enabled MCP server that does not currently have an active session.
+/// Idempotent — safe to call on every refresh tick. Lets the bridge self-heal from
+/// transient boot/network failures without requiring a pod restart.
+async fn reconcile_mcp_sessions(
+    state: &AppState,
+    bridge: &Arc<veronex::infrastructure::outbound::mcp::McpBridgeAdapter>,
+) {
+    use veronex::infrastructure::inbound::http::mcp_handlers::discover_tools_startup;
+
+    let active: std::collections::HashSet<uuid::Uuid> = bridge
+        .session_manager
+        .server_ids()
+        .into_iter()
+        .collect();
+
+    #[derive(sqlx::FromRow)]
+    struct McpServerRow {
+        id: uuid::Uuid,
+        slug: String,
+        url: String,
+        timeout_secs: i16,
+    }
+    let rows: Vec<McpServerRow> = sqlx::query_as(
+        "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true",
+    )
+    .fetch_all(&state.pg_pool)
+    .await
+    .unwrap_or_default();
+
+    for row in rows {
+        if active.contains(&row.id) {
+            continue;
+        }
+        match bridge
+            .session_manager
+            .connect(row.id, &row.slug, &row.url, row.timeout_secs as u16)
+            .await
+        {
+            Ok(()) => {
+                tracing::info!(id = %row.id, slug = %row.slug, "MCP session reconnected");
+                discover_tools_startup(state, row.id).await;
+            }
+            Err(e) => {
+                tracing::warn!(id = %row.id, error = %e, "MCP reconnect failed");
+            }
+        }
     }
 }
 

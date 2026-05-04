@@ -27,6 +27,10 @@ pub enum Permission {
     SettingsManage,
     RoleManage,
     ModelManage,
+    /// CRUD MCP servers + per-key access grants. Distinct from `provider_manage`
+    /// (LLM providers) and `settings_manage` (system-wide config) so MCP can be
+    /// delegated without granting either.
+    McpManage,
 }
 
 impl Permission {
@@ -41,6 +45,7 @@ impl Permission {
             Self::SettingsManage => "settings_manage",
             Self::RoleManage => "role_manage",
             Self::ModelManage => "model_manage",
+            Self::McpManage => "mcp_manage",
         }
     }
 }
@@ -49,34 +54,7 @@ impl Permission {
 pub const ALL_PERMISSIONS: &[&str] = &[
     "dashboard_view", "api_test", "provider_manage",
     "key_manage", "account_manage", "audit_view", "settings_manage",
-    "role_manage", "model_manage",
-];
-
-// ── Menu ────────────────────────────────────────────────────────────────────
-
-/// Menu identifiers stored in `roles.menus TEXT[]`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
-#[ts(export, export_to = "../../../web/lib/generated/")]
-#[serde(rename_all = "snake_case")]
-pub enum MenuId {
-    Dashboard,
-    Flow,
-    Jobs,
-    Performance,
-    Usage,
-    Test,
-    Providers,
-    Servers,
-    Keys,
-    Accounts,
-    Audit,
-    ApiDocs,
-}
-
-/// All valid menu ID strings — used for input validation.
-pub const ALL_MENUS: &[&str] = &[
-    "dashboard", "flow", "jobs", "performance", "usage", "test",
-    "providers", "servers", "keys", "accounts", "audit", "api_docs",
+    "role_manage", "model_manage", "mcp_manage",
 ];
 
 impl AccountRole {

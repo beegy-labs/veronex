@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::Instrument;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -21,13 +22,9 @@ use super::gemini_helpers;
 use super::provider_validation::{parse_provider_type, validate_provider_url};
 use super::state::AppState;
 
-use super::constants::MODELS_CACHE_TTL;
+use crate::domain::constants::MODELS_CACHE_TTL_SECS as MODELS_CACHE_TTL;
 
 // ── Model cache helpers ─────────────────────────────────────────────────────────
-
-fn models_cache_key(id: Uuid) -> String {
-    valkey_keys::provider_models(id)
-}
 
 /// Fetch the list of available models directly from the provider (bypasses cache).
 ///
@@ -154,8 +151,6 @@ pub struct UpdateProviderRequest {
     pub is_free_tier: Option<bool>,
     /// Ollama num_parallel setting.
     pub num_parallel: Option<i16>,
-    /// Enable or disable the provider for routing.
-    pub is_active: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -164,7 +159,6 @@ pub struct ProviderSummary {
     pub name: String,
     pub provider_type: String,
     pub url: String,
-    pub is_active: bool,
     pub total_vram_mb: i64,
     pub gpu_index: Option<i16>,
     pub server_id: Option<GpuServerId>,
@@ -186,7 +180,6 @@ impl From<LlmProvider> for ProviderSummary {
             name: b.name,
             provider_type,
             url: b.url,
-            is_active: b.is_active,
             total_vram_mb: b.total_vram_mb,
             gpu_index: b.gpu_index,
             server_id: b.server_id.map(GpuServerId::from_uuid),
@@ -306,23 +299,8 @@ pub async fn register_provider(
             if let Err(e) = validate_provider_url(url) {
                 return e.into_response();
             }
-            // Reject duplicate Ollama URL.
-            let count_result: Result<(i64,), _> = sqlx::query_as(
-                "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
-            )
-            .bind(url)
-            .fetch_one(&state.pg_pool)
-            .await;
-            match count_result {
-                Ok((count,)) if count > 0 => {
-                    return AppError::Conflict(
-                        "a provider with this URL is already registered".into(),
-                    )
-                    .into_response();
-                }
-                Err(e) => return db_error(e).into_response(),
-                _ => {}
-            }
+            // Duplicate URL is enforced by the `uq_llm_providers_ollama_url` unique
+            // partial index — a conflicting INSERT returns a 23505 violation below.
         }
         ProviderType::Gemini => {
             if req.api_key.as_deref().unwrap_or("").is_empty() {
@@ -338,7 +316,6 @@ pub async fn register_provider(
         provider_type,
         url: req.url.unwrap_or_default(),
         api_key_encrypted: req.api_key,
-        is_active: true,
         total_vram_mb: req.total_vram_mb.unwrap_or(0),
         gpu_index: req.gpu_index,
         server_id: req.server_id.map(|s| s.0),
@@ -363,6 +340,13 @@ pub async fn register_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
+        // 23505 unique_violation on uq_llm_providers_ollama_url → duplicate URL.
+        let msg = format!("{e:#}");
+        if msg.contains("23505") || msg.contains("uq_llm_providers_ollama_url") {
+            return AppError::Conflict(
+                "a provider with this URL is already registered".into(),
+            ).into_response();
+        }
         tracing::error!(error = %e, "failed to register provider");
         return db_error(e).into_response();
     }
@@ -438,14 +422,15 @@ pub async fn delete_provider(
     let name = provider.name.clone();
     let resource_type = provider.provider_type.resource_type();
 
-    match &state.provider_registry.deactivate(id).await {
+    let url = provider.url.clone();
+    match &state.provider_registry.delete(id).await {
         Ok(()) => {
             emit_audit(&state, &claims, "delete", resource_type, &pid.to_string(), &name,
-                &format!("Provider '{}' ({}) deactivated (soft-deleted, no longer routed)", name, pid)).await;
+                &format!("Provider '{}' ({}) deleted — url: {}", name, pid, url)).await;
             StatusCode::NO_CONTENT.into_response()
         }
         Err(e) => {
-            tracing::error!(%id, error = %e, "failed to deactivate provider");
+            tracing::error!(%id, error = %e, "failed to delete provider");
             db_error(e).into_response()
         }
     }
@@ -469,6 +454,10 @@ pub async fn update_provider(
 
     let registry = &state.provider_registry;
 
+    // Snapshot old values for audit (rename / URL change tracking).
+    let old_name = provider.name.clone();
+    let old_url = provider.url.clone();
+
     if req.name.trim().is_empty() {
         return AppError::BadRequest("name must not be empty".into()).into_response();
     }
@@ -489,16 +478,29 @@ pub async fn update_provider(
     provider.server_id = req.server_id.map(|s| s.0);  // null clears the field
     if let Some(v) = req.is_free_tier { provider.is_free_tier = v; }
     if let Some(v) = req.num_parallel { provider.num_parallel = v; }
-    if let Some(v) = req.is_active { provider.is_active = v; }
 
     if let Err(e) = registry.update(&provider).await {
         tracing::error!(%id, error = %e, "update_provider: failed");
         return db_error(e).into_response();
     }
 
+    // Build an audit description that records what changed so history is traceable.
+    let mut changes: Vec<String> = Vec::new();
+    if old_name != provider.name {
+        changes.push(format!("name: '{}' → '{}'", old_name, provider.name));
+    }
+    if old_url != provider.url {
+        changes.push(format!("url: '{}' → '{}'", old_url, provider.url));
+    }
+    let change_note = if changes.is_empty() {
+        "configuration updated".to_string()
+    } else {
+        changes.join(", ")
+    };
+
     let resource_type = provider.provider_type.resource_type();
     emit_audit(&state, &claims, "update", resource_type, &pid.to_string(), &provider.name,
-        &format!("Provider '{}' ({}) configuration updated", provider.name, pid)).await;
+        &format!("Provider '{}' ({}) updated — {}", provider.name, pid, change_note)).await;
     tracing::info!(%id, "provider updated");
     (StatusCode::OK, Json(ProviderSummary::from(provider))).into_response()
 }
@@ -518,7 +520,7 @@ pub async fn list_provider_models(
         Err(e) => return e.into_response(),
     };
 
-    let cache_key = models_cache_key(id);
+    let cache_key = valkey_keys::provider_models(id);
 
     // ── Cache hit ────────────────────────────────────────────────────────────────
     if let Some(ref pool) = state.valkey_pool
@@ -576,7 +578,7 @@ pub async fn sync_provider_models(
 
     match fetch_models_live(&state.http_client, &provider).await {
         Ok(models) => {
-            let cache_key = models_cache_key(id);
+            let cache_key = valkey_keys::provider_models(id);
             if let Some(ref pool) = state.valkey_pool {
                 store_models_cache(pool, &cache_key, &models).await;
             }
@@ -607,6 +609,8 @@ pub async fn sync_provider_models(
 /// `POST /v1/providers/{id}/sync` — unified sync for a single provider.
 ///
 /// Combines health check + model sync + VRAM probing + LLM analysis.
+/// Runs in the background and returns 202 immediately to avoid the JWT router
+/// 30-second timeout (LLM analysis can exceed 30s under load).
 pub async fn sync_single_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -624,39 +628,49 @@ pub async fn sync_single_provider(
     }
 
     let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
+    let pid_str = pid.to_string();
 
-    match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
-        &state.http_client,
-        provider.id,
-        &provider.name,
-        &provider.url,
-        provider.total_vram_mb,
-        provider.num_parallel.max(1) as u32,
-        &settings.analyzer_model,
-        &*state.capacity_repo,
-        &*state.vram_pool,
-        state.valkey_pool.as_ref(),
-        &*state.provider_registry,
-        &*state.ollama_model_repo,
-        &*state.model_selection_repo,
-        &*state.vram_budget_repo,
-        None,
-    )
-    .await
-    {
-        Ok(()) => {
-            emit_audit(
-                &state, &claims, "sync", "ollama_provider", &pid.to_string(),
-                &provider.name, &format!("Provider '{}' synced", provider.name),
+    tokio::spawn(
+        async move {
+            match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
+                &state.http_client,
+                provider.id,
+                &provider.name,
+                &provider.url,
+                provider.total_vram_mb,
+                provider.num_parallel.max(1) as u32,
+                &settings.analyzer_model,
+                &*state.capacity_repo,
+                &*state.vram_pool,
+                state.valkey_pool.as_ref(),
+                &*state.provider_registry,
+                &*state.ollama_model_repo,
+                &*state.model_selection_repo,
+                &*state.vram_budget_repo,
+                None,
             )
-            .await;
-            (StatusCode::OK, Json(serde_json::json!({"synced": true}))).into_response()
+            .await
+            {
+                Ok(()) => {
+                    emit_audit(
+                        &state, &claims, "sync", "ollama_provider", &pid_str,
+                        &provider.name, &format!("Provider '{}' synced", provider.name),
+                    )
+                    .await;
+                }
+                Err(e) => {
+                    tracing::warn!(%id, error = %e, "background sync_provider failed");
+                }
+            }
         }
-        Err(e) => {
-            tracing::warn!(%id, error = %e, "sync_provider failed");
-            AppError::ServiceUnavailable("provider sync failed".into()).into_response()
-        }
-    }
+        .instrument(tracing::info_span!("veronex.provider_handlers.spawn")),
+    );
+
+    (
+        StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "message": "provider sync triggered" })),
+    )
+        .into_response()
 }
 
 /// `POST /v1/providers/sync` — unified sync for all active Ollama providers.
@@ -699,7 +713,6 @@ mod tests {
             provider_type: ProviderType::Ollama,
             url: "http://localhost:11434".to_string(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb: 8192,
             gpu_index: Some(0),
             server_id: None,
@@ -712,7 +725,6 @@ mod tests {
         assert_eq!(s.provider_type, "ollama");
         assert_eq!(s.status, "online");
         assert_eq!(s.url, "http://localhost:11434");
-        assert!(s.is_active);
         assert_eq!(s.gpu_index, Some(0));
     }
 
@@ -724,7 +736,6 @@ mod tests {
             provider_type: ProviderType::Gemini,
             url: String::new(),
             api_key_encrypted: Some("secret".to_string()),
-            is_active: true,
             total_vram_mb: 0,
             gpu_index: None,
             server_id: None,

@@ -1,7 +1,7 @@
 //! Unit tests for vector module using mock HTTP servers.
 
 use wiremock::{
-    matchers::{method, path, path_regex},
+    matchers::{method, path, path_regex, body_string_contains},
     Mock, MockServer, ResponseTemplate,
 };
 
@@ -25,8 +25,8 @@ async fn vespa_feed_ok() {
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
         tool_id:       "test-deploy:svc:srv:tool".into(),
-        deployment_id: "test-deploy".into(),
-        service_id:    "svc".into(),
+        environment: "test-deploy".into(),
+        tenant_id:    "svc".into(),
         server_id:     "srv".into(),
         server_name:   "test_server".into(),
         tool_name:     "tool".into(),
@@ -48,7 +48,7 @@ async fn vespa_feed_server_error_returns_err() {
 
     let client = VespaClient::new(&server.uri());
     let doc = super::vespa_client::McpToolDoc {
-        tool_id: "d:s:r:t".into(), deployment_id: "d".into(), service_id: "s".into(),
+        tool_id: "d:s:r:t".into(), environment: "d".into(), tenant_id: "s".into(),
         server_id: "r".into(), server_name: "s".into(), tool_name: "t".into(),
         description: "d".into(), input_schema: "{}".into(), embedding: vec![0.0; 1024],
     };
@@ -71,8 +71,8 @@ async fn vespa_search_returns_hits() {
                         "relevance": 0.92,
                         "fields": {
                             "tool_id": "test-deploy:svc:srv:get_weather",
-                            "deployment_id": "test-deploy",
-                            "service_id": "svc",
+                            "environment": "test-deploy",
+                            "tenant_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_weather",
                             "description": "Get current weather",
@@ -84,8 +84,8 @@ async fn vespa_search_returns_hits() {
                         "relevance": 0.85,
                         "fields": {
                             "tool_id": "test-deploy:svc:srv:get_forecast",
-                            "deployment_id": "test-deploy",
-                            "service_id": "svc",
+                            "environment": "test-deploy",
+                            "tenant_id": "svc",
                             "server_id": "srv",
                             "tool_name": "get_forecast",
                             "description": "Get weather forecast",
@@ -106,6 +106,33 @@ async fn vespa_search_returns_hits() {
     assert_eq!(hits[0].tool_name, "get_weather");
     assert!((hits[0].relevance - 0.92).abs() < 1e-3);
     assert_eq!(hits[1].tool_name, "get_forecast");
+}
+
+#[tokio::test]
+async fn vespa_search_uses_contains_for_string_attributes() {
+    // Regression: YQL `=` is a numeric range op; using it on a string-typed
+    // attribute with a hyphenated value (e.g. `local-dev`) makes Vespa raise
+    // `'local-dev' is not an int item expression: Illegal embedded sign character`.
+    // The query must use `contains`, which is the YQL idiom for string-attribute
+    // exact match.
+    let server = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/search/"))
+        .and(body_string_contains("environment contains \\\"local-dev\\\""))
+        .and(body_string_contains("tenant_id contains \\\"acct-123\\\""))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+            "root": { "id": "toplevel", "relevance": 1.0, "fields": { "totalCount": 0 } }
+        })))
+        .mount(&server)
+        .await;
+
+    let client = VespaClient::new(&server.uri());
+    // If the YQL still used `=`, wiremock body match would fail and the call
+    // would 404 — i.e. an Err return. `Ok(_)` proves the request body matched.
+    assert!(
+        client.search(&vec![0.0_f32; 1024], "local-dev", "acct-123", 8).await.is_ok(),
+        "search must use `contains` for hyphenated string-attribute filters"
+    );
 }
 
 #[tokio::test]

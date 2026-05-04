@@ -38,8 +38,14 @@ pub fn attrs_to_map(attrs: Option<&Value>) -> HashMap<String, String> {
         .collect()
 }
 
-/// Convert a nanosecond Unix timestamp string to fractional seconds (f64).
-/// ClickHouse DateTime64(N) accepts float seconds in JSONEachRow format.
-pub fn nano_str_to_secs(s: &str) -> f64 {
-    s.parse::<u64>().unwrap_or(0) as f64 / 1_000_000_000.0
+/// Parse a nanosecond Unix timestamp string to u64 nanoseconds.
+/// Use for ClickHouse DateTime64(9) fields.
+pub fn nano_str_to_ns(s: &str) -> u64 {
+    s.parse().unwrap_or(0)
+}
+
+/// Parse a nanosecond Unix timestamp string to u64 milliseconds.
+/// Use for ClickHouse DateTime64(3) fields.
+pub fn nano_str_to_ms(s: &str) -> u64 {
+    s.parse::<u64>().unwrap_or(0) / 1_000_000
 }

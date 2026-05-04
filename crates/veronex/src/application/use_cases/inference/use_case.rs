@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use tracing::Instrument;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -31,8 +32,8 @@ use crate::domain::enums::{JobSource, JobStatus, KeyTier};
 use crate::domain::errors::DomainError;
 use crate::domain::value_objects::{JobId, JobStatusEvent, ModelName, Prompt, StreamToken};
 use crate::domain::constants::{
-    INITIAL_TOKEN_CAPACITY,
-    MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL,
+    heartbeat_key, job_owner_key, INITIAL_TOKEN_CAPACITY,
+    MAX_QUEUE_SIZE, MAX_QUEUE_PER_MODEL, QUEUE_JOBS,
     TIER_BONUS_PAID, TIER_BONUS_STANDARD, TIER_BONUS_TEST,
 };
 
@@ -66,6 +67,11 @@ pub struct InferenceUseCaseImpl {
     /// Compression resources injected into every JobEntry at submit time.
     /// `None` when neither lab_settings_repo nor registry are available.
     compression_handle: Option<Arc<CompressionHandle>>,
+    /// MCP lifecycle phase feature flag — when `true`, runner invokes
+    /// `provider.ensure_ready` (Phase 1) before `stream_tokens` (Phase 2).
+    /// Default `false` preserves implicit auto-load via `stream_tokens`.
+    /// SDD: `.specs/veronex/history/inference-lifecycle-sod.md` §7.
+    mcp_lifecycle_phase_enabled: bool,
 }
 
 impl InferenceUseCaseImpl {
@@ -88,6 +94,7 @@ impl InferenceUseCaseImpl {
         global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
         instance_id: Arc<str>,
         lab_settings_repo: Option<Arc<dyn LabSettingsRepository>>,
+        mcp_lifecycle_phase_enabled: bool,
     ) -> Self {
         let compression_handle = lab_settings_repo.map(|lab| {
             Arc::new(CompressionHandle {
@@ -103,6 +110,7 @@ impl InferenceUseCaseImpl {
             global_model_settings_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
             compression_handle,
+            mcp_lifecycle_phase_enabled,
         }
     }
 
@@ -172,6 +180,7 @@ impl InferenceUseCaseImpl {
         &self, shutdown: CancellationToken,
     ) -> impl std::future::Future<Output = ()> + Send + 'static {
         use futures::FutureExt as _;
+        use std::panic::AssertUnwindSafe;
         let Some(ref valkey) = self.valkey else {
             return futures::future::ready(()).boxed();
         };
@@ -190,21 +199,54 @@ impl InferenceUseCaseImpl {
             self.model_selection_repo.clone(), self.global_model_settings_repo.clone(),
         );
         let msg_store = self.message_store.clone();
+        let lifecycle_flag = self.mcp_lifecycle_phase_enabled;
         tracing::info!("multi-provider queue dispatcher started");
+        // Panic supervisor: a single panic inside queue_dispatcher_loop must not
+        // silently kill the dispatcher task — that produces hours of "no_eligible_provider"
+        // and 600s LIFECYCLE_TIMEOUT bridge errors with no observable cause.
+        // On panic we log + sleep with exponential backoff (capped 30s) and respawn.
         async move {
-            queue_dispatcher_loop(
-                jobs, registry, job_repo, msg_store, valkey, obs, mm, vram, thermal,
-                cb, pd, ev, iid, cn, omr, msr, gmsr, shutdown,
-            ).await;
+            let mut backoff = std::time::Duration::from_millis(500);
+            loop {
+                if shutdown.is_cancelled() { break; }
+                let inner = queue_dispatcher_loop(
+                    jobs.clone(), registry.clone(), job_repo.clone(),
+                    msg_store.clone(), valkey.clone(), obs.clone(), mm.clone(),
+                    vram.clone(), thermal.clone(), cb.clone(), pd.clone(),
+                    ev.clone(), iid.clone(), cn.clone(),
+                    omr.clone(), msr.clone(), gmsr.clone(),
+                    shutdown.clone(), lifecycle_flag,
+                );
+                match AssertUnwindSafe(inner).catch_unwind().await {
+                    Ok(()) => {
+                        tracing::info!("queue dispatcher loop exited cleanly");
+                        break;
+                    }
+                    Err(panic_payload) => {
+                        let msg = panic_payload
+                            .downcast_ref::<&'static str>()
+                            .map(|s| (*s).to_string())
+                            .or_else(|| panic_payload.downcast_ref::<String>().cloned())
+                            .unwrap_or_else(|| "<non-string panic payload>".to_string());
+                        tracing::error!(
+                            panic_msg = %msg,
+                            backoff_ms = backoff.as_millis() as u64,
+                            "queue_dispatcher_loop panicked — restarting after backoff"
+                        );
+                        tokio::time::sleep(backoff).await;
+                        backoff = (backoff * 2).min(std::time::Duration::from_secs(30));
+                    }
+                }
+            }
         }.boxed()
     }
 
-    pub async fn recover_pending_jobs(&self) -> anyhow::Result<()> {
+    pub async fn recover_pending_jobs(&self) -> std::result::Result<(), crate::domain::errors::DomainError> {
         let Some(ref valkey) = self.valkey else { return Ok(()); };
 
         // Drain legacy QUEUE_JOBS list (jobs mis-routed there by old reaper code).
         // These are recovered via DB below; stale list entries are just discarded.
-        let legacy_drained = valkey.list_drain(&crate::infrastructure::outbound::valkey_keys::queue_jobs()).await.unwrap_or(0);
+        let legacy_drained = valkey.list_drain(QUEUE_JOBS).await.unwrap_or(0);
         if legacy_drained > 0 {
             tracing::info!(legacy_drained, "drained legacy QUEUE_JOBS list (will recover via DB)");
         }
@@ -218,11 +260,11 @@ impl InferenceUseCaseImpl {
             if job.status == JobStatus::Running {
                 // Check if another node currently owns this job.
                 // Skip only if the other node is still alive (heartbeat present).
-                let owner_key = crate::domain::constants::job_owner_key(uuid);
+                let owner_key = job_owner_key(uuid);
                 if let Ok(Some(owner)) = valkey.kv_get(&owner_key).await
                     && owner != self.instance_id.as_ref()
                 {
-                    let hb_key = crate::domain::constants::heartbeat_key(&owner);
+                    let hb_key = heartbeat_key(&owner);
                     // owner_alive: fail-closed (true) if Valkey error
                     let owner_alive = valkey.kv_get(&hb_key).await.unwrap_or(Some(String::new())).is_some();
                     if owner_alive {
@@ -253,6 +295,7 @@ impl InferenceUseCaseImpl {
                 assigned_provider_id: None,
                 vision_analysis: None,
                 compression_handle: self.compression_handle.clone(),
+                persisted_to_s3: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             });
             // Re-enqueue to ZSET with emergency priority (recovered jobs get highest priority)
             let now_ms = chrono::Utc::now().timestamp_millis() as u64;
@@ -337,20 +380,23 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             let store = store.clone();
             let repo = self.job_repo.clone();
             let jid = job_id.clone();
-            tokio::spawn(async move {
-                let mut keys = Vec::new();
-                for (i, b64) in images.iter().enumerate() {
-                    match store.put_base64(jid.0, i, b64).await {
-                        Ok((fk, tk)) => { keys.push(fk); keys.push(tk); }
-                        Err(e) => tracing::warn!(job_id = %jid.0, "image upload failed: {e}"),
+            tokio::spawn(
+                async move {
+                    let mut keys = Vec::new();
+                    for (i, b64) in images.iter().enumerate() {
+                        match store.put_base64(jid.0, i, b64).await {
+                            Ok((fk, tk)) => { keys.push(fk); keys.push(tk); }
+                            Err(e) => tracing::warn!(job_id = %jid.0, "image upload failed: {e}"),
+                        }
+                    }
+                    if !keys.is_empty() {
+                        if let Err(e) = repo.update_image_keys(&jid, keys).await {
+                            tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
+                        }
                     }
                 }
-                if !keys.is_empty() {
-                    if let Err(e) = repo.update_image_keys(&jid, keys).await {
-                        tracing::warn!(job_id = %jid.0, "failed to update image_keys: {e}");
-                    }
-                }
-            });
+                .instrument(tracing::info_span!("veronex.inference.use_case.spawn")),
+            );
         }
 
         let cancel_notify = Arc::new(Notify::new());
@@ -367,6 +413,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             assigned_provider_id: None,
             vision_analysis,
             compression_handle: self.compression_handle.clone(),
+            persisted_to_s3: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         });
 
         let uuid = job_id.0;
@@ -414,6 +461,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                         self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                         uuid, job, gemini_tier, self.event_tx.clone(),
                         self.instance_id.clone(), self.cancel_notifiers.clone(),
+                        self.mcp_lifecycle_phase_enabled,
                     );
                 }
             }
@@ -425,6 +473,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                 self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                 uuid, job, gemini_tier, self.event_tx.clone(),
                 self.instance_id.clone(), self.cancel_notifiers.clone(),
+                self.mcp_lifecycle_phase_enabled,
             );
         }
 
@@ -451,6 +500,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
             self.provider_dispatch.clone(), uuid, job, Some(pid), is_free,
             self.event_tx.clone(), self.instance_id.clone(), self.cancel_notifiers.clone(),
+            self.mcp_lifecycle_phase_enabled,
         ).await?;
         Ok(())
     }

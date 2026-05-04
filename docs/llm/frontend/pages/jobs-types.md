@@ -103,7 +103,7 @@ Present on `JobDetail`. Storage: MinIO/S3 primary (`messages/{job_id}.json`), DB
 
 ### ConversationHistory Component
 
-Located in `web/components/job-table.tsx`. Collapsible panel showing full message history.
+Located in `web/app/jobs/components/conversation-list.tsx`. Collapsible panel showing full message history. Assistant text and tool-result panels render Markdown (`react-markdown` + `remark-gfm`) with token-table / code-fence / blockquote support.
 
 | Role | Badge Color |
 |------|-------------|

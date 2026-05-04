@@ -65,7 +65,7 @@ grep -v "Co-Authored-By:.*[Cc]laude\|Co-Authored-By:.*[Gg][Pp][Tt]" "$1" > "$1.t
 ```bash
 git log --format="%H %s" origin/develop..HEAD | while read hash msg; do
   echo "$msg" | grep -qE '^(feat|fix|chore|docs|refactor|test|perf|ci|build|revert|style)\([a-z0-9-]+\): .+' \
-    && echo "✅ $msg" || echo "❌ $msg"
+    && echo "ok  $msg" || echo "BAD $msg"
 done
 ```
 

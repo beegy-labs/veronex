@@ -25,7 +25,7 @@ data:
       kafka/logs:
         brokers:
           - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
-        topic: otel-logs
+        topic: otel.audit.logs
         encoding: otlp_json
         {{- if ne (.Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
         auth:
@@ -37,7 +37,7 @@ data:
       kafka/metrics:
         brokers:
           - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
-        topic: otel-metrics
+        topic: otel.audit.metrics
         encoding: otlp_json
         {{- if ne (.Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
         auth:
@@ -49,7 +49,7 @@ data:
       kafka/traces:
         brokers:
           - {{ required "OTel collector requires a Redpanda/Kafka broker: set redpandaEnabled=true or externalRedpanda.brokers" (include "veronex.redpandaBroker" .) }}
-        topic: otel-traces
+        topic: otel.audit.traces
         encoding: otlp_json
         {{- if ne (.Values.otelCollector.kafka.securityProtocol | default "PLAINTEXT") "PLAINTEXT" }}
         auth:

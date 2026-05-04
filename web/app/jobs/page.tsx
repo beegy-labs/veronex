@@ -3,10 +3,13 @@
 import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
-import { ConversationList } from '@/components/conversation-list'
+import { DASHBOARD_JOBS_QUERY_KEY } from '@/lib/queries/dashboard'
+import { CONVERSATIONS_QUERY_KEY } from '@/lib/queries/conversations'
+import { ConversationList } from './components/conversation-list'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
-import JobTable from '@/components/job-table'
-import { ApiTestPanel } from '@/components/api-test-panel'
+import JobTable from './components/job-table'
+import dynamic from 'next/dynamic'
+const ApiTestPanel = dynamic(() => import('./components/api-test-panel').then(m => ({ default: m.ApiTestPanel })), { ssr: false })
 import { NetworkFlowTab } from '@/components/network-flow-tab'
 import { ChevronLeft, ChevronRight, Search, X, ListOrdered, SlidersHorizontal, ChevronDown, ChevronUp, MessageSquare, RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -82,20 +85,20 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
   const activeFilterCount = (modelFilter ? 1 : 0) + (providerTypeFilter !== 'all' ? 1 : 0) + (serverNameFilter ? 1 : 0) + (status !== 'all' ? 1 : 0) + (sourceFilter !== 'all' ? 1 : 0)
 
   return (
-    <div className="space-y-4">
+    <div className="vds-space-y-4">
       {/* Controls */}
-      <div className="flex items-center justify-between flex-wrap gap-3">
+      <div className="vds-flex vds-items-center vds-justify-between vds-flex-wrap vds-gap-3">
         {data ? (
-          <StatusPill icon={<ListOrdered className="h-3 w-3 shrink-0" />} count={data.total} label={t('jobs.totalLabel')} />
+          <StatusPill icon={<ListOrdered className="vds-h-3 vds-w-3 vds-flex-shrink-0" />} count={data.total} label={t('jobs.totalLabel')} />
         ) : (
-          <p className="text-sm text-muted-foreground animate-pulse">{t('common.loading')}</p>
+          <p className="vds-text-sm vds-text-dim vds-animate-pulse">{t('common.loading')}</p>
         )}
-        <div className="flex items-center gap-2">
+        <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap">
           {/* Search */}
-          <div className="relative flex items-center">
-            <Search className="absolute left-2.5 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+          <div className="vds-relative vds-flex vds-items-center">
+            <Search className="vds-absolute vds-left-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim vds-pointer-events-none" />
             <Input
-              className="pl-8 pr-8 w-52 h-9 text-sm"
+              className="vds-pl-8 vds-pr-8 vds-w-36 vds-sm:w-52 vds-h-9 vds-text-sm"
               placeholder={t('jobs.searchPlaceholder')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -108,10 +111,10 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
               <button
                 type="button"
                 aria-label={t('jobs.clearSearch')}
-                className="absolute right-2.5 text-muted-foreground hover:text-foreground"
+                className="vds-absolute vds-right-2.5 vds-text-dim vds-hover:text-primary"
                 onClick={clearSearch}
               >
-                <X className="h-3.5 w-3.5" />
+                <X className="vds-h-3.5 vds-w-3.5" />
               </button>
             )}
           </div>
@@ -119,36 +122,36 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
           <Button
             variant={showFilters ? 'secondary' : 'outline'}
             size="sm"
-            className="h-9 shrink-0"
+            className="vds-h-9 vds-flex-shrink-0"
             onClick={() => setShowFilters((v) => !v)}
           >
-            <SlidersHorizontal className="h-3.5 w-3.5 mr-1.5" />
+            <SlidersHorizontal className="vds-h-3.5 vds-w-3.5 vds-mr-1.5" />
             {activeFilterCount > 0 ? t('jobs.filtersActive', { count: activeFilterCount }) : t('jobs.filters')}
           </Button>
-          <Button variant="ghost" size="icon" className="h-9 w-9 shrink-0" onClick={() => refetch()} disabled={isFetching}>
-            <RefreshCw className={`h-3.5 w-3.5 ${isFetching ? 'animate-spin' : ''}`} />
+          <Button variant="ghost" size="icon" className="vds-h-9 vds-w-9 vds-flex-shrink-0" onClick={() => refetch()} disabled={isFetching}>
+            <RefreshCw className={`vds-h-3.5 vds-w-3.5 ${isFetching ? 'vds-animate-spin' : ''}`} />
           </Button>
         </div>
       </div>
 
       {/* Filter panel */}
       {showFilters && (
-        <div className="flex items-center gap-2 flex-wrap p-3 rounded-lg border border-border bg-muted/30">
+        <div className="vds-flex vds-items-center vds-gap-2 vds-flex-wrap vds-p-3 vds-rounded-lg vds-border-1 vds-border-subtle vds-bg-muted/30">
           {!source && (
             <Select value={sourceFilter} onValueChange={(val) => { setSourceFilter(val); setPage(0) }}>
-              <SelectTrigger className="w-36 h-9">
+              <SelectTrigger className="vds-w-36 vds-h-9">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">{t('jobs.allSources')}</SelectItem>
-                <SelectItem value="api">API</SelectItem>
+                <SelectItem value="api">{t('jobs.sourceApi')}</SelectItem>
                 <SelectItem value="test">{t('jobs.sourceTest')}</SelectItem>
                 <SelectItem value="analyzer">{t('jobs.sourceAnalyzer')}</SelectItem>
               </SelectContent>
             </Select>
           )}
           <Select value={providerTypeFilter} onValueChange={(val) => { setProviderTypeFilter(val); setPage(0) }}>
-            <SelectTrigger className="w-36 h-9">
+            <SelectTrigger className="vds-w-36 vds-h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -158,19 +161,19 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             </SelectContent>
           </Select>
           <Input
-            className="w-36 h-9 text-sm"
+            className="vds-w-36 vds-h-9 vds-text-sm"
             placeholder={t('jobs.providerName')}
             value={serverNameFilter}
             onChange={(e) => { setServerNameFilter(e.target.value); setPage(0) }}
           />
           <Input
-            className="w-36 h-9 text-sm"
+            className="vds-w-36 vds-h-9 vds-text-sm"
             placeholder={t('jobs.filterModel')}
             value={modelFilter}
             onChange={(e) => { setModelFilter(e.target.value); setPage(0) }}
           />
           <Select value={status} onValueChange={(val) => { setStatus(val); setPage(0) }}>
-            <SelectTrigger className="w-36 h-9">
+            <SelectTrigger className="vds-w-36 vds-h-9">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -184,26 +187,26 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
       {/* Active search badge */}
       {query && (
-        <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        <div className="vds-flex vds-items-center vds-gap-2 vds-text-sm vds-text-dim">
           <span>{t('jobs.searchingFor')}</span>
-          <span className="px-2 py-0.5 rounded bg-primary/15 text-primary font-mono text-xs">{query}</span>
-          <button type="button" className="underline text-xs hover:text-foreground" onClick={clearSearch}>
+          <span className="vds-px-2 vds-py-0.5 vds-rounded vds-bg-primary/15 vds-text-primary vds-font-mono vds-text-xs">{query}</span>
+          <button type="button" className="vds-underline vds-text-xs vds-hover:text-primary" onClick={clearSearch}>
             {t('jobs.clearSearch')}
           </button>
         </div>
       )}
 
       {isLoading && (
-        <div className="flex h-48 items-center justify-center text-muted-foreground">
+        <div className="vds-flex vds-h-48 vds-items-center vds-justify-center vds-text-dim">
           {t('jobs.loadingJobs')}
         </div>
       )}
 
       {error && (
-        <Card className="border-destructive/50 bg-destructive/10">
-          <CardContent className="p-6">
-            <p className="font-semibold text-destructive">{t('jobs.failedJobs')}</p>
-            <p className="text-sm mt-1 text-destructive/80">
+        <Card className="vds-border-destructive/50 vds-bg-destructive/10">
+          <CardContent className="vds-p-6">
+            <p className="vds-font-600 vds-text-destructive">{t('jobs.failedJobs')}</p>
+            <p className="vds-text-sm vds-mt-1 vds-text-destructive/80">
               {error instanceof Error ? error.message : t('common.unknownError')}
             </p>
           </CardContent>
@@ -214,29 +217,29 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 
       {/* Pagination */}
       {data && (
-        <div className="flex items-center justify-end gap-4 flex-wrap">
+        <div className="vds-flex vds-items-center vds-justify-end vds-gap-4 vds-flex-wrap">
           <StatusPill label={data.total === 0 ? t('jobs.noJobs') : `${fmtNumber(firstItem)}–${fmtNumber(lastItem)} / ${fmtNumber(data.total)}`} />
           {totalPages > 1 && (
-            <div className="flex items-center gap-1">
-              <Button variant="outline" size="icon" className="h-8 w-8"
+            <div className="vds-flex vds-items-center vds-gap-1">
+              <Button variant="outline" size="icon" className="vds-h-8 vds-w-8"
                 aria-label={t('common.prevPage')}
                 onClick={() => goTo(page - 1)} disabled={page === 0}>
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeft className="vds-h-4 vds-w-4" />
               </Button>
               {buildPageSlots(page, totalPages).map((slot, i) =>
                 slot === '…' ? (
-                  <span key={`e-${i}`} className="px-1.5 text-muted-foreground text-sm select-none">…</span>
+                  <span key={`e-${i}`} className="vds-px-1.5 vds-text-dim vds-text-sm vds-select-none">…</span>
                 ) : (
                   <Button key={slot} variant={slot === page ? 'default' : 'outline'}
-                    size="icon" className="h-8 w-8 text-xs" onClick={() => goTo(slot)}>
+                    size="icon" className="vds-h-8 vds-w-8 vds-text-xs" onClick={() => goTo(slot)}>
                     {slot + 1}
                   </Button>
                 )
               )}
-              <Button variant="outline" size="icon" className="h-8 w-8"
+              <Button variant="outline" size="icon" className="vds-h-8 vds-w-8"
                 aria-label={t('common.nextPage')}
                 onClick={() => goTo(page + 1)} disabled={page >= totalPages - 1}>
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRight className="vds-h-4 vds-w-4" />
               </Button>
             </div>
           )}
@@ -249,7 +252,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function JobsPage() {
-  usePageGuard('jobs')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [panelOpen, setPanelOpen] = useState(false)
@@ -257,8 +260,8 @@ export default function JobsPage() {
   const [continueConversation, setContinueConversation] = useState<ConversationDetail | null>(null)
 
   const handleTurnComplete = useCallback(() => {
-    queryClient.invalidateQueries({ queryKey: ['dashboard-jobs'] })
-    queryClient.invalidateQueries({ queryKey: ['conversations'] })
+    queryClient.invalidateQueries({ queryKey: DASHBOARD_JOBS_QUERY_KEY })
+    queryClient.invalidateQueries({ queryKey: CONVERSATIONS_QUERY_KEY })
   }, [queryClient])
 
   const [activeTab, setActiveTab] = useState<'tasks' | 'conversations' | 'flow'>(() => {
@@ -290,10 +293,10 @@ export default function JobsPage() {
   return (
     <>
       {/* ── Page content ────────────────────────────────────────────────────── */}
-      <div className="space-y-6 pb-20">
+      <div className="vds-space-y-6 vds-pb-20">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">{t('jobs.title')}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{t('jobs.description')}</p>
+          <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">{t('jobs.title')}</h1>
+          <p className="vds-text-dim vds-mt-1 vds-text-sm">{t('jobs.description')}</p>
         </div>
 
         <Tabs value={activeTab} onValueChange={handleTabChange}>
@@ -302,35 +305,35 @@ export default function JobsPage() {
             <TabsTrigger value="conversations">{t('jobs.conversations')}</TabsTrigger>
             <TabsTrigger value="flow">{t('jobs.networkFlow')}</TabsTrigger>
           </TabsList>
-          <TabsContent value="tasks" className="mt-6">
+          <TabsContent value="tasks" className="vds-mt-6">
             <JobsSection onRetry={handleRetry} />
           </TabsContent>
-          <TabsContent value="conversations" className="mt-6">
+          <TabsContent value="conversations" className="vds-mt-6">
             <ConversationList onContinue={handleContinueConversation} />
           </TabsContent>
-          <TabsContent value="flow" className="mt-6">
+          <TabsContent value="flow" className="vds-mt-6">
             <NetworkFlowTab providers={providers ?? []} />
           </TabsContent>
         </Tabs>
       </div>
 
       {/* ── Floating bottom panel (Gmail-style) ─────────────────────────────── */}
-      <div className="fixed bottom-0 right-6 z-50 w-[560px] shadow-2xl rounded-t-xl overflow-hidden border border-border bg-card">
+      <div className="vds-fixed vds-bottom-0 vds-right-0 vds-sm:right-6 vds-z-popover vds-w-full vds-sm:w-[560px] vds-shadow-5 vds-rounded-t-xl vds-overflow-hidden vds-border-1 vds-border-subtle vds-bg-card">
         {/* Panel header — always visible */}
         <button
           type="button"
-          className="w-full flex items-center gap-2 px-4 py-2.5 bg-muted/80 hover:bg-muted transition-colors"
+          className="vds-w-full vds-flex vds-items-center vds-gap-2 vds-px-4 vds-py-2.5 vds-bg-muted/80 vds-hover:bg-hover vds-transition-colors"
           onClick={() => setPanelOpen((v) => !v)}
         >
-          <MessageSquare className="h-4 w-4 text-muted-foreground shrink-0" />
-          <span className="text-sm font-medium flex-1 text-left">{t('jobs.testPanel') || '추론 테스트'}</span>
-          {panelOpen ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+          <MessageSquare className="vds-h-4 vds-w-4 vds-text-dim vds-flex-shrink-0" />
+          <span className="vds-text-sm vds-font-500 vds-flex-1 vds-text-left">{t('jobs.testPanel')}</span>
+          {panelOpen ? <ChevronDown className="vds-h-4 vds-w-4 vds-text-dim" /> : <ChevronUp className="vds-h-4 vds-w-4 vds-text-dim" />}
         </button>
 
         {/* Panel body — slides open */}
         {panelOpen && (
-          <div className="max-h-[80vh] overflow-y-auto">
-            <div className="p-4">
+          <div className="vds-max-h-[80vh] vds-overflow-y-auto">
+            <div className="vds-p-4">
               <ApiTestPanel
                 retryParams={retryParams}
                 onRetryConsumed={() => setRetryParams(null)}

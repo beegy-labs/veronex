@@ -1,8 +1,16 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use reqwest::Client;
 use serde_json::Value;
+
+/// Distinguishes retryable (5xx / network) from non-retryable (4xx bad data) errors.
+#[derive(Debug)]
+pub enum InsertError {
+    /// HTTP 4xx — bad data, retrying won't help. Caller should discard the rows.
+    BadData(String),
+    /// Network error or 5xx — transient, should retry.
+    Transient(anyhow::Error),
+}
 
 const HTTP_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -30,9 +38,10 @@ impl ClickhouseClient {
 
     /// Batch INSERT rows into `table` using ClickHouse HTTP JSONEachRow format.
     ///
-    /// Idempotent: ClickHouse deduplicates identical blocks by checksum
-    /// (`insert_deduplicate=1`, default). Safe to retry on failure.
-    pub async fn insert(&self, table: &str, rows: &[Value]) -> Result<()> {
+    /// Returns `Ok(())` on success, `Err(InsertError::BadData)` on HTTP 4xx
+    /// (discard rows — retrying won't help), `Err(InsertError::Transient)` on
+    /// network errors or 5xx (caller should retry).
+    pub async fn insert(&self, table: &str, rows: &[Value]) -> Result<(), InsertError> {
         if rows.is_empty() {
             return Ok(());
         }
@@ -59,12 +68,16 @@ impl ClickhouseClient {
             .body(body)
             .send()
             .await
-            .with_context(|| format!("HTTP request failed for table {table}"))?;
+            .map_err(|e| InsertError::Transient(anyhow::anyhow!("HTTP request failed for table {table}: {e}")))?;
 
         if !resp.status().is_success() {
             let status = resp.status();
-            let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!("ClickHouse INSERT into {table} failed: HTTP {status}: {body}");
+            let body: String = resp.text().await.unwrap_or_default();
+            let msg = format!("ClickHouse INSERT into {table} failed: HTTP {status}: {body}");
+            if status.is_client_error() {
+                return Err(InsertError::BadData(msg));
+            }
+            return Err(InsertError::Transient(anyhow::anyhow!(msg)));
         }
 
         tracing::debug!("Inserted {} rows into {}", rows.len(), table);

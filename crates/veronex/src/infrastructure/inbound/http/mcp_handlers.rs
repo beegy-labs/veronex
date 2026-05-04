@@ -1,4 +1,5 @@
 use axum::extract::{Path, Query, State};
+use tracing::Instrument;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -8,13 +9,29 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::domain::value_objects::McpId;
-use crate::infrastructure::inbound::http::middleware::jwt_auth::{RequireProviderManage, RequireSettingsManage};
+use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireMcpManage;
 use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
 use super::error::{AppError, db_error};
 use super::provider_validation::validate_provider_url;
 use super::state::AppState;
+
+// ── Slug validation ────────────────────────────────────────────────────────────
+
+/// Validate MCP server slug: `[a-z][a-z0-9_]*`, max 64 chars.
+fn validate_slug(slug: &str) -> Result<(), AppError> {
+    if slug.is_empty()
+        || !slug.starts_with(|c: char| c.is_ascii_lowercase())
+        || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+    {
+        return Err(AppError::BadRequest("slug must match [a-z][a-z0-9_]*".into()));
+    }
+    if slug.len() > 64 {
+        return Err(AppError::BadRequest("slug must be 64 characters or fewer".into()));
+    }
+    Ok(())
+}
 
 // ── Tool discovery helper ──────────────────────────────────────────────────────
 
@@ -93,7 +110,7 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
         use fred::prelude::*;
         let conn: fred::clients::Client = pool.next().clone();
         let key = valkey_keys::mcp_tools_summary(server_id);
-        conn.set(&key, summary_json.to_string(), Some(Expiration::EX(3600)), None, false).await
+        conn.set(&key, summary_json.to_string(), Some(Expiration::EX(crate::domain::constants::MCP_TOOLS_SUMMARY_TTL_SECS)), None, false).await
             .unwrap_or_else(|e| tracing::warn!(error = %e, %key, "Valkey SET mcp_tools_summary failed"));
     }
 
@@ -101,14 +118,17 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
     bridge.tool_cache.cache_fetched_tools(server_id, tools.clone()).await;
 
     // Index tools into Vespa (non-blocking, non-fatal).
-    // service_id = "global" until per-account MCP server ownership is introduced.
     if let Some(ref indexer) = state.mcp_tool_indexer {
         let indexer = indexer.clone();
         let tools_snap = tools.clone();
-        let deployment_id = state.vespa_deployment_id.to_string();
-        tokio::spawn(async move {
-            indexer.index_server_tools(&deployment_id, "global", server_id, &tools_snap).await;
-        });
+        let environment = state.vespa_environment.to_string();
+        let tenant_id = state.vespa_tenant_id.to_string();
+        tokio::spawn(
+            async move {
+                indexer.index_server_tools(&environment, &tenant_id, server_id, &tools_snap).await;
+            }
+            .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+        );
     }
 
     tracing::info!(%server_id, count = tools.len(), "MCP: tools discovered and persisted");
@@ -131,6 +151,7 @@ pub struct PatchMcpServerRequest {
     pub is_enabled: Option<bool>,
     pub url: Option<String>,
     pub name: Option<String>,
+    pub slug: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -190,7 +211,7 @@ impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for McpServerRow {
 
 /// `GET /v1/mcp/servers`
 pub async fn list_mcp_servers(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<Vec<McpServerResponse>>> {
     let rows: Vec<McpServerRow> = sqlx::query_as(
@@ -254,9 +275,48 @@ pub async fn list_mcp_servers(
     Ok(Json(result))
 }
 
+/// `POST /v1/mcp/servers/verify` — probe connectivity to an MCP server URL.
+pub async fn verify_mcp_server(
+    _claims: RequireMcpManage,
+    State(state): State<AppState>,
+    Json(req): Json<serde_json::Value>,
+) -> impl axum::response::IntoResponse {
+    use std::time::Duration;
+
+    let url = match req.get("url").and_then(|v| v.as_str()) {
+        Some(u) if !u.is_empty() => u.trim().to_string(),
+        _ => return AppError::BadRequest("url is required".into()).into_response(),
+    };
+
+    if let Err(e) = validate_provider_url(&url) {
+        return e.into_response();
+    }
+
+    let health_url = format!("{}/health", url.trim_end_matches('/'));
+    match state
+        .http_client
+        .get(&health_url)
+        .timeout(Duration::from_secs(5))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
+        }
+        Ok(r) => {
+            tracing::warn!(url = %url, status = %r.status(), "MCP verify probe returned unexpected status");
+            AppError::BadGateway(format!("MCP server returned status {}", r.status())).into_response()
+        }
+        Err(e) => {
+            tracing::warn!(url = %url, error = %e, "MCP verify probe failed");
+            AppError::BadGateway("MCP server is not reachable at the given URL".into()).into_response()
+        }
+    }
+}
+
 /// `POST /v1/mcp/servers`
 pub async fn register_mcp_server(
-    RequireProviderManage(claims): RequireProviderManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Json(req): Json<RegisterMcpServerRequest>,
 ) -> HandlerResult<impl IntoResponse> {
@@ -270,15 +330,7 @@ pub async fn register_mcp_server(
     if name.len() > 128 {
         return Err(AppError::BadRequest("name must be 128 characters or fewer".into()));
     }
-    if slug.is_empty()
-        || !slug.starts_with(|c: char| c.is_ascii_lowercase())
-        || !slug.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
-    {
-        return Err(AppError::BadRequest("slug must match [a-z][a-z0-9_]*".into()));
-    }
-    if slug.len() > 64 {
-        return Err(AppError::BadRequest("slug must be 64 characters or fewer".into()));
-    }
+    validate_slug(&slug)?;
     validate_provider_url(&url)?;
 
     if let Some(t) = req.timeout_secs && !(1..=300).contains(&t) {
@@ -306,9 +358,12 @@ pub async fn register_mcp_server(
             tracing::warn!(%id, error = %e, "MCP register: session connect failed");
         } else {
             let state_clone = state.clone();
-            tokio::spawn(async move {
-                discover_and_persist_tools(&state_clone, id).await;
-            });
+            tokio::spawn(
+                async move {
+                    discover_and_persist_tools(&state_clone, id).await;
+                }
+                .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+            );
         }
     }
 
@@ -322,7 +377,7 @@ pub async fn register_mcp_server(
 
 /// `PATCH /v1/mcp/servers/:id`
 pub async fn patch_mcp_server(
-    RequireProviderManage(claims): RequireProviderManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path(mid): Path<McpId>,
     Json(req): Json<PatchMcpServerRequest>,
@@ -349,12 +404,35 @@ pub async fn patch_mcp_server(
         validate_provider_url(new_url)?;
     }
 
+    let new_slug = if let Some(ref s) = req.slug {
+        let s = s.trim().to_string();
+        validate_slug(&s)?;
+        if s != row.slug {
+            let exists: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM mcp_servers WHERE slug = $1 AND id != $2)"
+            )
+            .bind(&s)
+            .bind(id)
+            .fetch_one(&state.pg_pool)
+            .await
+            .map_err(db_error)?;
+            if exists {
+                return Err(AppError::Conflict("slug already in use".into()));
+            }
+        }
+        s
+    } else {
+        row.slug.clone()
+    };
+    let slug_changed = new_slug != row.slug;
+
     sqlx::query(
-        "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, updated_at = now() WHERE id = $4"
+        "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, slug = $4, updated_at = now() WHERE id = $5"
     )
         .bind(new_enabled)
         .bind(new_url)
         .bind(new_name)
+        .bind(&new_slug)
         .bind(id)
         .execute(&state.pg_pool)
         .await
@@ -364,18 +442,21 @@ pub async fn patch_mcp_server(
         if !new_enabled && row.is_enabled {
             bridge.session_manager.disconnect(id);
             bridge.tool_cache.remove_server(id);
-        } else if new_enabled && (!row.is_enabled || url_changed) {
-            if url_changed {
+        } else if new_enabled && (!row.is_enabled || url_changed || slug_changed) {
+            if url_changed || slug_changed {
                 bridge.session_manager.disconnect(id);
                 bridge.tool_cache.remove_server(id);
             }
-            if let Err(e) = bridge.session_manager.connect(id, &row.slug, new_url, row.timeout_secs as u16).await {
+            if let Err(e) = bridge.session_manager.connect(id, &new_slug, new_url, row.timeout_secs as u16).await {
                 tracing::warn!(%id, error = %e, "MCP patch: session connect failed");
             } else {
                 let state_clone = state.clone();
-                tokio::spawn(async move {
-                    discover_and_persist_tools(&state_clone, id).await;
-                });
+                tokio::spawn(
+                    async move {
+                        discover_and_persist_tools(&state_clone, id).await;
+                    }
+                    .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+                );
             }
         }
     }
@@ -413,7 +494,7 @@ pub async fn patch_mcp_server(
     Ok(Json(McpServerResponse {
         id: McpId::from_uuid(row.id),
         name: new_name.to_string(),
-        slug: row.slug,
+        slug: new_slug,
         url: new_url.to_string(),
         is_enabled: new_enabled,
         timeout_secs: row.timeout_secs,
@@ -426,7 +507,7 @@ pub async fn patch_mcp_server(
 
 /// `DELETE /v1/mcp/servers/:id`
 pub async fn delete_mcp_server(
-    RequireProviderManage(claims): RequireProviderManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path(mid): Path<McpId>,
 ) -> HandlerResult<StatusCode> {
@@ -452,10 +533,14 @@ pub async fn delete_mcp_server(
     // Remove from Vespa index (non-blocking, non-fatal).
     if let Some(ref indexer) = state.mcp_tool_indexer {
         let indexer = indexer.clone();
-        let deployment_id = state.vespa_deployment_id.to_string();
-        tokio::spawn(async move {
-            indexer.remove_server_tools(&deployment_id, "global", id).await;
-        });
+        let environment = state.vespa_environment.to_string();
+        let tenant_id = state.vespa_tenant_id.to_string();
+        tokio::spawn(
+            async move {
+                indexer.remove_server_tools(&environment, &tenant_id, id).await;
+            }
+            .instrument(tracing::info_span!("veronex.mcp_handlers.spawn")),
+        );
     }
 
     emit_audit(&state, &claims, "delete", "mcp_server", &mid.to_string(), &name,
@@ -515,7 +600,7 @@ pub struct PatchMcpSettingsRequest {
 
 /// `GET /v1/mcp/settings`
 pub async fn get_mcp_settings(
-    RequireSettingsManage(_): RequireSettingsManage,
+    RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<McpSettingsResponse>> {
     let s = state.mcp_settings_repo.get().await.map_err(AppError::Internal)?;
@@ -531,7 +616,7 @@ pub async fn get_mcp_settings(
 
 /// `PATCH /v1/mcp/settings`
 pub async fn patch_mcp_settings(
-    RequireSettingsManage(claims): RequireSettingsManage,
+    RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Json(body): Json<PatchMcpSettingsRequest>,
 ) -> HandlerResult<Json<McpSettingsResponse>> {
@@ -616,4 +701,44 @@ pub async fn get_mcp_stats(
     }).collect();
 
     Ok(Json(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_slug;
+
+    #[test]
+    fn valid_slugs() {
+        assert!(validate_slug("abc").is_ok());
+        assert!(validate_slug("my_server").is_ok());
+        assert!(validate_slug("a1b2c3").is_ok());
+        assert!(validate_slug("a").is_ok());
+        assert!(validate_slug(&"a".repeat(64)).is_ok());
+    }
+
+    #[test]
+    fn slug_must_start_with_lowercase() {
+        assert!(validate_slug("1abc").is_err());
+        assert!(validate_slug("_abc").is_err());
+        assert!(validate_slug("Abc").is_err());
+    }
+
+    #[test]
+    fn slug_disallows_uppercase_and_special_chars() {
+        assert!(validate_slug("myServer").is_err());
+        assert!(validate_slug("my-server").is_err());
+        assert!(validate_slug("my server").is_err());
+        assert!(validate_slug("my.server").is_err());
+    }
+
+    #[test]
+    fn slug_empty_rejected() {
+        assert!(validate_slug("").is_err());
+    }
+
+    #[test]
+    fn slug_max_length_64() {
+        assert!(validate_slug(&"a".repeat(64)).is_ok());
+        assert!(validate_slug(&"a".repeat(65)).is_err());
+    }
 }

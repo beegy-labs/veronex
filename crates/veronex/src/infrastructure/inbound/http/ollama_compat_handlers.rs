@@ -28,7 +28,7 @@ use super::cancel_guard::CancelOnDrop;
 use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE};
 use super::handlers::{sanitize_sse_error, with_conversation_id};
 use super::inference_helpers::{validate_model_name, validate_content_length, extract_last_user_prompt, extract_conversation_id};
-use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context};
+use super::inference_helpers::{validate_and_compress_images, analyze_images_for_context, is_vision_model};
 use super::middleware::infer_auth::InferCaller;
 use super::state::AppState;
 
@@ -196,12 +196,18 @@ pub async fn generate(
         )
             .into_response();
     }
+    // Vision/OCR models may receive images with no prompt — default to a neutral instruction.
+    let has_images = req.images.as_ref().map_or(false, |v| !v.is_empty());
     if req.prompt.is_empty() {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(serde_json::json!({"error": "prompt is required"})),
-        )
-            .into_response();
+        if has_images && is_vision_model(&req.model) {
+            req.prompt = "Describe this image.".to_string();
+        } else {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({"error": "prompt is required"})),
+            )
+                .into_response();
+        }
     }
 
     // Validate + compress oversized images, then analyze non-vision images.
@@ -221,6 +227,7 @@ pub async fn generate(
                 imgs,
                 &req.prompt,
                 lab.vision_model.as_deref(),
+                &state.vision_fallback_model,
             ).await {
                 req.prompt = format!("[Image Analysis]\n{}\n\n{}", va.analysis, req.prompt);
                 vision_analysis = Some(va);
@@ -370,25 +377,8 @@ pub async fn chat(
         if user_msg_count > 1 {
             use crate::application::use_cases::inference::context_assembler;
             let lab = state.lab_settings_repo.get().await.unwrap_or_default();
-            let max_ctx: Option<u32> = if let Some(ref vk) = state.valkey_pool {
-                use fred::prelude::*;
-                let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                let mut found = None;
-                for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
-                    let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
-                    if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
-                        if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
-                            .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
-                        {
-                            found = Some(ctx as u32);
-                            break;
-                        }
-                    }
-                }
-                found
-            } else {
-                None
-            };
+            let max_ctx: Option<u32> =
+                super::inference_helpers::lookup_model_max_ctx(&state, &req.model).await;
             if let Err(e) = context_assembler::check_multiturn_eligibility(&req.model, max_ctx, &lab) {
                 tracing::warn!(model = %req.model, code = e.code(), "multi-turn eligibility check failed");
                 return (
@@ -417,7 +407,17 @@ pub async fn chat(
                 lab5.compression_model.clone().unwrap_or_else(|| "qwen2.5:3b".to_string()),
                 lab5.compression_timeout_secs as u64,
             ) {
-                let configured_ctx = 32_768u32; // fallback; real value looked up during inference
+                // Resolve configured_ctx from model_vram_profiles (S17 Tier A);
+                // fall back to the legacy 32_768 default if no row exists.
+                // SDD: `.specs/veronex/history/conversation-context-compression.md` §3.
+                let configured_ctx = state
+                    .capacity_repo
+                    .min_configured_ctx_for_model(&req.model)
+                    .await
+                    .ok()
+                    .flatten()
+                    .filter(|&c| c >= 4096)
+                    .unwrap_or(32_768);
                 let input_budget = (configured_ctx as f32 * lab5.context_budget_ratio * 0.5) as u32;
                 if let Some(compressed_prompt) = context_compressor::compress_input_inline(
                     &prompt,
@@ -462,7 +462,7 @@ pub async fn chat(
                             if let Some(ref vk) = state.valkey_pool {
                                 use fred::prelude::*;
                                 if let Ok(j) = serde_json::to_string(&r) {
-                                    vk.set(&cache_key, j, Some(fred::types::Expiration::EX(300)), None, false).await
+                                    vk.set(&cache_key, j, Some(fred::types::Expiration::EX(crate::domain::constants::CONV_CACHE_TTL_SECS)), None, false).await
                                         .unwrap_or_else(|e| tracing::warn!(error = %e, key = %cache_key, "Valkey SET conversation cache failed"));
                                 }
                             }
@@ -472,31 +472,16 @@ pub async fn chat(
                     },
                 };
                 let lab6 = state.lab_settings_repo.get().await.unwrap_or_default();
-                let max_ctx6: Option<u32> = if let Some(ref vk) = state.valkey_pool {
-                    use fred::prelude::*;
-                    let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let mut found = None;
-                    for p in providers.iter().filter(|p| p.provider_type == ProviderType::Ollama) {
-                        let ctx_key = crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, &req.model);
-                        if let Ok(Some(raw)) = vk.get::<Option<String>, _>(&ctx_key).await {
-                            if let Some(ctx) = serde_json::from_str::<serde_json::Value>(&raw).ok()
-                                .and_then(|v| v["configured_ctx"].as_u64().filter(|&n| n > 0))
-                            {
-                                found = Some(ctx as u32);
-                                break;
-                            }
-                        }
-                    }
-                    found
-                } else { None };
-                let configured_ctx6 = max_ctx6.unwrap_or(32_768);
+                let configured_ctx6 = super::inference_helpers::lookup_model_max_ctx(&state, &req.model)
+                    .await
+                    .unwrap_or(32_768);
                 // Session handoff
                 if session_handoff::should_handoff(&record, configured_ctx6, &lab6) {
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    if let Some(provider) = providers.iter().find(|p| p.provider_type == ProviderType::Ollama) {
+                    if let Some(provider) = providers.iter().find(|p| p.is_ollama()) {
                         let summary_model = lab6.compression_model.clone().unwrap_or_else(|| req.model.clone());
                         if let Some((new_cid, master_summary)) = session_handoff::perform_handoff(
-                            &record, cid, caller_owner, date, &summary_model,
+                            &state.http_client, &record, cid, caller_owner, date, &summary_model,
                             &provider.url, lab6.compression_timeout_secs as u64, store,
                         ).await {
                             let current_user = req.messages.iter().rev()
@@ -550,6 +535,7 @@ pub async fn chat(
                 imgs,
                 &prompt,
                 lab.vision_model.as_deref(),
+                &state.vision_fallback_model,
             ).await {
                 if let Some(last_user) = req.messages.iter_mut().rev()
                     .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
@@ -880,7 +866,7 @@ async fn pick_ollama(state: &AppState) -> Result<LlmProvider, Response> {
 
     providers
         .into_iter()
-        .find(|b| b.provider_type == ProviderType::Ollama)
+        .find(|b| b.is_ollama())
         .ok_or_else(|| {
             (
                 StatusCode::SERVICE_UNAVAILABLE,

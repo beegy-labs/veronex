@@ -1,6 +1,6 @@
 # Security
 
-> SSOT | **Last Updated**: 2026-03-28 (review fixes: fail-closed JWT, atomic refresh, AES-GCM, audit whitelist)
+> SSOT | **Last Updated**: 2026-05-02 (rev: SetSensitiveRequestHeadersLayer wrapping TraceLayer — Authorization / Cookie / X-API-Key / Proxy-Authorization redacted from trace spans)
 
 ## Authentication & Authorization
 
@@ -70,6 +70,10 @@ Key rotation strategy for encrypted fields: planned (future). Current encryption
 | `Content-Security-Policy` | `default-src 'self'; frame-ancestors 'none'` | Planned |
 | `X-XSS-Protection` | `1; mode=block` | Planned |
 | `Permissions-Policy` | `geolocation=(), microphone=(), camera=()` | Planned |
+
+## Sensitive-Header Redaction (Tower Layer)
+
+`router.rs` wraps `SetSensitiveRequestHeadersLayer` before `TraceLayer` so trace spans never capture credentials. Redacted: `Authorization`, `Cookie`, `Proxy-Authorization`, `x-api-key`. Required `tower-http` feature: `sensitive-headers`. Layer-order rationale: `patterns/middleware.md § Tower Layer Order`.
 
 ---
 

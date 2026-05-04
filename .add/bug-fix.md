@@ -11,7 +11,7 @@ Bug report, test failure, or unexpected behavior discovered.
 | Domain | Path |
 | ------ | ---- |
 | Related domain | `docs/llm/` (affected area) |
-| Test files | Related `*_test.rs`, `*.test.ts`, `scripts/e2e/` |
+| Test files | Related `*_test.rs`, `*.test.ts`, `test/scripts/e2e/` |
 | Patterns | `docs/llm/policies/patterns.md` |
 
 ## Execution

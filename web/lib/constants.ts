@@ -10,8 +10,8 @@ export const PROVIDER_GEMINI = 'gemini' as const
 
 /** Provider type → Tailwind badge class. */
 export const PROVIDER_BADGE: Record<string, string> = {
-  ollama: 'bg-primary/10 text-primary border-primary/30',
-  gemini: 'bg-status-info/10 text-status-info-fg border-status-info/30',
+  ollama: 'vds-bg-primary/10 vds-text-primary vds-border-primary/30',
+  gemini: 'vds-bg-info/10 vds-text-info vds-border-info/30',
 }
 
 /** Provider type → CSS custom-property chart colour. */
@@ -39,10 +39,10 @@ export const FINISH_COLORS: Record<string, string> = {
 
 /** Finish reason → Tailwind badge class. */
 export const FINISH_BG: Record<string, string> = {
-  stop:      'bg-status-success/15 text-status-success-fg border-status-success/30',
-  length:    'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
-  error:     'bg-status-error/15 text-status-error-fg border-status-error/30',
-  cancelled: 'bg-muted text-muted-foreground border-border',
+  stop:      'vds-bg-success/15 vds-text-success vds-border-success/30',
+  length:    'vds-bg-warning/15 vds-text-warning vds-border-warning/30',
+  error:     'vds-bg-error/15 vds-text-error vds-border-error/30',
+  cancelled: 'vds-bg-muted vds-text-dim vds-border-subtle',
 }
 
 // ── Image defaults ──────────────────────────────────────────────────────────
@@ -121,40 +121,40 @@ export const SUCCESS_RATE_WARNING = 70
 
 /** Chat message role → Tailwind badge class. */
 export const ROLE_STYLES: Record<string, string> = {
-  system:    'bg-muted text-muted-foreground border-border',
-  user:      'bg-status-info/10 text-status-info-fg border-status-info/30',
-  assistant: 'bg-status-success/10 text-status-success-fg border-status-success/30',
-  tool:      'bg-status-warning/10 text-status-warning-fg border-status-warning/30',
+  system:    'vds-bg-muted vds-text-dim vds-border-subtle',
+  user:      'vds-bg-info/10 vds-text-info vds-border-info/30',
+  assistant: 'vds-bg-success/10 vds-text-success vds-border-success/30',
+  tool:      'vds-bg-warning/10 vds-text-warning vds-border-warning/30',
 }
 
 // ── Provider status O(1) lookups ──────────────────────────────────────────────
 
 /** Provider status → dot indicator class (solid bg). */
 export const PROVIDER_STATUS_DOT: Record<string, string> = {
-  online:   'h-2 w-2 rounded-full bg-status-success shrink-0',
-  degraded: 'h-2 w-2 rounded-full bg-status-warning shrink-0',
-  offline:  'h-2 w-2 rounded-full bg-status-error shrink-0',
+  online:   'vds-h-2 vds-w-2 vds-rounded-full vds-bg-success vds-flex-shrink-0',
+  degraded: 'vds-h-2 vds-w-2 vds-rounded-full vds-bg-warning vds-flex-shrink-0',
+  offline:  'vds-h-2 vds-w-2 vds-rounded-full vds-bg-error vds-flex-shrink-0',
 }
 
 /** Provider status → dot indicator class (muted offline variant). */
 export const PROVIDER_STATUS_DOT_ALT: Record<string, string> = {
-  online:   'h-2 w-2 rounded-full bg-status-success shrink-0',
-  degraded: 'h-2 w-2 rounded-full bg-status-warning shrink-0',
-  offline:  'h-2 w-2 rounded-full bg-muted-foreground/40 shrink-0',
+  online:   'vds-h-2 vds-w-2 vds-rounded-full vds-bg-success vds-flex-shrink-0',
+  degraded: 'vds-h-2 vds-w-2 vds-rounded-full vds-bg-warning vds-flex-shrink-0',
+  offline:  'vds-h-2 vds-w-2 vds-rounded-full vds-bg-neutral/40 vds-flex-shrink-0',
 }
 
 /** Provider status → badge class. */
 export const PROVIDER_STATUS_BADGE: Record<string, string> = {
-  online:   'text-status-success-fg border-status-success/40 text-[10px]',
-  degraded: 'text-status-warning-fg border-status-warning/40 text-[10px]',
-  offline:  'text-status-error-fg border-status-error/40 text-[10px]',
+  online:   'vds-text-success vds-border-success/40 vds-text-[10px]',
+  degraded: 'vds-text-warning vds-border-warning/40 vds-text-[10px]',
+  offline:  'vds-text-error vds-border-error/40 vds-text-[10px]',
 }
 
 /** Provider status → text colour class. */
 export const PROVIDER_STATUS_TEXT: Record<string, string> = {
-  online:   'text-status-success-fg',
-  degraded: 'text-status-warning-fg',
-  offline:  'text-muted-foreground',
+  online:   'vds-text-success',
+  degraded: 'vds-text-warning',
+  offline:  'vds-text-dim',
 }
 
 /** Provider status → i18n key. */
@@ -166,23 +166,30 @@ export const PROVIDER_STATUS_I18N: Record<string, string> = {
 
 /** Service health status → dot indicator class. */
 export const SERVICE_STATUS_DOT: Record<string, string> = {
-  ok:          'h-2 w-2 rounded-full bg-status-success shrink-0',
-  degraded:    'h-2 w-2 rounded-full bg-status-warning shrink-0',
-  unavailable: 'h-2 w-2 rounded-full bg-status-error shrink-0',
+  ok:          'vds-h-2 vds-w-2 vds-rounded-full vds-bg-success vds-flex-shrink-0',
+  degraded:    'vds-h-2 vds-w-2 vds-rounded-full vds-bg-warning vds-flex-shrink-0',
+  unavailable: 'vds-h-2 vds-w-2 vds-rounded-full vds-bg-error vds-flex-shrink-0',
 }
 
 /** Service health status → text colour class. */
 export const SERVICE_STATUS_TEXT: Record<string, string> = {
-  ok:          'text-status-success-fg',
-  degraded:    'text-status-warning-fg',
-  unavailable: 'text-status-error-fg',
+  ok:          'vds-text-success',
+  degraded:    'vds-text-warning',
+  unavailable: 'vds-text-error',
+}
+
+/** Job source → Tailwind badge class. SSOT for source origin badges. */
+export const SOURCE_STYLES: Record<string, string> = {
+  test:     'vds-bg-warning/15 vds-text-warning',
+  analyzer: 'vds-bg-hover/15 vds-text-primary',
+  api:      'vds-bg-primary/10 vds-text-primary',
 }
 
 /** Job status → Tailwind class mapping. SSOT for all status badges. */
 export const STATUS_STYLES: Record<string, string> = {
-  completed: 'bg-status-success/15 text-status-success-fg border-status-success/30',
-  failed:    'bg-status-error/15 text-status-error-fg border-status-error/30',
-  cancelled: 'bg-status-cancelled/15 text-muted-foreground border-status-cancelled/30',
-  pending:   'bg-status-warning/15 text-status-warning-fg border-status-warning/30',
-  running:   'bg-status-info/15 text-status-info-fg border-status-info/30',
+  completed: 'vds-bg-success/15 vds-text-success vds-border-success/30',
+  failed:    'vds-bg-error/15 vds-text-error vds-border-error/30',
+  cancelled: 'vds-bg-cancelled/15 vds-text-dim vds-border-neutral/30',
+  pending:   'vds-bg-warning/15 vds-text-warning vds-border-warning/30',
+  running:   'vds-bg-info/15 vds-text-info vds-border-info/30',
 }

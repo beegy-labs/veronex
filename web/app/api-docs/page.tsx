@@ -11,7 +11,7 @@ import { BASE_API_URL as API_URL } from '@/lib/constants'
 // ── Page ───────────────────────────────────────────────────────────────────────
 
 export default function ApiDocsPage() {
-  usePageGuard('api_docs')
+  usePageGuard('dashboard_view')
   const { t } = useTranslation()
 
   const docs = [
@@ -32,31 +32,31 @@ export default function ApiDocsPage() {
   ]
 
   return (
-    <div className="p-6 space-y-6">
+    <div className="vds-space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">{t('apiDocs.title')}</h1>
-        <p className="text-muted-foreground text-sm mt-1">{t('apiDocs.description')}</p>
+        <h1 className="vds-text-2xl vds-font-600">{t('apiDocs.title')}</h1>
+        <p className="vds-text-dim vds-text-sm vds-mt-1">{t('apiDocs.description')}</p>
       </div>
 
       {/* Viewer cards — internal navigation */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="vds-grid vds-grid-cols-1 vds-sm:grid-cols-2 vds-gap-4">
         {docs.map(({ titleKey, descKey, href, icon: Icon, badge }) => (
-          <Card key={badge} className="flex flex-col">
-            <CardHeader className="pb-3">
-              <div className="flex items-center gap-2">
-                <Icon className="h-5 w-5 text-primary shrink-0" />
-                <CardTitle className="text-base">{t(titleKey)}</CardTitle>
-                <span className="ml-auto text-xs bg-muted text-muted-foreground rounded px-1.5 py-0.5 font-mono">
+          <Card key={badge} className="vds-flex vds-flex-col">
+            <CardHeader className="vds-pb-3">
+              <div className="vds-flex vds-items-center vds-gap-2">
+                <Icon className="vds-h-5 vds-w-5 vds-text-primary vds-flex-shrink-0" />
+                <CardTitle className="vds-text-base">{t(titleKey)}</CardTitle>
+                <span className="vds-ml-auto vds-text-xs vds-bg-muted vds-text-dim vds-rounded vds-px-1.5 vds-py-0.5 vds-font-mono">
                   {badge}
                 </span>
               </div>
             </CardHeader>
-            <CardContent className="flex-1 flex flex-col gap-4">
-              <p className="text-sm text-muted-foreground">{t(descKey)}</p>
-              <Button asChild variant="outline" size="sm" className="mt-auto w-fit">
+            <CardContent className="vds-flex-1 vds-flex vds-flex-col vds-gap-4">
+              <p className="vds-text-sm vds-text-dim">{t(descKey)}</p>
+              <Button asChild variant="outline" size="sm" className="vds-mt-auto vds-w-fit">
                 <Link href={href}>
                   {t('apiDocs.openDocs')}
-                  <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                  <ArrowRight className="vds-ml-1.5 vds-h-3.5 vds-w-3.5" />
                 </Link>
               </Button>
             </CardContent>
@@ -65,14 +65,14 @@ export default function ApiDocsPage() {
       </div>
 
       {/* Raw spec link */}
-      <div className="flex items-center gap-2 text-sm text-muted-foreground pt-2 border-t border-border">
-        <FileJson className="h-4 w-4 shrink-0" />
+      <div className="vds-flex vds-items-center vds-gap-2 vds-text-sm vds-text-dim vds-pt-2 vds-border-t-1 vds-border-subtle">
+        <FileJson className="vds-h-4 vds-w-4 vds-flex-shrink-0" />
         <span>{t('apiDocs.specLabel')}</span>
         <a
           href={`${API_URL}/docs/openapi.json`}
           target="_blank"
           rel="noopener noreferrer"
-          className="font-mono text-xs text-primary hover:underline underline-offset-4"
+          className="vds-font-mono vds-text-xs vds-text-primary vds-hover:underline vds-underline-offset-4"
         >
           {API_URL}/docs/openapi.json
         </a>

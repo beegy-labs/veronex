@@ -18,7 +18,11 @@
     "audit": "감사 로그",
     "capacity": "동시성 제어",
     "health": "헬스",
-    "mcp": "MCP"
+    "mcp": "MCP",
+    "observe": "관측",
+    "operate": "운영",
+    "govern": "통제",
+    "system": "시스템"
   },
   "common": {
     "all": "전체",
@@ -117,7 +121,8 @@
     "activate": "활성화",
     "deactivate": "비활성화",
     "deleting": "삭제 중…",
-    "model": "모델"
+    "model": "모델",
+    "skipToMain": "메인 콘텐츠로 건너뛰기"
   },
   "conversations": {
     "title": "대화",
@@ -129,7 +134,9 @@
     "source": "소스",
     "createdAt": "생성 일시",
     "internals": "내부 데이터",
-    "internalsEmpty": "이 턴에는 압축 또는 Vision 데이터가 없습니다.",
+    "internalsEmpty": "이 턴에는 압축·Vision·MCP 도구 데이터가 없습니다.",
+    "compressedBadge": "압축됨 ({{original}}→{{compressed}} tok, {{model}})",
+    "visionBadge": "Vision: {{model}} ({{imageCount}}개 이미지, {{tokens}} tok)",
     "compression": "압축",
     "compressionModel": "모델",
     "originalTokens": "원본",
@@ -139,6 +146,16 @@
     "visionModel": "모델",
     "imageCount": "이미지 수",
     "analysisTokens": "토큰",
+    "toolCalls": "MCP 도구 호출",
+    "toolCallsBadge": "MCP 호출 {{count}}회",
+    "toolCallsRound": "라운드 {{round}}",
+    "toolCallsLatency": "{{ms}}ms",
+    "toolCallsCacheHit": "캐시",
+    "toolCallsArgs": "인자",
+    "toolCallsResult": "결과",
+    "toolCallsNoResult": "(결과 없음)",
+    "toolResult": "결과 펼치기",
+    "mcpCallsBadge": "MCP {{count}}회",
     "backToList": "대화 목록으로"
   },
   "overview": {
@@ -276,6 +293,7 @@
     "noJobsFound": "작업이 없습니다.",
     "noError": "(오류 메시지 없음)",
     "noResult": "(저장된 결과 없음)",
+    "toolOnlyTurnHint": "(도구만 호출된 턴 — 위 도구 호출 참조. 이 라운드에서 모델은 텍스트를 생성하지 않았습니다)",
     "processing": "(처리 중…)",
     "toolCalls": "도구 호출",
     "agentToolCall": "모델이 도구 호출로 응답했습니다 — 텍스트 출력이 생성되지 않았습니다.",
@@ -305,6 +323,7 @@
     "providerOllama": "Ollama",
     "providerGemini": "Gemini",
     "allSources": "전체 출처",
+    "sourceApi": "API",
     "sourceTest": "테스트",
     "sourceAnalyzer": "분석기",
     "filters": "필터",
@@ -446,7 +465,7 @@
       "ollamaAvailableModels": "사용 가능한 모델",
       "ollamaNoSync": "아직 동기화된 모델이 없습니다. 전체 동기화를 클릭하세요.",
       "ollamaSearchModels": "모델 검색…",
-      "modelToggle": "{model} 활성화 토글",
+      "modelToggle": "{{model}} 활성화 토글",
       "viewModels": "모델 보기",
       "noServerLinked": "서버 없음",
       "searchServers": "서버 검색…",
@@ -481,7 +500,27 @@
       "networkError": "API 서버에 연결할 수 없습니다 — 네트워크를 확인하세요",
       "unreachableError": "Ollama 서버에 연결할 수 없습니다 — URL과 포트를 확인하세요",
       "duplicateUrl": "이미 등록된 URL입니다",
-      "verifyFirst": "등록 전 연결을 확인하세요"
+      "verifyFirst": "등록 전 연결을 확인하세요",
+      "labTitle": "고급 설정",
+      "labDesc": "Ollama 경로 전용 정책 (이미지 입력, 컨텍스트 압축, 멀티턴 요건).",
+      "labImageSection": "이미지 입력",
+      "labMaxImageBytes": "이미지 최대 크기",
+      "labMaxImageBytesDesc": "요청당 이미지 한 장의 최대 base64 크기",
+      "labCompressionModelDesc": "턴별 요약에 사용할 Ollama 모델. 없음 = 추론 모델 재사용.",
+      "labContextBudgetRatio": "컨텍스트 예산 비율",
+      "labContextBudgetRatioDesc": "추론 입력에 할당할 configured_ctx 비율 (0.1–1.0)",
+      "labCompressionTriggerTurns": "압축 트리거 주기",
+      "labCompressionTriggerTurnsDesc": "N턴마다 압축 실행 (1 = 매 턴)",
+      "labRecentVerbatim": "원본 유지 턴 수",
+      "labRecentVerbatimDesc": "최근 N개 턴은 압축하지 않고 원문 유지",
+      "labCompressionTimeout": "압축 타임아웃",
+      "labCompressionTimeoutDesc": "단일 압축 호출 최대 시간 (초과 시 조용히 스킵)",
+      "labHandoffThresholdDesc": "이 비율 × configured_ctx 를 넘으면 새 세션으로 이관",
+      "labMultiturnMinParamsDesc": "이 값 미만의 파라미터 모델은 멀티턴 거부 (400)",
+      "labMultiturnMinCtxDesc": "이 값 미만의 max_ctx 모델은 멀티턴 거부 (400)",
+      "labMultiturnAllowedModelsDesc": "선택된 모델만 멀티턴 허용. 전부 해제 시 모든 적격 모델 허용.",
+      "labMultiturnAllModels": "모든 적격 모델",
+      "labMultiturnGateFail": "요건 미달"
     },
     "capacity": {
       "title": "동시성 제어",
@@ -752,6 +791,8 @@
     "syncLabel": "동기화",
     "stop": "중단",
     "runAgain": "다시 실행",
+    "toolsUsed": "사용된 도구",
+    "toolOnlyTurn": "도구만 호출된 턴 (모델이 텍스트 답변 없이 MCP 도구만 사용)",
     "retryInTest": "테스트에서 재시도",
     "runningAs": "실행자",
     "runner": "실행자",
@@ -774,7 +815,11 @@
     "clearConversation": "초기화",
     "newSession": "새 세션",
     "noSessions": "세션이 없습니다.",
-    "turns": "턴"
+    "turns": "턴",
+    "endpointGemini": "/v1beta/models (Gemini)",
+    "mcp": "MCP",
+    "mcpEnable": "MCP 활성화",
+    "mcpDisable": "MCP 비활성화"
   },
   "apiDocs": {
     "title": "API 문서",
@@ -879,24 +924,10 @@
       "audit_view": "감사 로그",
       "settings_manage": "설정",
       "role_manage": "역할 관리",
-      "model_manage": "모델 관리"
-    },
-    "menu": {
-      "dashboard": "대시보드",
-      "flow": "네트워크 플로우",
-      "jobs": "작업",
-      "performance": "성능",
-      "usage": "사용량",
-      "test": "테스트",
-      "providers": "프로바이더",
-      "servers": "서버",
-      "keys": "API 키",
-      "accounts": "계정",
-      "audit": "감사 로그",
-      "api_docs": "API 문서"
+      "model_manage": "모델 관리",
+      "mcp_manage": "MCP 관리"
     },
     "permissionCount": "{{count}}개 권한",
-    "menuCount": "{{count}}개 메뉴",
     "assignedUsers": "{{count}}명 사용자"
   },
   "audit": {
@@ -972,6 +1003,7 @@
     "enabled": "활성화",
     "online": "온라인",
     "offline": "오프라인",
+    "editTitle": "MCP 서버 편집",
     "deleteTitle": "MCP 서버 삭제",
     "stats": "툴 호출 통계",
     "statsDesc": "등록된 모든 MCP 서버의 툴 호출 집계 메트릭입니다.",
@@ -991,6 +1023,13 @@
     "toolSchemaRefresh": "도구 스키마 갱신 (초)",
     "maxToolsPerRequest": "요청당 최대 도구 수",
     "maxRoutingCacheEntries": "최대 캐시 항목 수",
-    "embeddingModel": "임베딩 모델"
+    "embeddingModel": "임베딩 모델",
+    "verifyConnection": "연결 확인",
+    "verifying": "확인 중…",
+    "connected": "연결됨",
+    "verifyDuplicate": "이미 등록된 URL입니다.",
+    "verifyNetwork": "네트워크 오류 — URL을 확인하세요.",
+    "verifyUnreachable": "서버에 연결할 수 없습니다.",
+    "verifyFailed": "연결 확인에 실패했습니다."
   }
 }

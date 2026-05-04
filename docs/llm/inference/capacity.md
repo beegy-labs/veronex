@@ -20,7 +20,16 @@ Manage VRAM as a **global pool** per provider. Instead of fixed per-model slots,
 - Model **not loaded** → deduct **weight + KV cache** (Ollama auto-loads)
 - On completion → release **KV cache only** (weight stays in VRAM)
 
-**Model lifecycle**: VramPool + `OLLAMA_KEEP_ALIVE=-1` manages model retention. `OllamaModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
+**Model lifecycle**: VramPool + provider `keep_alive` window (default `OLLAMA_KEEP_ALIVE=10m` per low-power policy; lifecycle probes use `LIFECYCLE_KEEP_ALIVE=30m`) manages model retention. `OllamaModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
+
+**Phase 1 entry point** (`MCP_LIFECYCLE_PHASE=on`, see `flows/model-lifecycle.md`):
+- `OllamaAdapter::ensure_ready(model)` is the SSOT for "is model loaded on
+  this provider". Warm hit → `VramPool::loaded_model_names` lookup; cold miss
+  → zero-prompt `/api/generate` probe → on success, adapter calls
+  `VramPool::record_loaded(provider_id, model)` so subsequent dispatches
+  observe the model present.
+- `OllamaAdapter::evict(model, reason)` is the eviction entry point and updates
+  VramPool symmetrically.
 
 ---
 
@@ -46,14 +55,19 @@ POST /v1/servers (register provider)
 | **Unknown** | `0` | Concurrency-headroom score — `available_vram_mb` returns `(max_concurrent - active) * 1_024 MB` (min 1); routing still works, delegates enforcement to Ollama |
 | **Known** | `> 0` | Strict reservation — available VRAM checked before every dispatch |
 
-`total_mb` is set by the 30s sync loop from node-exporter DRM metrics or APU `mem_available_mb`. DB column `weight_estimated: bool` tracks whether per-model weight was measured or estimated, but is not consulted at dispatch time.
+`total_mb` is set by the 30s sync loop. DB column `weight_estimated: bool` tracks whether per-model weight was measured or estimated, but is not consulted at dispatch time.
 
-**VRAM total**:
+**VRAM total — priority order** (SSOT precedence; SDD `.specs/veronex/vram-total-ssot-priority-restoration.md` §3.1):
 
-Determined directly from hardware metrics — no estimation multiplier:
-- **node-exporter DRM** (`node_drm_memory_vram_total_bytes` / `vram_size_bytes`): exact value
-- **APU**: `mem_available_mb` from node-exporter (unified memory)
-- **Unknown** (no node-exporter): pass-through mode until first observation
+| # | Source | Used when |
+|---|--------|-----------|
+| 1 | **`llm_providers.total_vram_mb`** (operator-registered, `vram_total_source = manual`) | `> 0` — declared envelope, takes precedence over auto-detection |
+| 2 | **agent-pushed mirror** (`veronex-agent` discovery label `total_vram_mb`) | provider DB value 0 but agent has value (analyzer cache miss / staleness window) |
+| 3 | **node-exporter DRM** (`node_drm_memory_vram_total_bytes` / `vram_size_bytes`) | unset operator + agent → pass-through; non-APU host |
+| 4 | **APU** (`mem_available_mb` from node-exporter, unified memory) | unset operator + agent → pass-through; AMD APU detected (`drm > 0 && mem_avail > drm × 2`) |
+| 5 | **Unknown** (no source) | `total_mb = 0` → vram_pool delegates capacity to Ollama (request still dispatches) |
+
+The operator-registered value is the **declared envelope**: AIMD `max_concurrent`, `safety_permil` (auto +50 on real KV-OOM, decay −50/cycle on every provider), and Ollama's own OOM rejection together provide dynamic correction within the envelope. Inverted priority (auto-detect over operator value) was a regression introduced in commit `4891fbc` and reverted in this SDD.
 
 ---
 
@@ -490,19 +504,22 @@ total_mb = mem_available_mb × (1 - safety_permil / 1000)
 | Constant | Value | Meaning |
 |----------|-------|---------|
 | `DEFAULT_SAFETY_PERMIL` | 100 | Initial / minimum margin (10%) |
-| `OOM_SAFETY_BUMP_PERMIL` | 50 | +5% per OOM event |
-| `SAFETY_DECAY_PERMIL` | 10 | −1% per stable cycle (APU only) |
+| `OOM_SAFETY_BUMP_PERMIL` | 50 | +5% per actual KV-OOM on a loaded model |
+| `SAFETY_DECAY_PERMIL` | 50 | −5% per stable sync cycle (every provider type) |
 
 ### safety_permil Rules
 
 | Event | Change | Range |
 |-------|--------|-------|
-| OOM detected (try_reserve fail or Ollama 429) | `+50` (OOM_SAFETY_BUMP_PERMIL) | up to 500 (50%) |
-| 30s sync loop, no OOM (stable) — **APU only** | `-10` (SAFETY_DECAY_PERMIL) | down to 100 (10%) |
+| KV-OOM on already-loaded model (`try_reserve` rejected with `need_load_weight=false`) | `+50` (OOM_SAFETY_BUMP_PERMIL) | up to 500 (50%) |
+| Weight-load rejection (model not yet loaded — structural) | **no change** — bumping here is a feedback-loop bug fixed in PR #136 | — |
+| Successful sync cycle (any provider) | `-50` (SAFETY_DECAY_PERMIL), saturates at default | down to 100 (10%) |
 
-**Recovery asymmetry is intentional**: `+50` recovery takes 5 cycles (150s) at `-10/30s`. Combined with AIMD `max_concurrent` recovery at `+1/30s`, this creates a ~150s low-utilization window after OOM. OOM can halt the entire service, so safety over speed is the correct trade-off.
+**Symmetric bump and decay**: a transient OOM bumps safety once, the next stable cycle reverts it. Previously bump (+50) and decay (−10) were asymmetric AND decay only fired on APUs, so dedicated-GPU providers monotonically pushed safety to the 500 cap with no recovery path — once stuck, large models could never load alongside any other model. Symmetric values + universal decay close that loop.
 
-**OOM dual correction**: On OOM, both `safety_permil +50` (shrinks available VRAM ceiling) and `max_concurrent ×3/4` (AIMD multiplicative decrease) apply simultaneously. The two paths are independent — AIMD optimizes throughput, `try_reserve + safety_permil` ensures memory safety.
+**Bump only on real OOM**: the bump skips when rejection comes from `weight_cost` (the model isn't loaded yet — admission decision based on declarative weight + currently-loaded set). Bumping there created the user-retry feedback loop: each retry of "qwen3-coder-next-200k:latest doesn't fit alongside qwen3:8b" added 50‰ until the cap; recovery never came because the structural cause persisted. Now the bump signals only memory pressure on actively-running models.
+
+**OOM dual correction**: On a real KV-OOM, both `safety_permil +50` (shrinks available VRAM ceiling) and `max_concurrent ×3/4` (AIMD multiplicative decrease) apply simultaneously. The two paths are independent — AIMD optimizes throughput, `try_reserve + safety_permil` ensures memory safety.
 
 ---
 
@@ -728,7 +745,7 @@ POST /v1/dashboard/capacity/sync → 202 | 409
 ```bash
 OLLAMA_MAX_LOADED_MODELS=0        # auto (3 × GPU count)
 OLLAMA_NUM_PARALLEL=4             # concurrent inference slots per model
-OLLAMA_KEEP_ALIVE=-1              # disable auto-unload (VramPool manages lifecycle)
+OLLAMA_KEEP_ALIVE=10m             # low-power policy — auto-unload on idle (VramPool tracks state)
 OLLAMA_GPU_OVERHEAD=5368709120    # 5GB reserved (CUDA/driver)
 OLLAMA_FLASH_ATTENTION=1          # Flash Attention (required for KV quant)
 OLLAMA_KV_CACHE_TYPE=q8_0         # KV cache quantization (50% VRAM saving)

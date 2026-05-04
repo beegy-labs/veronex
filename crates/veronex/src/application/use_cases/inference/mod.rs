@@ -1,6 +1,8 @@
 pub(crate) mod compression_router;
 pub mod context_assembler;
+pub(crate) mod context_budget;
 pub(crate) mod context_compressor;
+pub(crate) mod context_pruner;
 pub mod session_handoff;
 mod dispatcher;
 mod helpers;
@@ -13,6 +15,7 @@ pub use use_case::InferenceUseCaseImpl;
 // ── Shared types (visible to sibling submodules via `super::`) ──────────────
 
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use tokio::sync::Notify;
 use uuid::Uuid;
@@ -39,4 +42,10 @@ pub(crate) struct JobEntry {
     pub vision_analysis: Option<VisionAnalysis>,
     /// Resources for per-turn compression. `None` when compression is not configured.
     pub compression_handle: Option<Arc<compression_router::CompressionHandle>>,
+    /// Set `true` exactly once by `persist_conversation_record` when it
+    /// performs the S3 PUT for this job. Prevents double-write across
+    /// racing finalize_job ↔ cancel paths inside `run_job`'s biased
+    /// select! (cancel arm wins vs stream arm completing).
+    /// SDD: `.specs/veronex/history/inference-mcp-streaming-first.md` §6.2a.
+    pub persisted_to_s3: Arc<AtomicBool>,
 }

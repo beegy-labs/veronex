@@ -1,12 +1,7 @@
-import { clsx, type ClassValue } from "clsx"
-import { twMerge } from "tailwind-merge"
-
 import { PROVIDER_OLLAMA, PROVIDER_GEMINI, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from './constants'
 import type { Provider } from './types'
 
-export function cn(...inputs: ClassValue[]) {
-  return twMerge(clsx(inputs))
-}
+export { cn } from './vds-merge'
 
 // ── Provider filtering (SSOT) ─────────────────────────────────────────────
 
@@ -32,8 +27,8 @@ export const calcPercentage = (numerator: number, denominator: number): number =
 // ── Success rate styling ──────────────────────────────────────────────────
 
 export function successRateCls(rate: number | undefined): string {
-  if (rate == null) return 'text-muted-foreground'
-  if (rate >= SUCCESS_RATE_GOOD) return 'bg-status-success/15 text-status-success-fg'
-  if (rate >= SUCCESS_RATE_WARNING) return 'bg-status-warning/15 text-status-warning-fg'
-  return 'bg-status-error/15 text-status-error-fg'
+  if (rate == null) return 'vds-text-dim'
+  if (rate >= SUCCESS_RATE_GOOD) return 'vds-bg-success-bg vds-text-success'
+  if (rate >= SUCCESS_RATE_WARNING) return 'vds-bg-warning-bg vds-text-warning'
+  return 'vds-bg-error-bg vds-text-error'
 }

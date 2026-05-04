@@ -47,8 +47,11 @@ export interface JobsQueryParams {
   providerType?: string
 }
 
+/** Invalidation prefix for all dashboard-jobs queries. */
+export const DASHBOARD_JOBS_QUERY_KEY = ['dashboard-jobs'] as const
+
 export const dashboardJobsQuery = (p: JobsQueryParams) => queryOptions({
-  queryKey: ['dashboard-jobs', p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? '', p.providerType ?? ''] as const,
+  queryKey: [...DASHBOARD_JOBS_QUERY_KEY, p.source, p.page, p.status, p.query, p.model ?? '', p.provider ?? '', p.providerType ?? ''] as const,
   queryFn: () => {
     const qs = new URLSearchParams({
       limit: String(p.pageSize),
@@ -104,6 +107,18 @@ const PERF_REFETCH: Record<number, number> = {
   168: 5 * REFETCH_INTERVAL_SLOW,   // 5 min  — weekly view
   720: 10 * REFETCH_INTERVAL_SLOW,  // 10 min — monthly view
 }
+
+// ── Job detail (modal) ────────────────────────────────────────────────────────
+
+/** Invalidation prefix for job-detail queries. */
+export const JOB_DETAIL_QUERY_KEY = (jobId: string) => ['job-detail', jobId] as const
+
+export const jobDetailQuery = (jobId: string | null, open: boolean) => queryOptions({
+  queryKey: ['job-detail', jobId] as const,
+  queryFn: () => api.jobDetail(jobId!),
+  enabled: !!jobId && open,
+  staleTime: STALE_TIME_FAST,
+})
 
 export const performanceQuery = (hours: number) => queryOptions({
   queryKey: ['performance', hours] as const,

@@ -44,46 +44,46 @@ export function ModelLatencySection({ models }: { models: ModelPerfRow[] }) {
   )
 
   return (
-    <div className="grid grid-cols-1 xl:grid-cols-5 gap-4">
-      <Card className="xl:col-span-3">
+    <div className="vds-grid vds-grid-cols-1 vds-xl:grid-cols-5 vds-gap-4">
+      <Card className="vds-xl:col-span-3">
         <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
-            <Bot className="h-4 w-4 text-primary" />
+          <CardTitle className="vds-text-base vds-flex vds-items-center vds-gap-2">
+            <Bot className="vds-h-4 vds-w-4 vds-text-primary" />
             {t('performance.byModel')}
           </CardTitle>
-          <p className="text-xs text-muted-foreground">{t('performance.modelLatency')}</p>
+          <p className="vds-text-xs vds-text-dim">{t('performance.modelLatency')}</p>
         </CardHeader>
         <CardContent>
           <DataTable minWidth="500px">
             <TableHeader>
-              <TableRow className="hover:bg-transparent">
+              <TableRow className="vds-hover:bg-transparent">
                 <TableHead>{t('usage.modelCol')}</TableHead>
-                <TableHead className="w-28">{t('usage.providerCol')}</TableHead>
-                <TableHead className="text-right w-24">{t('usage.requestsCol')}</TableHead>
-                <TableHead className="text-right w-32">{t('usage.avgLatencyCol')}</TableHead>
-                <TableHead className="text-right w-24">{t('usage.successCol')}</TableHead>
+                <TableHead className="vds-w-28">{t('usage.providerCol')}</TableHead>
+                <TableHead className="vds-text-right vds-w-24">{t('usage.requestsCol')}</TableHead>
+                <TableHead className="vds-text-right vds-w-32">{t('usage.avgLatencyCol')}</TableHead>
+                <TableHead className="vds-text-right vds-w-24">{t('usage.successCol')}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {models.map((m, i) => (
                 <TableRow key={`${m.model_name}-${m.provider_type}-${i}`}>
-                  <TableCell className="font-mono font-medium text-sm">{m.model_name}</TableCell>
+                  <TableCell className="vds-font-mono vds-font-500 vds-text-sm">{m.model_name}</TableCell>
                   <TableCell>
-                    <Badge variant="outline" className={`text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
+                    <Badge variant="outline" className={`vds-text-xs ${PROVIDER_BADGE[m.provider_type] ?? ''}`}>
                       {m.provider_type}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-right tabular-nums">{fmtCompact(m.request_count)}</TableCell>
-                  <TableCell className="text-right tabular-nums font-semibold">
+                  <TableCell className="vds-text-right vds-tabular-nums">{fmtCompact(m.request_count)}</TableCell>
+                  <TableCell className="vds-text-right vds-tabular-nums vds-font-600">
                     {m.avg_latency_ms > 0 ? fmtMs(m.avg_latency_ms) : '—'}
                   </TableCell>
-                  <TableCell className="text-right">
+                  <TableCell className="vds-text-right">
                     {m.success_rate != null ? (
-                      <span className={`text-sm font-semibold tabular-nums ${
-                        m.success_rate >= SUCCESS_RATE_GOOD ? 'text-status-success-fg'
-                          : m.success_rate >= SUCCESS_RATE_WARNING ? 'text-status-warning-fg'
-                          : 'text-status-error-fg'
-                      }`}>
+                      <span className={`vds-text-sm vds-font-600 vds-tabular-nums ${
+ m.success_rate >= SUCCESS_RATE_GOOD ? 'vds-text-success'
+ : m.success_rate >= SUCCESS_RATE_WARNING ? 'vds-text-warning'
+ : 'vds-text-error'
+ }`}>
                         {fmtPct(m.success_rate)}
                       </span>
                     ) : '—'}
@@ -96,10 +96,10 @@ export function ModelLatencySection({ models }: { models: ModelPerfRow[] }) {
       </Card>
 
       {chartData.length > 0 && (
-        <Card className="xl:col-span-2">
+        <Card className="vds-xl:col-span-2">
           <CardHeader>
-            <CardTitle className="text-base">{t('performance.modelLatency')}</CardTitle>
-            <p className="text-xs text-muted-foreground">avg ms (top 10)</p>
+            <CardTitle className="vds-text-base">{t('performance.modelLatency')}</CardTitle>
+            <p className="vds-text-xs vds-text-dim">avg ms (top 10)</p>
           </CardHeader>
           <CardContent>
             <ResponsiveContainer width="100%" height={Math.max(160, chartData.length * 34)}>

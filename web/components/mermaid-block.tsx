@@ -42,9 +42,8 @@ export function MermaidBlock({ code }: { code: string }) {
   return (
     <div
       ref={ref}
-      className="my-3 rounded-lg border border-border bg-card p-4 overflow-x-auto flex justify-center min-h-[80px]"
-    />
-  )
+      className="vds-my-3 vds-rounded-lg vds-border-1 vds-border-subtle vds-bg-card vds-p-4 vds-overflow-x-auto vds-flex vds-justify-center vds-min-h-20"/>
+ )
 }
 
 /**
@@ -53,21 +52,21 @@ export function MermaidBlock({ code }: { code: string }) {
  * Incomplete blocks (still streaming) remain as plain text.
  */
 export function renderWithMermaid(text: string, isStreaming: boolean): React.ReactNode {
-  const parts = text.split(/(```mermaid\n[\s\S]*?\n```)/g)
+ const parts = text.split(/(```mermaid\n[\s\S]*?\n```)/g)
 
-  return (
-    <>
-      {parts.map((part, i) => {
-        const match = part.match(/^```mermaid\n([\s\S]*?)\n```$/)
-        if (match) {
-          return <MermaidBlock key={i} code={match[1]} />
-        }
-        const isLast = i === parts.length - 1
-        return (
-          <span key={i} className="whitespace-pre-wrap">
+ return (
+ <>
+ {parts.map((part, i) => {
+ const match = part.match(/^```mermaid\n([\s\S]*?)\n```$/)
+ if (match) {
+ return <MermaidBlock key={i} code={match[1]} />
+ }
+ const isLast = i === parts.length - 1
+ return (
+ <span key={i} className="vds-whitespace-pre-wrap">
             {part}
             {isLast && isStreaming && (
-              <span className="inline-block w-0.5 h-4 bg-muted-foreground animate-pulse ml-px align-middle" />
+              <span className="vds-inline-block vds-w-0.5 vds-h-4 vds-bg-neutral vds-animate-pulse vds-ml-px align-middle" />
             )}
           </span>
         )

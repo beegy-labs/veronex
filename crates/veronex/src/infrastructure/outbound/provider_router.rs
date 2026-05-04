@@ -8,7 +8,8 @@ use futures::Stream;
 
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::gemini_repository::GeminiPolicyRepository;
-use crate::application::ports::outbound::inference_provider::InferenceProviderPort;
+use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::inference_provider::{InferenceProviderPort, LlmProviderPort};
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmProvider};
@@ -32,9 +33,15 @@ async fn filter_by_model_selection(
     model_name: &str,
     provider_label: &str,
 ) -> Vec<LlmProvider> {
+    // Score every candidate concurrently so this filter is one wall-clock RTT
+    // even at 10k-provider scale.
+    use futures::future::join_all;
+    let enabled_lists: Vec<Result<Vec<String>, _>> =
+        join_all(candidates.iter().map(|b| repo.list_enabled(b.id))).await;
+
     let mut result = Vec::with_capacity(candidates.len());
-    for b in candidates {
-        match repo.list_enabled(b.id).await {
+    for (b, enabled) in candidates.into_iter().zip(enabled_lists) {
+        match enabled {
             Ok(enabled) if !enabled.is_empty() => {
                 let set: HashSet<&str> = enabled.iter().map(|s| s.as_str()).collect();
                 if set.contains(model_name) {
@@ -157,7 +164,7 @@ pub async fn pick_best_provider(
     let all = registry.list_all().await?;
     let candidates: Vec<LlmProvider> = all
         .into_iter()
-        .filter(|b| b.is_active && &b.provider_type == pt)
+        .filter(|b| &b.provider_type == pt)
         .collect();
 
     if candidates.is_empty() {
@@ -214,16 +221,20 @@ pub async fn pick_best_provider(
                 filtered_candidates
             };
 
-            let mut best: Option<(LlmProvider, i64)> = None;
-            for b in selection_filtered {
-                let avail = get_ollama_available_vram_mb(&b, valkey).await;
-                match &best {
-                    None => best = Some((b, avail)),
-                    Some((_, v)) if avail > *v => best = Some((b, avail)),
-                    _ => {}
-                }
-            }
-            best.map(|(b, _)| b)
+            // Score every candidate concurrently. At 10k-provider scale this turns
+            // a 10k-deep `.await` chain into one wall-clock round-trip.
+            use futures::future::join_all;
+            let scored: Vec<(LlmProvider, i64)> = join_all(
+                selection_filtered.into_iter().map(|b| async move {
+                    let avail = get_ollama_available_vram_mb(&b, valkey).await;
+                    (b, avail)
+                }),
+            )
+            .await;
+            scored
+                .into_iter()
+                .max_by_key(|(_, v)| *v)
+                .map(|(b, _)| b)
                 .ok_or_else(|| anyhow::anyhow!("no Ollama provider with available VRAM"))
         }
     }
@@ -298,23 +309,24 @@ async fn pick_gemini_provider(
         return Err(anyhow::anyhow!("no active Gemini provider available"));
     };
 
+    // Probe RPM/RPD status for every free-tier provider concurrently — turns an
+    // O(N) wall-clock scan into one round-trip across the fleet. We always need
+    // to know `all_rpd_exhausted` for the fallback branch, so a "find-first"
+    // early break never short-circuits more than half the keys in practice.
+    let limit_statuses = futures::future::join_all(
+        free_providers.iter()
+            .map(|b| gemini_limit_status(b.id, model_name, rpm_limit, rpd_limit, pool)),
+    ).await;
+
     let mut all_rpd_exhausted = !free_providers.is_empty();
-
-    for b in &free_providers {
-        let (rpm_ex, rpd_ex) =
-            gemini_limit_status(b.id, model_name, rpm_limit, rpd_limit, pool).await;
-
-        if rpd_ex {
+    for (b, (rpm_ex, rpd_ex)) in free_providers.iter().zip(limit_statuses.iter()) {
+        if *rpd_ex {
             tracing::info!(provider_id = %b.id, name = %b.name,
                 "Gemini provider RPD exhausted for today, skipping");
             continue;
         }
-
-        // This key still has daily quota.
         all_rpd_exhausted = false;
-
-        if !rpm_ex {
-            // Found a key with both RPM and RPD available.
+        if !*rpm_ex {
             return Ok(b.clone());
         }
     }
@@ -435,7 +447,11 @@ fn validate_provider_url(url_str: &str) -> Result<()> {
 /// Validates the provider URL against SSRF-dangerous targets before constructing
 /// the adapter. Providers with blocked URLs are logged and return an error adapter
 /// that yields a descriptive failure on every call.
-pub fn make_adapter(cfg: &LlmProvider, valkey: Option<&fred::clients::Pool>) -> Arc<dyn InferenceProviderPort> {
+pub fn make_adapter(
+    cfg: &LlmProvider,
+    valkey: Option<&fred::clients::Pool>,
+    vram_pool: Option<Arc<dyn VramPoolPort>>,
+) -> Arc<dyn LlmProviderPort> {
     match cfg.provider_type {
         ProviderType::Ollama => {
             if let Err(e) = validate_provider_url(&cfg.url) {
@@ -447,10 +463,14 @@ pub fn make_adapter(cfg: &LlmProvider, valkey: Option<&fred::clients::Pool>) -> 
                 );
                 return Arc::new(BlockedAdapter(e.to_string()));
             }
-            match valkey {
-                Some(pool) => Arc::new(OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id)),
-                None => Arc::new(OllamaAdapter::new(&cfg.url)),
+            let mut adapter = match valkey {
+                Some(pool) => OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id),
+                None => OllamaAdapter::new(&cfg.url),
+            };
+            if let Some(pool) = vram_pool {
+                adapter = adapter.with_vram_pool(pool);
             }
+            Arc::new(adapter)
         }
         ProviderType::Gemini => {
             // Gemini uses a fixed Google API host; URL validation is N/A.
@@ -480,6 +500,36 @@ impl InferenceProviderPort for BlockedAdapter {
     }
 }
 
+#[async_trait]
+impl crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort for BlockedAdapter {
+    async fn ensure_ready(
+        &self,
+        _model: &str,
+    ) -> std::result::Result<
+        crate::application::ports::outbound::model_lifecycle::LifecycleOutcome,
+        crate::domain::errors::LifecycleError,
+    > {
+        Err(crate::domain::errors::LifecycleError::ProviderError(
+            format!("provider blocked: {}", self.0),
+        ))
+    }
+
+    async fn instance_state(
+        &self,
+        _model: &str,
+    ) -> crate::domain::value_objects::ModelInstanceState {
+        crate::domain::value_objects::ModelInstanceState::NotLoaded
+    }
+
+    async fn evict(
+        &self,
+        _model: &str,
+        _reason: crate::domain::value_objects::EvictionReason,
+    ) -> std::result::Result<(), crate::domain::errors::LifecycleError> {
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
@@ -495,7 +545,6 @@ mod tests {
             provider_type: crate::domain::enums::ProviderType::Ollama,
             url: "http://localhost:11434".into(),
             api_key_encrypted: None,
-            is_active: true,
             total_vram_mb,
             gpu_index: None,
             server_id: None,

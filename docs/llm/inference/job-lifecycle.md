@@ -1,6 +1,6 @@
 # Jobs — Core Lifecycle & Queue
 
-> SSOT | **Last Updated**: 2026-04-07
+> SSOT | **Last Updated**: 2026-05-01
 
 ## Task Guide
 
@@ -110,16 +110,38 @@ pub const MAX_QUEUE_PER_MODEL: u64 = 2_000;    // per-model cap → 429
 - On cancel: Lua atomic ZREM + DECR demand + HDEL side hashes.
 - On no-provider (VRAM blocked): job stays in ZSET (not removed), dispatcher retries next loop.
 
+### Dispatcher resilience (PR #133, 2026-05-01)
+
+`queue_dispatcher_loop` is wrapped in a panic supervisor in `inference::use_case`. The inner future is driven inside `AssertUnwindSafe(...).catch_unwind()`; on panic the supervisor logs the payload and reschedules with exponential backoff (500 ms → 30 s ceiling, reset on clean exit). Without this wrapper a single panic in scoring/claim killed the dispatcher task silently for the lifetime of the pod, leaving every queued job stuck (observed as `model load did not complete within 600s` user-facing errors despite no provider being touched).
+
+`score_and_claim` (in `dispatcher.rs`) now records a `(provider_id, reason)` tuple for every candidate it skips and emits one `tracing::info!` line tagged `dispatch: no provider claimed (all candidates rejected)` when nothing is claimable. Reasons exposed: `no_vram_avail`, `circuit_breaker_open`, `thermal_hard`, `thermal_cooldown`, `thermal_soft_busy`, `try_reserve_none`. This collapses prior silent-`return None` paths into a single observable signal.
+
 ## Job Lifecycle
 
 ```
 Client → inference route → submit(prompt, model, ...) → Pending → ZADD queue:zset (score=now_ms-tier_bonus)
 
 queue_dispatcher_loop (ZRANGE peek → Rust scoring → Lua ZREM claim → ZADD queue:active score=deadline_ms):
-  → keepalive task renews lease every 30s → run_job() → stream_tokens()
+  → keepalive task renews lease every 30s → run_job():
+       Phase 1 (MCP_LIFECYCLE_PHASE=on): provider.ensure_ready(model)  ← see flows/model-lifecycle.md
+       │  └ on success: emit StreamToken::phase_boundary() into JobEntry.tokens (S19 — bridge timing signal)
+       Phase 2: provider.stream_tokens(&job)
   → Completed: finalize() writes metrics to Postgres + ConversationRecord to S3
   → ObservabilityPort → veronex-analytics → OTel → Redpanda → ClickHouse
 ```
+
+Phase 1 fails → `failure_reason = "lifecycle_failed"`, no Phase 2 attempt,
+running counter decremented, schedule_cleanup fires. Flag default `false`
+preserves pre-Tier-C behaviour (implicit auto-load via `stream_tokens`).
+
+**Bridge consumer phase awareness** (S19 + S19.1): `bridge::collect_round`
+uses four phase-aware timeouts (`MCP_LIFECYCLE_LOAD_TIMEOUT`,
+`MCP_TOKEN_FIRST_TIMEOUT`, `MCP_STREAM_IDLE_TIMEOUT`, `MCP_ROUND_TOTAL_TIMEOUT`)
+gated by the `phase_boundary` sentinel emitted by the runner. When
+`MCP_LIFECYCLE_PHASE=off`, runner emits no boundary; bridge stays Phase-1 the
+whole round (single 600 s). Full rationale + values + invariant tests →
+`inference/mcp.md § Phase-aware timing`. SDD:
+`.specs/veronex/bridge-phase-aware-timing.md`.
 
 ## Entity
 
@@ -137,7 +159,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `tools` | `Option<Value>` | in-memory only during dispatch, not persisted |
 | `has_tool_calls` | `bool` | `TRUE` when model emitted tool/function calls — lightweight flag for list view |
 | `api_key_id` | `Option<Uuid>` | FK → api_keys (ON DELETE SET NULL) |
-| `provider_id` | `Option<Uuid>` | FK → llm_providers, set at dispatch time |
+| `provider_id` | `Option<Uuid>` | FK → llm_providers (ON DELETE SET NULL), set at dispatch time |
 | `conversation_id` | `Option<String>` | X-Conversation-ID header; see `session-grouping.md` |
 | `latency_ms` | `Option<i32>` | `started_at` → `completed_at` (excludes queue wait) |
 | `ttft_ms` | `Option<i32>` | Time To First Token |
@@ -145,7 +167,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `cancelled_at` | `Option<DateTime>` | set by cancel(); NULL for non-cancelled jobs |
 | `image_keys` | `Option<Vec<String>>` | S3 object keys for attached images (WebP); stored as `TEXT[]` in DB |
 | `mcp_loop_id` | `Option<Uuid>` | groups jobs in one MCP agentic loop |
-| `failure_reason` | `Option<String>` | machine-readable failure cause: `queue_full`, `no_eligible_provider`, `queue_wait_exceeded`, `provider_error`, `token_budget_exceeded`, `lease_expired_max_attempts`, `lease_expired_reenqueue_failed` |
+| `failure_reason` | `Option<String>` | machine-readable failure cause: `queue_full`, `no_eligible_provider`, `queue_wait_exceeded`, `provider_error`, `token_budget_exceeded`, `lease_expired_max_attempts`, `lease_expired_reenqueue_failed`, `lifecycle_failed` |
 | `account_id` | `Option<Uuid>` | account that submitted via Test Run |
 
 **S3 ConversationRecord** (`conversations/{owner_id}/{YYYY-MM-DD}/{job_id}.json.zst`):
@@ -157,7 +179,9 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 | `tool_calls` | `Option<Value>` | all tool/function calls emitted (MCP + OpenAI function calls) |
 | `result` | `Option<String>` | final text output |
 
-Written once at `finalize_job()` using zstd-3 compression (~1.2 KB / record). Read on-demand by the admin detail view (one S3 GET per click). `owner_id = account_id ?? api_key_id ?? job_id`.
+Written by `finalize_job()` (happy path) **OR** `persist_partial_conversation()` (cancel / stream-error / lifecycle-failed paths) using zstd-3 compression (~1.2 KB / record). Read on-demand by the admin detail view (one S3 GET per click). `owner_id = account_id ?? api_key_id ?? job_id`.
+
+Per-job idempotency is enforced via `JobEntry::persisted_to_s3: Arc<AtomicBool>` — `compare_exchange(false, true)` ensures exactly-one S3 PUT across racing finalize ↔ cancel paths inside `run_job`'s biased `select!`. Runner is the single S3 writer for every job, including MCP-loop rounds — each round produces its own `TurnRecord` keyed by that round's `job_id`, so `GET /v1/dashboard/jobs/{id}` resolves the right turn directly. Bridge orchestrates the loop and updates loop-wide token rollups in Postgres but no longer writes S3 (SDD `.specs/veronex/history/inference-mcp-per-round-persist.md` §3).
 
 > `tps` = `completion_tokens / (latency_ms - ttft_ms) * 1000` (computed in API, not stored)
 

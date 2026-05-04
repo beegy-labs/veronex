@@ -1,36 +1,37 @@
-import * as React from "react"
-import { cva, type VariantProps } from "class-variance-authority"
+'use client'
 
-import { cn } from "@/lib/utils"
+import * as React from 'react'
+import { cn } from '@/lib/utils'
 
-const badgeVariants = cva(
-  "inline-flex items-center rounded-md border px-2.5 py-0.5 text-xs font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2",
-  {
-    variants: {
-      variant: {
-        default:
-          "border-transparent bg-primary text-primary-foreground shadow hover:bg-primary/80",
-        secondary:
-          "border-transparent bg-secondary text-secondary-foreground hover:bg-secondary/80",
-        destructive:
-          "border-transparent bg-destructive text-destructive-foreground shadow hover:bg-destructive/80",
-        outline: "text-foreground",
-      },
-    },
-    defaultVariants: {
-      variant: "default",
-    },
-  }
-)
+type BadgeVariant = 'default' | 'secondary' | 'destructive' | 'outline'
 
-export interface BadgeProps
-  extends React.HTMLAttributes<HTMLDivElement>,
-    VariantProps<typeof badgeVariants> {}
-
-function Badge({ className, variant, ...props }: BadgeProps) {
-  return (
-    <div className={cn(badgeVariants({ variant }), className)} {...props} />
-  )
+export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement> {
+  variant?: BadgeVariant
 }
 
-export { Badge, badgeVariants }
+function variantClass(v: BadgeVariant = 'default'): string {
+  switch (v) {
+    case 'default':
+      return 'vds-bg-primary vds-text-primary-fg vds-border-1 vds-border-primary'
+    case 'secondary':
+      return 'vds-bg-elevated vds-text-primary vds-border-1 vds-border-subtle'
+    case 'destructive':
+      return 'vds-bg-destructive vds-text-destructive-fg vds-border-1 vds-border-destructive'
+    case 'outline':
+      return 'vds-bg-transparent vds-text-primary vds-border-1 vds-border-default'
+  }
+}
+
+const BASE =
+  'vds-inline-flex vds-items-center vds-rounded-md vds-px-2 vds-py-1 ' +
+  'vds-text-xs vds-font-600 vds-tracking-tight'
+
+export function Badge({ className, variant = 'default', ...props }: BadgeProps) {
+  return <div className={cn(BASE, variantClass(variant), className)} {...props} />
+}
+
+export const badgeVariants = ({
+  variant = 'default',
+  className,
+}: { variant?: BadgeVariant; className?: string } = {}) =>
+  cn(BASE, variantClass(variant), className)

@@ -1,6 +1,6 @@
 # MCP Agentic Loop Flow
 
-> **Last Updated**: 2026-03-28
+> **Last Updated**: 2026-05-02
 
 ---
 
@@ -23,7 +23,8 @@ openai_handlers::chat_completions()
 ## `run_loop()` — Agentic Loop
 
 ```
-run_loop(state, caller, model, messages, base_tools, want_stream)
+run_loop(state, caller, model, messages, base_tools, conversation_id, stop, seed,
+         response_format, frequency_penalty, presence_penalty, sse_tap_tx)
   │
   ├── 1. Per-key ACL + cap_points + top_k — parallel via tokio::join!()
   │     API key → join!(fetch_mcp_acl, fetch_mcp_cap_points, fetch_mcp_top_k)
@@ -39,10 +40,19 @@ run_loop(state, caller, model, messages, base_tools, want_stream)
   │
   └── 3. Loop (max MAX_ROUNDS=5):
         │
+        ├── [round + 1 == max_rounds && rounds > 0 && content.is_empty()]?
+        │     └── (1) inject system message: "final response step — tools
+        │             are no longer available — produce final answer now"
+        │     └── (2) submit with `tools: None` (omit schema entirely)
+        │         Ollama drops `tool_choice` silently (#8421/#11171), so
+        │         schema-removal is the only reliable text-forcing knob.
+        │         Tool *results* stay in messages → model can synthesize.
+        │
         ├── submit job (use_case.submit)    ← enqueues to inference queue
         │
-        ├── [want_stream && rounds > 0]?
-        │     └── return final_job_id for SSE pipe (skip collect)
+        ├── [sse_tap_tx.is_some() && rounds > 0]?
+        │     └── tap text tokens straight into the SSE stream while still
+        │         running collect_round to drive the loop
         │
         ├── collect_round(job_id)           ← consume token stream
         │     └── RoundResult { content, tool_calls, tokens, finish_reason }
@@ -69,6 +79,23 @@ run_loop(state, caller, model, messages, base_tools, want_stream)
         │         → bounds context window growth across deep loops
         │
         └── rounds += 1 → GOTO submit
+
+  └── 4. Synthesis fallback (S24, post-loop):
+        │
+        ├── [content.is_empty() && rounds > 0]?
+        │     └── extract_tool_results(messages)  (concat role:"tool" entries)
+        │           ├── None → no results, surface degenerate state
+        │           └── Some(text) → continue
+        │
+        ├── build_synthesis_messages(prompt, results)
+        │     → [system_directive, user_prompt, system_with_results]
+        │       (NO assistant.tool_calls history, NO tools schema)
+        │
+        ├── submit synthesis job  (tools=None, fresh messages)
+        │
+        └── collect_round → text content
+              ├── non-empty → replace `content`, clear `final_tool_calls`
+              └── still empty → fall through to degenerate result
 ```
 
 ---
@@ -141,11 +168,44 @@ JWT session    │  None                   │  All active servers accessible
 |-----------|-------|----------|
 | Max rounds | 5 | Hard loop limit |
 | Loop detect threshold | 3 | Same (tool, args_hash) ×3 → break |
-| Per-round timeout | 45s | `COLLECT_ROUND_TIMEOUT` |
+| Convergence boundary | last round | At `round + 1 == max_rounds`, if `rounds > 0` and no text yet → (a) inject system message + (b) omit `tools` schema from the final-round submit. Ollama silently drops `tool_choice` (issue #8421/#11171), so schema-removal is the only reliable text-forcing knob. Tool results stay in messages so the model can synthesize. (S23) |
+| Synthesis round | post-loop | If the loop exhausts with no text content, dispatch one extra inference call on a fresh messages array `[system_directive, user_prompt, system_with_tool_results]` — no `assistant.tool_calls` history, no `tools` schema. Qwen3-Coder mimics prior tool_call patterns from history even with no schemas (Qwen #475); the synth round removes that signal entirely. Final guarantee that an MCP-routed inference returns text. (S24) |
+| First-token timeout | 240s | `FIRST_TOKEN_TIMEOUT` — covers 200K-context cold load (PR #90) |
+| Stream-idle timeout | 45s | `STREAM_IDLE_TIMEOUT` — token-to-token gap on warm model |
+| Round total timeout | 360s | `ROUND_TOTAL_TIMEOUT` — aligned with `INFERENCE_ROUTER_TIMEOUT` |
 | Max concurrent tool calls | 8 | `buffered(8)` in execute_calls |
 | Max tool result size | 32 KB | Truncated before injection |
 | Max tools per request | 32 | Context window protection |
 | Result cache TTL | 300s | Idempotent tool calls |
+
+> Phased timeouts (PR #90) replace the prior single 45 s round timer. With
+> `MCP_LIFECYCLE_PHASE=on`, Phase 1 (`ensure_ready`) absorbs cold-load timing
+> as its own observable span (see `flows/model-lifecycle.md`); the bridge
+> phased timeouts remain as defense-in-depth.
+
+---
+
+## Audit read-side
+
+`batch_insert_tool_calls` writes every executed tool to `mcp_loop_tool_calls`
+(CDD `inference/mcp-schema.md`). Read-side projection:
+
+```
+GET /v1/conversations/{id}/turns/{job_id}/internals
+  └── conversation_handlers::get_turn_internals
+        ├── load S3 ConversationRecord → compressed + vision_analysis
+        └── SELECT … FROM mcp_loop_tool_calls t
+              LEFT JOIN mcp_servers s ON s.id = t.server_id
+              WHERE t.job_id = $1
+              ORDER BY t.loop_round ASC, t.created_at ASC
+            → tool_calls: [{round, server_slug, tool_name, namespaced_name,
+                            args, result_text, outcome, cache_hit,
+                            latency_ms, result_bytes, created_at}, …]
+```
+
+UI: `web/components/turn-internals.tsx` renders the timeline below each
+assistant bubble in the test panel. Empty array when no MCP tools were
+invoked. SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md`.
 
 ---
 
@@ -161,7 +221,8 @@ JWT session    │  None                   │  All active servers accessible
 
 | File | Purpose |
 |------|---------|
-| `infrastructure/outbound/mcp/bridge.rs` | `McpBridgeAdapter` — full ReAct loop |
+| `infrastructure/outbound/mcp/bridge.rs` | `McpBridgeAdapter` — native + forced-JSON loops |
+| `infrastructure/outbound/mcp/forced_json.rs` | Forced-JSON gateway shim (schema, parser) for non-native-tool-calling models |
 | `infrastructure/inbound/http/openai_handlers.rs` | Entry, `should_intercept()`, `mcp_ollama_chat()` |
 | `infrastructure/inbound/http/mcp_handlers.rs` | MCP server CRUD, `discover_and_persist_tools()` |
 | `infrastructure/inbound/http/key_mcp_access_handlers.rs` | ACL management REST API |

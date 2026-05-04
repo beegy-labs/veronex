@@ -27,4 +27,9 @@ pub trait ProviderModelSelectionRepository: Send + Sync {
     /// Return only the names of enabled models for a provider.
     /// Used by the router to filter routing candidates.
     async fn list_enabled(&self, provider_id: Uuid) -> Result<Vec<String>>;
+
+    /// Return names of models explicitly disabled for a provider.
+    /// Used by the router: only models with an explicit is_enabled=false row are blocked.
+    /// Models absent from the table default to enabled.
+    async fn list_disabled(&self, provider_id: Uuid) -> Result<Vec<String>>;
 }
