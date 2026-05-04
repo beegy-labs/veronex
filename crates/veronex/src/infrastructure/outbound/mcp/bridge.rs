@@ -25,7 +25,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use tracing::{debug, info, instrument, warn, Instrument};
+use tracing::{info, instrument, warn, Instrument};
 use uuid::Uuid;
 use chrono;
 
@@ -260,11 +260,6 @@ impl McpBridgeAdapter {
             self.tool_cache.get_all(allowed_servers.as_deref()).await
         };
 
-        let mcp_tool_names: std::collections::HashSet<String> = mcp_openai_tools
-            .iter()
-            .filter_map(|v| v["function"]["name"].as_str().map(str::to_string))
-            .collect();
-
         let mut all_tools: Vec<Value> = base_tools.unwrap_or_default();
         for tool in mcp_openai_tools {
             if all_tools.len() >= MAX_TOOLS_PER_REQUEST {
@@ -272,505 +267,43 @@ impl McpBridgeAdapter {
             }
             all_tools.push(tool);
         }
-        let tools_json = if all_tools.is_empty() { None } else { Some(all_tools.clone()) };
 
-        // ── Capability gate — route to forced-JSON gateway shim when the model
-        // does not natively emit `tool_calls`. The shim leverages Ollama's
-        // `format` parameter (constrained decoding via GBNF grammar) so weak
-        // models (qwen3:8b, llama3:7b, etc.) can drive MCP deterministically.
-        // The schema is a `oneOf` covering every available tool plus a `final`
-        // terminator — the model's logits are masked at every token to produce
-        // grammar-valid output, so tool dispatch is no longer best-effort.
-        if !all_tools.is_empty()
-            && !crate::infrastructure::outbound::ollama::capability::heuristic_supports_native(&model)
-        {
-            info!(model = %model, "MCP: routing to forced-JSON shim (non-native tool_calls model)");
-            return self
-                .run_loop_forced_json(
-                    state,
-                    caller,
-                    model,
-                    messages,
-                    all_tools,
-                    conversation_id,
-                    stop,
-                    seed,
-                    response_format,
-                    frequency_penalty,
-                    presence_penalty,
-                    allowed_servers,
-                    max_rounds,
-                )
-                .await;
-        }
-
-        // ── Loop ID — groups all rounds into one traceable unit ───────────────
-        let mcp_loop_id = Uuid::new_v4();
-
-        // ── Loop state ─────────────────────────────────────────────────────────
-        let mut total_prompt_tokens: u32 = 0;
-        let mut total_completion_tokens: u32 = 0;
-        let mut finish_reason = "stop".to_string();
-        let mut content = String::new();
-        let mut final_tool_calls: Vec<Value> = Vec::new();
-        // All MCP tool_calls emitted across every round. Persisted on the
-        // single consolidated S3 turn at loop end so the UI can render
-        // "MCP {N}회" from `turn.tool_calls.length`.
-        let mut all_mcp_tool_calls: Vec<Value> = Vec::new();
-        let mut rounds: u8 = 0;
-        // Tracks whether any round's content was forwarded via sse_tap_tx.
-        // S20: replaces the legacy `final_job_id` fast-path signal.
-        let mut streamed_via_tap = false;
-
-        let mut first_job_id: Option<JobId> = None;
-
-        let mut intermediate_job_ids: Vec<Uuid> = Vec::new();
-
-        // Loop-detection: (tool_name, args_hash) → count
-        let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
-
-        for round in 0..max_rounds {
-            debug!(round, "MCP agentic loop round");
-
-            // ── Convergence boundary on the final round (S23 Tier C) ──────────
-            // If we are about to dispatch the LAST allowed round, no text
-            // content has been produced yet, AND at least one tool round has
-            // already executed (so tool results exist in the messages array),
-            // force the model to emit text by (1) injecting a system message
-            // and (2) omitting the `tools` schema from the request. Either
-            // alone is insufficient on Ollama-served, tool-eager models
-            // (qwen3-coder family).
-            //
-            // The OpenAI canonical mechanism is `tool_choice="none"` (keep
-            // tools, force a regular message), but Ollama's OpenAI-compat
-            // endpoint silently drops the `tool_choice` field — so we
-            // approximate by removing the tool schemas entirely on this
-            // round. The accumulated tool *results* (role:"tool" entries)
-            // remain in the messages array, so the model still has full
-            // context to synthesize its final answer.
-            //
-            // References:
-            //   - Ollama issue #8421 — tool_choice silently ignored
-            //   - Ollama issue #11171 — open feature request for tool_choice
-            //     (https://github.com/ollama/ollama/issues/8421)
-            //     (https://github.com/ollama/ollama/issues/11171)
-            //   - QwenLM/Qwen3-Coder issue #475 — degenerate tool-call loops
-            //     documented in the model's community tracker
-            //
-            // SDD: `.specs/veronex/mcp-tool-audit-exposure-and-loop-convergence.md` §3.3.
-            let convergence_boundary = round + 1 == max_rounds && rounds > 0 && content.is_empty();
-            if convergence_boundary {
-                // Re-anchor the date at synthesis time. The original
-                // `inject_current_datetime` system message at messages[0] is
-                // far from the generation point after several MCP rounds;
-                // its weight on the model's output template diminishes
-                // proportionally to context length. Re-injecting fresh,
-                // close to the final emission, counters narrative anchoring
-                // (qwen3-coder reverting to "2024년 12월" timelines despite
-                // its own search queries using current dates).
-                let date_anchor = crate::infrastructure::inbound::http::inference_helpers::build_current_datetime_system_text();
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": date_anchor
-                }));
-                messages.push(serde_json::json!({
-                    "role": "system",
-                    "content": "You have reached the final response step. \
-                        Tools are no longer available. Using the tool \
-                        results already provided above, produce the user's \
-                        final answer in natural language now. Honor the \
-                        date constraints in the system message just above \
-                        — every \"today\" / \"recent\" / \"현재\" / \"최근\" \
-                        in your response refers to the current date listed \
-                        there, not to your training cutoff."
-                }));
-                info!(round, max_rounds, "MCP convergence: tools omitted + date anchor + final-step system injected");
-            }
-
-            // ── Submit job ─────────────────────────────────────────────────────
-            let prompt = extract_last_user_prompt(&messages);
-            let job_id = match state.use_case.submit(SubmitJobRequest {
-                prompt,
-                model_name: model.clone(),
-                provider_type: ProviderType::Ollama,
-                gemini_tier: None,
-                api_key_id: caller.api_key_id(),
-                account_id: caller.account_id(),
-                source: caller.source(),
-                api_format: ApiFormat::OpenaiCompat,
-                messages: Some(Value::Array(messages.clone())),
-                // Convergence boundary: omit tools schema entirely so the
-                // model has nothing callable and must emit text. See the
-                // boundary block above for the Ollama-specific rationale.
-                tools: if convergence_boundary { None } else { tools_json.clone().map(Value::Array) },
-                request_path: Some("/v1/chat/completions".to_string()),
-                conversation_id,
-                key_tier: caller.key_tier(),
-                images: None,
-                stop: stop.clone(),
-                seed,
-                response_format: response_format.clone(),
-                frequency_penalty,
-                presence_penalty,
-                mcp_loop_id: Some(mcp_loop_id),
-                max_tokens: None,
-                vision_analysis: None,
-            }).await {
-                Ok(id) => id,
-                Err(e) => {
-                    warn!("MCP loop: job submit failed on round {round}: {e}");
-                    return None;
-                }
-            };
-
-            if first_job_id.is_none() {
-                first_job_id = Some(job_id.clone());
-            } else {
-                intermediate_job_ids.push(job_id.0);
-            }
-
-            // ── Collect response synchronously ─────────────────────────────────
-            //
-            // SDD `.specs/veronex/bridge-mcp-loop-correctness.md` (S20): all rounds
-            // are collected synchronously by `collect_round`. The earlier
-            // streaming fast-path (skip collection of round N+1 when `rounds > 0`)
-            // was removed because (a) it bypassed MCP tool detection, breaking the
-            // loop invariant when models emitted tool_calls in round N+1; (b) its
-            // sole driving constraint (CF Edge 100s idle) was removed by
-            // platform-gitops PRs #598/#599/#600 introducing CF-bypass routing;
-            // (c) industry agentic-loop frameworks (LangGraph, OpenAI Agents SDK)
-            // do not use such a bypass. Token-by-token streaming UX is preserved
-            // via the `sse_tap_tx` stream-tap passed into `collect_round`.
-            //
-            // `collect_round` owns the phased timeout (LIFECYCLE/FIRST_TOKEN/STREAM_IDLE/ROUND_TOTAL).
-            let round_result = match collect_round(state, &job_id, sse_tap_tx.as_ref()).await {
-                Ok(r) => r,
-                Err(e) => {
-                    warn!(round = rounds, model = %model, error = %e, "MCP round failed");
-                    let code = match &e {
-                        RoundError::LifecycleTimeout  => "model_loading",
-                        RoundError::FirstTokenTimeout => "model_hung_post_load",
-                        RoundError::StreamIdleTimeout => "stream_stalled",
-                        RoundError::TotalTimeout      => "round_timeout",
-                        RoundError::Stream(_)         => "stream_error",
-                    };
-                    // Surface the failure to the client with a clear message + code instead
-                    // of swallowing it. The client knows whether to retry (cold-load) or
-                    // give up (hung / stream error).
-                    return Some(McpLoopResult {
-                        content: format!("Error: {e} (code={code})"),
-                        tool_calls: Vec::new(),
-                        prompt_tokens: total_prompt_tokens,
-                        completion_tokens: total_completion_tokens,
-                        finish_reason: code.to_string(),
-                        rounds,
-                        streamed_via_tap: false,
-                    });
-                }
-            };
-            total_prompt_tokens = total_prompt_tokens.saturating_add(round_result.prompt_tokens);
-            total_completion_tokens = total_completion_tokens.saturating_add(round_result.completion_tokens);
-            finish_reason = round_result.finish_reason.clone();
-            content = round_result.content.clone();
-            final_tool_calls = round_result.tool_calls.clone();
-            // Track whether tap forwarded any content this loop (caller uses
-            // this to decide whether to re-emit `content` as an SSE chunk).
-            if round_result.passthrough_streamed {
-                streamed_via_tap = true;
-            }
-
-            // ── Mixed-delta safety: passthrough wins ──────────────────────────
-            // SDD §3.3: if the round produced text content that was streamed via
-            // the tap, treat the round as final regardless of any tool_calls
-            // that arrived later in the same round (vLLM bug class — content
-            // and tool_calls in the same round is a model-side spec violation).
-            // Continuing the loop after streaming text would emit tokens the
-            // client interprets as a coherent continuation — worse than
-            // dropping the malformed tool_calls.
-            if round_result.passthrough_streamed {
-                if !round_result.tool_calls.is_empty() {
-                    warn!(
-                        round,
-                        tool_count = round_result.tool_calls.len(),
-                        "mixed-delta round (content streamed first, tool_calls also emitted) — dropping tool_calls per SDD §3.3 mixed-delta safety"
-                    );
-                }
-                break;
-            }
-
-            // ── Filter for MCP tool calls ──────────────────────────────────────
-            let mut mcp_calls: Vec<Value> = round_result
-                .tool_calls
-                .into_iter()
-                .filter(|tc| {
-                    tc["function"]["name"]
-                        .as_str()
-                        .map(|n| mcp_tool_names.contains(n))
-                        .unwrap_or(false)
-                })
-                .collect();
-            // Cap per-round execution count (model may return more tool_calls than injected tools).
-            mcp_calls.truncate(MAX_TOOLS_PER_REQUEST);
-
-            if mcp_calls.is_empty() {
-                // No MCP tools requested — round produced text or non-MCP tools.
-                // Loop ends; caller emits content / tool_calls as final SSE.
-                break;
-            }
-
-            rounds += 1;
-
-            // ── Loop detection ─────────────────────────────────────────────────
-            let mut loop_detected = false;
-            for tc in &mcp_calls {
-                let name = tc["function"]["name"].as_str().unwrap_or("").to_string();
-                let args_str = tc["function"]["arguments"].as_str().unwrap_or("{}");
-                let args_hash = quick_args_hash(args_str);
-                let count = call_sig_counts.entry((name.clone(), args_hash)).or_insert(0);
-                *count += 1;
-                if *count >= LOOP_DETECT_THRESHOLD {
-                    warn!(tool = %name, "MCP loop detected — breaking");
-                    loop_detected = true;
-                    break;
-                }
-            }
-            if loop_detected {
-                break;
-            }
-
-            // ── Append assistant message with tool_calls ───────────────────────
-            messages.push(serde_json::json!({
-                "role": "assistant",
-                "content": "",
-                "tool_calls": final_tool_calls
-            }));
-
-            // ── Execute MCP tools (join_all: order preserved for index mapping) ─
-            let tenant_id = caller.account_id()
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-            let exec_results = self.execute_calls(state, &mcp_calls, caller.api_key_id(), tenant_id, round + 1, mcp_loop_id, job_id.0, allowed_servers.clone()).await;
-
-            // Enrich each tool_call with its execution result + audit metadata
-            // and stash for the consolidated S3 turn record. PG audit storage
-            // (`mcp_loop_tool_calls`) was retired 2026-05-01 — S3 is the SSOT
-            // for the conversation chain and ClickHouse retains the analytics
-            // signal via `fire_mcp_ingest`.
-            for (tc, (result_text, rec)) in mcp_calls.iter().zip(exec_results.into_iter()) {
-                let call_id = tc["id"].as_str().unwrap_or("call_0");
-                let tool_name = tc["function"]["name"].as_str().unwrap_or("");
-                messages.push(serde_json::json!({
-                    "role": "tool",
-                    "tool_call_id": call_id,
-                    "name": tool_name,
-                    "content": &result_text
-                }));
-
-                let mut enriched = tc.clone();
-                enriched["round"] = serde_json::json!(rec.loop_round);
-                enriched["server_slug"] = serde_json::json!(server_slug_from_namespaced(&rec.namespaced_name));
-                enriched["result"] = serde_json::Value::String(result_text);
-                enriched["outcome"] = serde_json::json!(rec.outcome);
-                enriched["cache_hit"] = serde_json::json!(rec.cache_hit);
-                enriched["latency_ms"] = serde_json::json!(rec.latency_ms);
-                enriched["result_bytes"] = serde_json::json!(rec.result_bytes);
-                all_mcp_tool_calls.push(enriched);
-            }
-
-            // ── Context window pruning ─────────────────────────────────────────
-            // After the second tool round, earlier tool results are rarely needed
-            // verbatim. Compress them to a short summary to bound context growth.
-            // Keep the last 2 rounds of tool messages intact; summarise prior ones.
-            if rounds >= 2 {
-                prune_tool_messages(&mut messages, 2);
-            }
-
-            info!(round, mcp_calls = mcp_calls.len(), "MCP round complete");
-        }
-
-        // ── S24 synthesis fallback ────────────────────────────────────────────
-        // After the round-loop exhausts, if the bridge produced no text content
-        // and at least one tool round executed, dispatch a synthesis round on a
-        // fresh messages array. This is the final guarantee that an inference
-        // request returns a textual answer even when Qwen3-Coder reproduces
-        // tool_call patterns from history (S23 boundary's tools-omission strips
-        // schemas but the model can still mimic prior assistant.tool_calls
-        // entries — QwenLM/Qwen3-Coder #475). The synthesis messages contain
-        // ONLY the user's question and the accumulated tool RESULTS (not
-        // tool_calls), so the model has no patterns to follow.
-        // SDD: `.specs/veronex/mcp-synthesis-round.md` §3.3.
-        if content.is_empty() && rounds > 0 {
-            if let Some(results_text) = extract_tool_results(&messages) {
-                let original_prompt = extract_last_user_prompt(&messages);
-                info!(
-                    rounds,
-                    results_bytes = results_text.len(),
-                    "MCP synthesis round: dispatching forced-text fallback"
-                );
-                let synth_messages = build_synthesis_messages(&original_prompt, &results_text);
-                let synth_submit = state.use_case.submit(SubmitJobRequest {
-                    prompt: original_prompt,
-                    model_name: model.clone(),
-                    provider_type: ProviderType::Ollama,
-                    gemini_tier: None,
-                    api_key_id: caller.api_key_id(),
-                    account_id: caller.account_id(),
-                    source: caller.source(),
-                    api_format: ApiFormat::OpenaiCompat,
-                    messages: Some(Value::Array(synth_messages)),
-                    tools: None,
-                    request_path: Some("/v1/chat/completions".to_string()),
-                    conversation_id,
-                    key_tier: caller.key_tier(),
-                    images: None,
-                    stop: stop.clone(),
-                    seed,
-                    response_format: response_format.clone(),
-                    frequency_penalty,
-                    presence_penalty,
-                    mcp_loop_id: Some(mcp_loop_id),
-                    max_tokens: None,
-                    vision_analysis: None,
-                }).await;
-
-                match synth_submit {
-                    Ok(synth_job_id) => {
-                        intermediate_job_ids.push(synth_job_id.0);
-                        match collect_round(state, &synth_job_id, sse_tap_tx.as_ref()).await {
-                            Ok(synth_result) => {
-                                total_prompt_tokens = total_prompt_tokens.saturating_add(synth_result.prompt_tokens);
-                                total_completion_tokens = total_completion_tokens.saturating_add(synth_result.completion_tokens);
-                                if synth_result.passthrough_streamed {
-                                    streamed_via_tap = true;
-                                }
-                                if !synth_result.content.is_empty() {
-                                    content = synth_result.content;
-                                    finish_reason = synth_result.finish_reason;
-                                    final_tool_calls.clear();
-                                    info!("MCP synthesis round: succeeded — text content emitted");
-                                } else {
-                                    warn!("MCP synthesis round: produced no text either; surfacing degenerate result");
-                                }
-                            }
-                            Err(e) => warn!(error = %e, "MCP synthesis round: collect_round failed"),
-                        }
-                    }
-                    Err(e) => warn!(error = %e, "MCP synthesis round: submit failed"),
-                }
-            }
-        }
-
-        // Loop-wide bookkeeping: token rollup + intermediate-job cleanup
-        //   + ONE S3 turn + ONE conversation-counter increment.
+        // ── Constrained-decoding MCP loop (unified path) ─────────────────────
+        // Every MCP-routed request runs through forced-JSON. The schema's
+        // `oneOf` branches enforce the dispatch contract via llama.cpp GBNF
+        // logit masking, so the model literally cannot emit non-JSON or
+        // disclaimer prose ("I don't have access to real-time data") in
+        // place of a tool call or final answer. The legacy native path
+        // (model self-decides) was deleted in favour of this single path,
+        // along with its S23 convergence boundary and S24 synthesis fallback
+        // — both were reactive workarounds for the native path's failure
+        // modes (conv_33AfPaddqdXSiqIHX081T) that constrained decoding
+        // prevents structurally.
         //
-        // Single-writer policy (revised 2026-05-01): runner skips S3 +
-        // counters when `job.mcp_loop_id IS Some` (see `runner.rs::run_job`).
-        // Bridge persists exactly one consolidated `TurnRecord` for the
-        // entire loop and bumps `conversations.turn_count` by 1, so a user
-        // question with N agentic rounds maps to one logical turn carrying
-        // every round's `tool_calls` array (UI surfaces "MCP {N}회" from the
-        // turn's `tool_calls.len()`).
-        if let Some(ref fid) = first_job_id {
-            let pg = &state.pg_pool;
-
-            let _ = sqlx::query(
-                "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3"
-            )
-            .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-            .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-            .bind(fid.0)
-            .execute(pg)
-            .await
-            .map_err(|e| warn!(job_id = %fid.0, error = %e, "MCP: failed to update job tokens"));
-
-            // Remove intermediate round jobs — dashboard shows only the first job
-            if !intermediate_job_ids.is_empty() {
-                let _ = sqlx::query(
-                    "DELETE FROM inference_jobs WHERE id = ANY($1)"
-                )
-                .bind(&intermediate_job_ids)
-                .execute(pg)
-                .await
-                .map_err(|e| warn!(error = %e, "MCP: failed to cleanup intermediate jobs"));
-            }
-
-            // Bridge-owned S3 turn write (single writer for MCP loops).
-            if let Some(ref store) = state.message_store {
-                let owner_id = caller.account_id()
-                    .or(caller.api_key_id())
-                    .unwrap_or(fid.0);
-                let s3_key = conversation_id.unwrap_or(fid.0);
-                let date = chrono::Utc::now().date_naive();
-                let mut record = store.get_conversation(owner_id, date, s3_key).await
-                    .ok().flatten()
-                    .unwrap_or_else(crate::application::ports::outbound::message_store::ConversationRecord::new);
-
-                let tool_calls_val = if all_mcp_tool_calls.is_empty() {
-                    None
-                } else {
-                    Some(serde_json::Value::Array(all_mcp_tool_calls.clone()))
-                };
-                let result_text = if content.is_empty() { None } else { Some(content.clone()) };
-
-                record.turns.push(crate::application::ports::outbound::message_store::ConversationTurn::Regular(
-                    crate::application::ports::outbound::message_store::TurnRecord {
-                        job_id: fid.0,
-                        prompt: extract_last_user_prompt(&messages),
-                        messages: Some(serde_json::Value::Array(messages.clone())),
-                        tool_calls: tool_calls_val,
-                        result: result_text,
-                        model_name: Some(model.clone()),
-                        created_at: chrono::Utc::now().to_rfc3339(),
-                        compressed: None,
-                        vision_analysis: None,
-                    }
-                ));
-
-                if let Err(e) = store.put_conversation(owner_id, date, s3_key, &record).await {
-                    warn!(job_id = %fid.0, error = %e, "MCP: bridge S3 turn write failed");
-                } else if let Some(conv_id) = conversation_id {
-                    if let Some(ref pool) = state.valkey_pool {
-                        use fred::prelude::*;
-                        let cache_key = crate::infrastructure::outbound::valkey_keys::conversation_record(conv_id);
-                        if let Err(e) = pool.del::<i64, _>(cache_key).await {
-                            tracing::warn!(error = %e, "MCP: valkey DEL conversation cache failed");
-                        }
-                    }
-                }
-            }
-
-            // Bump turn_count by 1 for the entire loop (runner skipped this
-            // for every mcp-loop round, so this is the sole increment).
-            // Mirrors `PostgresJobRepository::update_conversation_counters`.
-            if let Some(conv_id) = conversation_id {
-                let _ = sqlx::query(
-                    "UPDATE conversations \
-                        SET turn_count = turn_count + 1, \
-                            total_prompt_tokens = total_prompt_tokens + $1, \
-                            total_completion_tokens = total_completion_tokens + $2, \
-                            model_name = COALESCE(model_name, $3), \
-                            updated_at = now() \
-                      WHERE id = $4"
-                )
-                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-                .bind(&model)
-                .bind(conv_id)
-                .execute(pg)
-                .await
-                .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "MCP: turn_count increment failed"));
-            }
+        // SDD: `.specs/veronex/mcp-constrained-decoding-unification.md`.
+        if all_tools.is_empty() {
+            // Nothing to schedule — caller falls back to non-MCP plain
+            // chat completion path.
+            return None;
         }
-
-        Some(McpLoopResult {
-            content,
-            tool_calls: final_tool_calls,
-            prompt_tokens: total_prompt_tokens,
-            completion_tokens: total_completion_tokens,
-            finish_reason,
-            rounds,
-            streamed_via_tap,
-        })
+        let _ = sse_tap_tx; // Reserved for future final-answer streaming (SDD §3.7).
+        let _ = response_format; // Overridden by the constrained-decoding schema.
+        self.run_loop_forced_json(
+            state,
+            caller,
+            model,
+            messages,
+            all_tools,
+            conversation_id,
+            stop,
+            seed,
+            None,
+            frequency_penalty,
+            presence_penalty,
+            allowed_servers,
+            max_rounds,
+        )
+        .await
     }
 
     // ── Forced-JSON shim path ──────────────────────────────────────────────────
@@ -804,8 +337,9 @@ impl McpBridgeAdapter {
         max_rounds: u8,
     ) -> Option<McpLoopResult> {
         use super::forced_json::{
-            build_forced_json_schema, build_forced_json_system_prompt,
-            parse_forced_action, schema_to_response_format, ForcedAction,
+            allow_final_for_round, build_forced_json_schema,
+            build_forced_json_system_prompt, parse_forced_action,
+            schema_to_response_format, ForcedAction,
         };
 
         // System prompt is round-invariant. Schema is round-aware (see in-loop
@@ -832,12 +366,15 @@ impl McpBridgeAdapter {
         let tenant_id = caller.account_id().map(|id| id.to_string()).unwrap_or_default();
 
         for round in 0..max_rounds {
-            // ── Round-aware schema: gate the `final` branch ──────────────────
+            // ── Round-aware schema: gate the `final` and `refuse` branches ──
             // Round 0 (no tool results yet): allow_final=false → model has no
-            // logit space to emit `{"action":"final",...}`, so it MUST pick a
-            // tool branch. Once any tool has been called, allow_final=true and
-            // the model can either keep gathering or terminate.
-            let allow_final = !all_mcp_tool_calls.is_empty();
+            // logit space to emit `{"action":"final",...}` or
+            // `{"action":"refuse",...}`, so it MUST pick a tool branch. Once
+            // any tool has been called, allow_final=true and the model can
+            // either keep gathering, terminate via `final`, or — if no
+            // available tool can answer — refuse with a structured reason.
+            // SDD: `.specs/veronex/mcp-constrained-decoding-unification.md` §3.6.
+            let allow_final = allow_final_for_round(all_mcp_tool_calls.len());
             let schema = match build_forced_json_schema(&all_tools, allow_final) {
                 Some(s) => s,
                 None => {
@@ -913,6 +450,11 @@ impl McpBridgeAdapter {
             rounds = round + 1;
 
             // ── Parse the model's JSON action ─────────────────────────────────
+            // `allow_final_for_round` (in forced_json.rs) keeps round 0
+            // schema tool-only — the parser cannot return Final/Refuse
+            // before any tool executes. Once allow_final is true, the model
+            // may terminate via Final (synthesised answer using tool results)
+            // or Refuse (no available tool can answer the question).
             match parse_forced_action(&round_result.content) {
                 ForcedAction::Tool { name, args } => {
                     let args_str = serde_json::to_string(&args).unwrap_or_default();
@@ -984,6 +526,15 @@ impl McpBridgeAdapter {
                 }
                 ForcedAction::Final { answer } => {
                     content = answer;
+                    break;
+                }
+                ForcedAction::Refuse { reason } => {
+                    info!(
+                        round,
+                        reason_len = reason.len(),
+                        "forced-JSON: model refused — no available tool covers the question"
+                    );
+                    content = format!("{}{}", super::forced_json::REFUSAL_PREFIX, reason);
                     break;
                 }
             }
@@ -1290,72 +841,21 @@ impl ToolCallRecord {
     }
 }
 
-/// Context window pruning: keep the last `keep_rounds` rounds of tool messages verbatim.
-/// Earlier tool messages are replaced with a compact summary to prevent unbounded growth.
-///
-/// Strategy: walk backwards from the end, counting assistant-with-tool_calls turns.
-/// When we find the boundary (older than `keep_rounds` turns), replace tool-role messages
-/// before the boundary with a single "tool" message summarising the truncated data.
-fn prune_tool_messages(messages: &mut [Value], keep_rounds: usize) {
-    // Find assistant+tool_calls boundaries (each marks one tool round).
-    // We walk the slice collecting (index, round_number) for assistant messages that have tool_calls.
-    let boundaries: Vec<usize> = messages
-        .iter()
-        .enumerate()
-        .filter_map(|(i, m)| {
-            if m["role"].as_str() == Some("assistant") && m["tool_calls"].is_array() {
-                Some(i)
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    if boundaries.len() <= keep_rounds {
-        return; // Nothing to prune yet.
-    }
-
-    // The cut point: everything before boundaries[len - keep_rounds] is "old".
-    // .get() guards keep_rounds=0 (len - 0 == len = OOB) → prune everything.
-    let cut = boundaries
-        .get(boundaries.len().saturating_sub(keep_rounds))
-        .copied()
-        .unwrap_or(messages.len());
-
-    // Replace all tool-role messages before `cut` with a compact summary.
-    // We replace them in-place rather than splicing to avoid index shifts.
-    // Mark each old tool message with a compressed placeholder.
-    let mut replaced = 0usize;
-    for msg in &mut messages[..cut] {
-        if msg["role"].as_str() == Some("tool") {
-            let name = msg["name"].as_str().unwrap_or("tool").to_string();
-            let tool_call_id = msg["tool_call_id"].as_str().unwrap_or("").to_string();
-            *msg = serde_json::json!({
-                "role": "tool",
-                "tool_call_id": tool_call_id,
-                "name": name,
-                "content": "[result truncated — see earlier context]"
-            });
-            replaced += 1;
-        }
-    }
-
-    if replaced > 0 {
-        debug!(replaced, cut, "MCP context pruning: compressed old tool messages");
-    }
-}
-
 struct RoundResult {
     content: String,
+    /// Populated by `collect_round` for OpenAI-spec parity; the unified
+    /// constrained-decoding path only reads `content`. Retained so that a
+    /// future `final.answer` token-streaming SDD can reuse the round-collector
+    /// without re-plumbing fields. SDD `.specs/veronex/mcp-constrained-decoding-unification.md` §3.7.
+    #[allow(dead_code)]
     tool_calls: Vec<Value>,
     prompt_tokens: u32,
     completion_tokens: u32,
+    /// See `tool_calls` doc — populated for future use, not currently read.
+    #[allow(dead_code)]
     finish_reason: String,
-    /// True if the round produced text content that was streamed via the
-    /// `sse_tx` tap. When this is set, the caller MUST treat the round as
-    /// final (don't execute MCP tools even if `tool_calls` is also non-empty —
-    /// see SDD `.specs/veronex/bridge-mcp-loop-correctness.md` §3.3 for
-    /// mixed-delta safety rationale).
+    /// See `tool_calls` doc — populated for future use, not currently read.
+    #[allow(dead_code)]
     passthrough_streamed: bool,
 }
 
@@ -1561,69 +1061,6 @@ fn extract_last_user_prompt(messages: &[Value]) -> String {
         .and_then(|m| m["content"].as_str())
         .unwrap_or("")
         .to_string()
-}
-
-/// Walk the messages array and concatenate every `role:"tool"` entry's
-/// content into a single text block, suitable for injection as a
-/// synthesis-round system message. Returns `None` when no tool entries
-/// were found (caller skips the synthesis dispatch). Each entry is
-/// labelled with its index for the model's reading convenience.
-///
-/// SDD: `.specs/veronex/mcp-synthesis-round.md` §3.1.
-fn extract_tool_results(messages: &[Value]) -> Option<String> {
-    let mut parts = Vec::new();
-    for m in messages.iter() {
-        if m["role"].as_str() != Some("tool") {
-            continue;
-        }
-        if let Some(content) = m["content"].as_str() {
-            if !content.is_empty() {
-                let label = m["name"].as_str().unwrap_or("tool");
-                parts.push(format!("[{}] {}", label, content));
-            }
-        }
-    }
-    if parts.is_empty() { None } else { Some(parts.join("\n\n---\n\n")) }
-}
-
-/// Build the messages array for a synthesis round. Three entries:
-///   1. system — directive forbidding tool calls and demanding final text
-///   2. user — the original prompt
-///   3. system — the accumulated tool results as plain text
-///
-/// Critically, this contains NO `assistant.tool_calls` entries, so the
-/// model has no in-context pattern to mimic. Combined with the request's
-/// `tools: None`, the model has nothing callable and must emit text.
-///
-/// SDD: `.specs/veronex/mcp-synthesis-round.md` §3.2.
-fn build_synthesis_messages(original_prompt: &str, tool_results_text: &str) -> Vec<Value> {
-    let date_anchor = crate::infrastructure::inbound::http::inference_helpers::build_current_datetime_system_text();
-    vec![
-        serde_json::json!({
-            "role": "system",
-            "content": date_anchor,
-        }),
-        serde_json::json!({
-            "role": "system",
-            "content": "You are answering the user's question. \
-                Tools have already been used to gather the information \
-                you need. Do NOT call any tools. Using the tool results \
-                provided below, produce a complete, well-structured \
-                answer to the user's question in their original language. \
-                Honor the date constraints in the system message above — \
-                every \"today\" / \"recent\" / \"현재\" / \"최근\" in your \
-                response refers to the current date listed there, not to \
-                your training cutoff."
-        }),
-        serde_json::json!({
-            "role": "user",
-            "content": original_prompt,
-        }),
-        serde_json::json!({
-            "role": "system",
-            "content": format!("Tool results gathered:\n\n{}", tool_results_text),
-        }),
-    ]
 }
 
 /// Strip `mcp_{server}_` prefix → raw tool name as registered on the MCP server.
@@ -1892,94 +1329,6 @@ mod tests {
         assert_eq!(extract_last_user_prompt(&msgs), "");
     }
 
-    // ── prune_tool_messages ───────────────────────────────────────────────────
-
-    #[test]
-    fn prune_tool_messages_no_op_within_keep_rounds() {
-        let mut msgs = vec![
-            serde_json::json!({"role": "user", "content": "ask"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "search", "content": "result"}),
-        ];
-        let original = msgs.clone();
-        prune_tool_messages(&mut msgs, 2); // 1 round ≤ 2 keep → no change
-        assert_eq!(msgs, original);
-    }
-
-    #[test]
-    fn prune_tool_messages_replaces_old_tool_content() {
-        // 2 rounds; keep_rounds=1 → first round's tool message is pruned
-        let mut msgs = vec![
-            serde_json::json!({"role": "user", "content": "ask"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "search", "content": "old"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c1", "name": "fetch", "content": "new"}),
-        ];
-        prune_tool_messages(&mut msgs, 1);
-        assert_eq!(
-            msgs[2]["content"].as_str(),
-            Some("[result truncated — see earlier context]")
-        );
-        // Recent round is preserved
-        assert_eq!(msgs[4]["content"].as_str(), Some("new"));
-    }
-
-    #[test]
-    fn prune_tool_messages_preserves_non_tool_roles() {
-        let mut msgs = vec![
-            serde_json::json!({"role": "user", "content": "ask"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "s", "content": "r"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c1", "name": "f", "content": "n"}),
-        ];
-        prune_tool_messages(&mut msgs, 1);
-        // user message untouched
-        assert_eq!(msgs[0]["content"].as_str(), Some("ask"));
-        // assistant with tool_calls untouched (not a "tool" role)
-        assert!(msgs[1]["tool_calls"].is_array());
-        assert!(msgs[3]["tool_calls"].is_array());
-    }
-
-    #[test]
-    fn prune_tool_messages_no_op_when_no_rounds() {
-        let mut msgs = vec![
-            serde_json::json!({"role": "user", "content": "hello"}),
-            serde_json::json!({"role": "assistant", "content": "world"}),
-        ];
-        let original = msgs.clone();
-        prune_tool_messages(&mut msgs, 1);
-        assert_eq!(msgs, original);
-    }
-
-    #[test]
-    fn prune_tool_messages_tool_call_id_preserved_after_prune() {
-        // Verifies the truncation stub keeps tool_call_id so Ollama can still map responses.
-        let mut msgs = vec![
-            serde_json::json!({"role": "user", "content": "q"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "abc123"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "abc123", "name": "fn", "content": "data"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "xyz"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "xyz", "name": "g", "content": "ok"}),
-        ];
-        prune_tool_messages(&mut msgs, 1);
-        assert_eq!(msgs[2]["tool_call_id"].as_str(), Some("abc123"));
-        assert_eq!(msgs[2]["name"].as_str(), Some("fn"));
-    }
-
-    #[test]
-    fn prune_tool_messages_zero_keep_rounds_prunes_all_tool_content() {
-        let mut msgs = vec![
-            serde_json::json!({"role": "user", "content": "ask"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "t", "content": "old"}),
-        ];
-        prune_tool_messages(&mut msgs, 0);
-        // keep_rounds=0 → every tool message is pruned
-        assert_eq!(msgs[2]["content"].as_str(), Some("[result truncated — see earlier context]"));
-    }
-
     // ── convert_ollama_tool_call — edge cases ─────────────────────────────────
 
     #[test]
@@ -2219,152 +1568,14 @@ mod tests {
         };
     }
 
-    // ── S23 Tier C: convergence boundary condition ───────────────────────────
-
-    /// The boundary system message is injected iff all three hold:
-    ///   1. `round + 1 == max_rounds`  (we are about to dispatch the last round)
-    ///   2. `rounds > 0`               (at least one prior MCP round exists)
-    ///   3. `content.is_empty()`       (no text has been produced yet)
-    /// This test pins the predicate so future refactors can't silently weaken it.
-    #[test]
-    fn convergence_boundary_predicate_matches_sdd() {
-        fn should_inject(round: usize, max_rounds: usize, rounds: usize, has_content: bool) -> bool {
-            round + 1 == max_rounds && rounds > 0 && !has_content
-        }
-        // Final round, prior tool calls, no text → inject.
-        assert!(should_inject(4, 5, 1, false));
-        assert!(should_inject(4, 5, 3, false));
-        // Final round but no prior rounds → don't inject (model hasn't tried yet).
-        assert!(!should_inject(4, 5, 0, false));
-        // Final round but already produced text → don't inject (already converging).
-        assert!(!should_inject(4, 5, 3, true));
-        // Not the final round → don't inject yet.
-        assert!(!should_inject(0, 5, 0, false));
-        assert!(!should_inject(3, 5, 1, false));
-        // max_rounds=1 edge: round=0 IS the final round → inject only when rounds>0,
-        // which can never happen at round 0 → never injects on max_rounds=1. Correct.
-        assert!(!should_inject(0, 1, 0, false));
-    }
-
-    /// The boundary system message must instruct text-only output and forbid
-    /// further tool calls. Asserting structure protects against accidental
-    /// prompt edits that could re-open the convergence gap.
-    #[test]
-    fn convergence_boundary_message_shape() {
-        let msg = serde_json::json!({
-            "role": "system",
-            "content": "You have reached the final response step. \
-                Tools are no longer available. Using the tool \
-                results already provided above, produce the user's \
-                final answer in natural language now."
-        });
-        assert_eq!(msg["role"].as_str(), Some("system"));
-        let content = msg["content"].as_str().unwrap();
-        assert!(content.contains("final response step"));
-        assert!(content.contains("Tools are no longer available"));
-        assert!(content.contains("final answer in natural language"));
-    }
-
-    /// On the convergence boundary, the bridge must omit the `tools` field
-    /// entirely on the final-round submit. A system message alone is not
-    /// sufficient on Ollama-served, tool-eager models because Ollama's
-    /// OpenAI-compat endpoint silently drops `tool_choice` (Ollama issue
-    /// #8421/#11171), so the only way to suppress tool emission is to
-    /// remove the tool schemas from the request. This test pins that
-    /// behaviour.
-    #[test]
-    fn convergence_boundary_omits_tools() {
-        // Same predicate the bridge uses; if it changes, this test trips.
-        fn should_omit_tools(round: usize, max_rounds: usize, rounds: usize, has_content: bool) -> bool {
-            round + 1 == max_rounds && rounds > 0 && !has_content
-        }
-        // Mirror the production conditional: `tools = if convergence_boundary { None } else { Some(...) }`
-        let tools = serde_json::json!([{ "type": "function", "function": { "name": "x" } }]);
-        let on_boundary = should_omit_tools(4, 5, 1, false);
-        let on_normal_round = should_omit_tools(0, 5, 0, false);
-        let final_tools_on_boundary: Option<&serde_json::Value> = if on_boundary { None } else { Some(&tools) };
-        let final_tools_on_normal: Option<&serde_json::Value> = if on_normal_round { None } else { Some(&tools) };
-        assert!(final_tools_on_boundary.is_none(), "boundary round must drop tools schema");
-        assert!(final_tools_on_normal.is_some(), "non-boundary rounds keep tools schema");
-    }
-
-    // ── S24 synthesis-round helpers ─────────────────────────────────────────
-
-    #[test]
-    fn extract_tool_results_none_when_no_tool_messages() {
-        let msgs = vec![
-            serde_json::json!({"role": "user", "content": "hi"}),
-            serde_json::json!({"role": "assistant", "content": "hello"}),
-        ];
-        assert!(extract_tool_results(&msgs).is_none());
-    }
-
-    #[test]
-    fn extract_tool_results_concats_in_order() {
-        let msgs = vec![
-            serde_json::json!({"role": "user", "content": "ask"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c0"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c0", "name": "search", "content": "result A"}),
-            serde_json::json!({"role": "assistant", "content": "", "tool_calls": [{"id": "c1"}]}),
-            serde_json::json!({"role": "tool", "tool_call_id": "c1", "name": "search", "content": "result B"}),
-        ];
-        let out = extract_tool_results(&msgs).expect("two tool entries → Some");
-        assert!(out.contains("[search] result A"));
-        assert!(out.contains("[search] result B"));
-        // Order preserved: A appears before B.
-        assert!(out.find("result A").unwrap() < out.find("result B").unwrap());
-    }
-
-    #[test]
-    fn extract_tool_results_skips_empty_content() {
-        let msgs = vec![
-            serde_json::json!({"role": "tool", "name": "search", "content": ""}),
-            serde_json::json!({"role": "tool", "name": "search", "content": "real"}),
-        ];
-        let out = extract_tool_results(&msgs).expect("one non-empty entry");
-        assert!(out.contains("real"));
-        assert!(!out.contains("[search] \n"));
-    }
-
-    #[test]
-    fn build_synthesis_messages_has_no_tool_calls_or_assistant_history() {
-        let msgs = build_synthesis_messages("question", "results");
-        // 4 entries: date-anchor system, directive system, user prompt, tool-results system.
-        assert_eq!(msgs.len(), 4);
-        assert_eq!(msgs[0]["role"], "system"); // date anchor
-        assert_eq!(msgs[1]["role"], "system"); // directive (no tools)
-        assert_eq!(msgs[2]["role"], "user");
-        assert_eq!(msgs[2]["content"], "question");
-        assert_eq!(msgs[3]["role"], "system"); // tool results
-        // Crucial: zero assistant.tool_calls entries — the whole point of S24.
-        assert!(msgs.iter().all(|m| m["role"].as_str() != Some("assistant")));
-        assert!(msgs.iter().all(|m| !m["tool_calls"].is_array()));
-        // Sanity: the directive forbids tool calls AND honors the date anchor.
-        let date_anchor = msgs[0]["content"].as_str().unwrap();
-        assert!(date_anchor.contains("Today is"), "date anchor present: {date_anchor}");
-        let directive = msgs[1]["content"].as_str().unwrap();
-        assert!(directive.contains("Do NOT call any tools"));
-        assert!(directive.contains("date constraints"), "directive references date anchor: {directive}");
-    }
-
-    /// Synthesis fires iff: loop exited with no text content AND at least one
-    /// tool round executed AND tool results exist. Pin the predicate here so
-    /// future refactors don't silently weaken the safety net.
-    #[test]
-    fn synthesis_dispatch_predicate_matches_sdd() {
-        fn should_synthesize(content_empty: bool, rounds: u8, has_tool_results: bool) -> bool {
-            content_empty && rounds > 0 && has_tool_results
-        }
-        // Fires: degenerate run with results.
-        assert!(should_synthesize(true, 5, true));
-        assert!(should_synthesize(true, 1, true));
-        // Skips: model already produced text.
-        assert!(!should_synthesize(false, 5, true));
-        // Skips: no tool rounds executed (nothing to synthesize from).
-        assert!(!should_synthesize(true, 0, true));
-        // Skips: tool rounds executed but results extraction returned None.
-        assert!(!should_synthesize(true, 5, false));
-    }
+    // ── Constrained-decoding loop invariants ──────────────────────────────────
+    //
+    // S23 (convergence boundary) and S24 (synthesis fallback) tests removed
+    // alongside the legacy native path. Their failure modes are prevented
+    // structurally by the unified forced-JSON path: the schema's
+    // `allow_final` gating + grammar mask makes "I don't have access" prose,
+    // empty content, and tool_call mimicry impossible to emit.
+    // SDD: `.specs/veronex/mcp-constrained-decoding-unification.md`.
 
     #[test]
     fn tap_mode_xor_invariant_holds_per_openai_spec() {

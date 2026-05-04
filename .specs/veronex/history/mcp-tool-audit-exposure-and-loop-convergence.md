@@ -1,6 +1,12 @@
 # SDD: MCP tool_calls audit exposure + loop convergence forcing
 
-> Status: planned | Change type: **Fix** (data exposure gap + missing loop termination invariant) | Created: 2026-04-30 | Owner: TBD
+> **Status: SUPERSEDED 2026-05-04** — the loop-convergence half (S23 boundary)
+> was deleted by `.specs/veronex/mcp-constrained-decoding-unification.md`.
+> The audit-exposure half (S3 single-source for `tool_calls[]`, retired PG
+> `mcp_loop_tool_calls`) remains canonical and is documented in
+> `docs/llm/inference/mcp.md` § "Audit exposure".
+>
+> Status: superseded | Change type: **Fix** (data exposure gap + missing loop termination invariant) | Created: 2026-04-30 | Owner: TBD
 > CDD basis: `docs/llm/inference/mcp.md` · `docs/llm/inference/mcp-schema.md` (mcp_loop_tool_calls) · `docs/llm/flows/mcp.md` · `docs/llm/inference/job-lifecycle.md` (TurnRecord persistence) · `docs/llm/inference/session-grouping.md`
 > Scope reference: `.specs/veronex/history/scopes/2026-Q2.md` row TBD
 
