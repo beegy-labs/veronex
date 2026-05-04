@@ -150,6 +150,25 @@
     .vds-xs\:select-all { user-select: all; }
     .vds-xs\:pointer-events-auto { pointer-events: auto; }
     .vds-xs\:pointer-events-none { pointer-events: none; }
+    .vds-xs\:touch-auto { touch-action: auto; }
+    .vds-xs\:touch-none { touch-action: none; }
+    .vds-xs\:touch-manipulation { touch-action: manipulation; }
+    .vds-xs\:touch-pan-x { touch-action: pan-x; }
+    .vds-xs\:touch-pan-y { touch-action: pan-y; }
+    .vds-xs\:touch-pan-left { touch-action: pan-left; }
+    .vds-xs\:touch-pan-right { touch-action: pan-right; }
+    .vds-xs\:touch-pan-up { touch-action: pan-up; }
+    .vds-xs\:touch-pan-down { touch-action: pan-down; }
+    .vds-xs\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-xs\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-xs\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-xs\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-xs\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-xs\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-xs\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-xs\:overscroll-none { overscroll-behavior: none; }
+    .vds-xs\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-xs\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-xs\:w-0 { width: var(--vds-spacing-0); }
     .vds-xs\:h-0 { height: var(--vds-spacing-0); }
     .vds-xs\:min-w-0 { min-width: var(--vds-spacing-0); }
@@ -1464,6 +1483,25 @@
     .vds-sm\:select-all { user-select: all; }
     .vds-sm\:pointer-events-auto { pointer-events: auto; }
     .vds-sm\:pointer-events-none { pointer-events: none; }
+    .vds-sm\:touch-auto { touch-action: auto; }
+    .vds-sm\:touch-none { touch-action: none; }
+    .vds-sm\:touch-manipulation { touch-action: manipulation; }
+    .vds-sm\:touch-pan-x { touch-action: pan-x; }
+    .vds-sm\:touch-pan-y { touch-action: pan-y; }
+    .vds-sm\:touch-pan-left { touch-action: pan-left; }
+    .vds-sm\:touch-pan-right { touch-action: pan-right; }
+    .vds-sm\:touch-pan-up { touch-action: pan-up; }
+    .vds-sm\:touch-pan-down { touch-action: pan-down; }
+    .vds-sm\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-sm\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-sm\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-sm\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-sm\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-sm\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-sm\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-sm\:overscroll-none { overscroll-behavior: none; }
+    .vds-sm\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-sm\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-sm\:w-0 { width: var(--vds-spacing-0); }
     .vds-sm\:h-0 { height: var(--vds-spacing-0); }
     .vds-sm\:min-w-0 { min-width: var(--vds-spacing-0); }
@@ -2778,6 +2816,25 @@
     .vds-md\:select-all { user-select: all; }
     .vds-md\:pointer-events-auto { pointer-events: auto; }
     .vds-md\:pointer-events-none { pointer-events: none; }
+    .vds-md\:touch-auto { touch-action: auto; }
+    .vds-md\:touch-none { touch-action: none; }
+    .vds-md\:touch-manipulation { touch-action: manipulation; }
+    .vds-md\:touch-pan-x { touch-action: pan-x; }
+    .vds-md\:touch-pan-y { touch-action: pan-y; }
+    .vds-md\:touch-pan-left { touch-action: pan-left; }
+    .vds-md\:touch-pan-right { touch-action: pan-right; }
+    .vds-md\:touch-pan-up { touch-action: pan-up; }
+    .vds-md\:touch-pan-down { touch-action: pan-down; }
+    .vds-md\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-md\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-md\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-md\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-md\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-md\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-md\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-md\:overscroll-none { overscroll-behavior: none; }
+    .vds-md\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-md\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-md\:w-0 { width: var(--vds-spacing-0); }
     .vds-md\:h-0 { height: var(--vds-spacing-0); }
     .vds-md\:min-w-0 { min-width: var(--vds-spacing-0); }
@@ -4092,6 +4149,25 @@
     .vds-lg\:select-all { user-select: all; }
     .vds-lg\:pointer-events-auto { pointer-events: auto; }
     .vds-lg\:pointer-events-none { pointer-events: none; }
+    .vds-lg\:touch-auto { touch-action: auto; }
+    .vds-lg\:touch-none { touch-action: none; }
+    .vds-lg\:touch-manipulation { touch-action: manipulation; }
+    .vds-lg\:touch-pan-x { touch-action: pan-x; }
+    .vds-lg\:touch-pan-y { touch-action: pan-y; }
+    .vds-lg\:touch-pan-left { touch-action: pan-left; }
+    .vds-lg\:touch-pan-right { touch-action: pan-right; }
+    .vds-lg\:touch-pan-up { touch-action: pan-up; }
+    .vds-lg\:touch-pan-down { touch-action: pan-down; }
+    .vds-lg\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-lg\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-lg\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-lg\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-lg\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-lg\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-lg\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-lg\:overscroll-none { overscroll-behavior: none; }
+    .vds-lg\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-lg\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-lg\:w-0 { width: var(--vds-spacing-0); }
     .vds-lg\:h-0 { height: var(--vds-spacing-0); }
     .vds-lg\:min-w-0 { min-width: var(--vds-spacing-0); }
@@ -5406,6 +5482,25 @@
     .vds-xl\:select-all { user-select: all; }
     .vds-xl\:pointer-events-auto { pointer-events: auto; }
     .vds-xl\:pointer-events-none { pointer-events: none; }
+    .vds-xl\:touch-auto { touch-action: auto; }
+    .vds-xl\:touch-none { touch-action: none; }
+    .vds-xl\:touch-manipulation { touch-action: manipulation; }
+    .vds-xl\:touch-pan-x { touch-action: pan-x; }
+    .vds-xl\:touch-pan-y { touch-action: pan-y; }
+    .vds-xl\:touch-pan-left { touch-action: pan-left; }
+    .vds-xl\:touch-pan-right { touch-action: pan-right; }
+    .vds-xl\:touch-pan-up { touch-action: pan-up; }
+    .vds-xl\:touch-pan-down { touch-action: pan-down; }
+    .vds-xl\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-xl\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-xl\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-xl\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-xl\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-xl\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-xl\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-xl\:overscroll-none { overscroll-behavior: none; }
+    .vds-xl\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-xl\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-xl\:w-0 { width: var(--vds-spacing-0); }
     .vds-xl\:h-0 { height: var(--vds-spacing-0); }
     .vds-xl\:min-w-0 { min-width: var(--vds-spacing-0); }
@@ -6720,6 +6815,25 @@
     .vds-2xl\:select-all { user-select: all; }
     .vds-2xl\:pointer-events-auto { pointer-events: auto; }
     .vds-2xl\:pointer-events-none { pointer-events: none; }
+    .vds-2xl\:touch-auto { touch-action: auto; }
+    .vds-2xl\:touch-none { touch-action: none; }
+    .vds-2xl\:touch-manipulation { touch-action: manipulation; }
+    .vds-2xl\:touch-pan-x { touch-action: pan-x; }
+    .vds-2xl\:touch-pan-y { touch-action: pan-y; }
+    .vds-2xl\:touch-pan-left { touch-action: pan-left; }
+    .vds-2xl\:touch-pan-right { touch-action: pan-right; }
+    .vds-2xl\:touch-pan-up { touch-action: pan-up; }
+    .vds-2xl\:touch-pan-down { touch-action: pan-down; }
+    .vds-2xl\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-2xl\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-2xl\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-2xl\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-2xl\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-2xl\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-2xl\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-2xl\:overscroll-none { overscroll-behavior: none; }
+    .vds-2xl\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-2xl\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-2xl\:w-0 { width: var(--vds-spacing-0); }
     .vds-2xl\:h-0 { height: var(--vds-spacing-0); }
     .vds-2xl\:min-w-0 { min-width: var(--vds-spacing-0); }
@@ -8034,6 +8148,25 @@
     .vds-3xl\:select-all { user-select: all; }
     .vds-3xl\:pointer-events-auto { pointer-events: auto; }
     .vds-3xl\:pointer-events-none { pointer-events: none; }
+    .vds-3xl\:touch-auto { touch-action: auto; }
+    .vds-3xl\:touch-none { touch-action: none; }
+    .vds-3xl\:touch-manipulation { touch-action: manipulation; }
+    .vds-3xl\:touch-pan-x { touch-action: pan-x; }
+    .vds-3xl\:touch-pan-y { touch-action: pan-y; }
+    .vds-3xl\:touch-pan-left { touch-action: pan-left; }
+    .vds-3xl\:touch-pan-right { touch-action: pan-right; }
+    .vds-3xl\:touch-pan-up { touch-action: pan-up; }
+    .vds-3xl\:touch-pan-down { touch-action: pan-down; }
+    .vds-3xl\:touch-pinch-zoom { touch-action: pinch-zoom; }
+    .vds-3xl\:overscroll-auto { overscroll-behavior: auto; }
+    .vds-3xl\:overscroll-x-auto { overscroll-behavior-x: auto; }
+    .vds-3xl\:overscroll-y-auto { overscroll-behavior-y: auto; }
+    .vds-3xl\:overscroll-contain { overscroll-behavior: contain; }
+    .vds-3xl\:overscroll-x-contain { overscroll-behavior-x: contain; }
+    .vds-3xl\:overscroll-y-contain { overscroll-behavior-y: contain; }
+    .vds-3xl\:overscroll-none { overscroll-behavior: none; }
+    .vds-3xl\:overscroll-x-none { overscroll-behavior-x: none; }
+    .vds-3xl\:overscroll-y-none { overscroll-behavior-y: none; }
     .vds-3xl\:w-0 { width: var(--vds-spacing-0); }
     .vds-3xl\:h-0 { height: var(--vds-spacing-0); }
     .vds-3xl\:min-w-0 { min-width: var(--vds-spacing-0); }
