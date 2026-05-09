@@ -79,7 +79,7 @@ $INFRA_OK && pass "All infrastructure services running"
 MC_USER="${MINIO_ROOT_USER:-veronex}"
 MC_PASS="${MINIO_ROOT_PASSWORD:-veronex123}"
 docker compose exec -T minio sh -c "mc alias set local http://localhost:9000 $MC_USER $MC_PASS" >/dev/null 2>&1 || true
-for bkt in veronex-messages veronex-images; do
+for bkt in veronex-messages veronex-images veronex-models; do
   if docker compose exec -T minio mc ls "local/$bkt" >/dev/null 2>&1; then
     pass "MinIO bucket '$bkt' exists"
   else
@@ -94,6 +94,18 @@ hdr "Phase 2: Authentication"
 cat > /tmp/_sched_login.json << EOF
 {"username":"$USERNAME","password":"$PASSWORD"}
 EOF
+
+# Wizard v2 status — confirms env > DB resolution. Storage env vars in
+# docker-compose mean needs_setup_storage should already be false on a
+# fresh cluster, so we skip the /v1/setup/storage call.
+SETUP_STATUS=$(curl -sf "$API/v1/setup/status" 2>/dev/null || echo "{}")
+NEEDS_ACCOUNT=$(echo "$SETUP_STATUS" | jv '["needs_setup_account"]' 2>/dev/null || echo "")
+NEEDS_STORAGE=$(echo "$SETUP_STATUS" | jv '["needs_setup_storage"]' 2>/dev/null || echo "")
+[ -n "$NEEDS_ACCOUNT" ] && pass "Setup status: needs_account=$NEEDS_ACCOUNT needs_storage=$NEEDS_STORAGE" \
+  || fail "Setup status v2 shape missing (got: $SETUP_STATUS)"
+[ "$NEEDS_STORAGE" = "False" ] || [ "$NEEDS_STORAGE" = "false" ] \
+  && pass "Storage already configured via env vars" \
+  || info "needs_setup_storage=$NEEDS_STORAGE (env vars not picked up — wizard would be required)"
 
 SETUP_CODE=$(curl -s -w "\n%{http_code}" "$API/v1/setup" \
   -H 'Content-Type: application/json' -d @/tmp/_sched_login.json | code)

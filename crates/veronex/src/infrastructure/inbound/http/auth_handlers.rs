@@ -511,25 +511,6 @@ pub async fn reset_password(
     Ok(StatusCode::NO_CONTENT)
 }
 
-// ── GET /v1/setup/status ──────────────────────────────────────────────────────
-
-#[derive(Serialize)]
-pub struct SetupStatusResponse {
-    pub needs_setup: bool,
-}
-
-/// Returns whether the first-run setup is needed (no super account exists yet).
-/// No authentication required.
-pub async fn setup_status(
-    State(state): State<AppState>,
-) -> Result<Json<SetupStatusResponse>, AppError> {
-    let accounts = state
-        .account_repo
-        .list_all()
-        .await?;
-    Ok(Json(SetupStatusResponse { needs_setup: accounts.is_empty() }))
-}
-
 // ── POST /v1/setup ────────────────────────────────────────────────────────────
 
 #[derive(Deserialize)]

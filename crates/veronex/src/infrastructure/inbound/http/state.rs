@@ -32,6 +32,7 @@ use crate::application::ports::outbound::ollama_model_repository::OllamaModelRep
 use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::app_config_repository::AppConfigRepository;
 use crate::application::ports::outbound::blob_registry::BlobRegistry;
 use crate::application::ports::outbound::install_attempts_log::InstallAttemptsLog;
 use crate::application::ports::outbound::modelfile_registry::ModelfileRegistry;
@@ -156,6 +157,10 @@ pub struct AppState {
     pub clickhouse_password: Option<Arc<str>>,
     pub clickhouse_db: Option<Arc<str>>,
     // ── Phase 2 — Modelfile registry + CAS blob store ────────────────────
+    /// Runtime app config (first-install wizard) — None only when
+    /// VERONEX_ENCRYPTION_KEY is unset (which would already prevent the
+    /// server from running in any production-grade configuration).
+    pub app_config_repo: Option<Arc<dyn AppConfigRepository>>,
     /// Modelfile registry. `None` until Phase 2 wiring lands in `main.rs`
     /// (and `test_support`); admin endpoints return 503 when absent so the
     /// AppState construction sites that haven't been updated still compile.

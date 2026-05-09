@@ -38,6 +38,7 @@ pub mod openai_embeddings_handlers;
 pub mod openai_completions_handlers;
 mod query_helpers;
 pub mod router;
+pub mod setup_handlers;
 pub mod state;
 pub mod usage_handlers;
 mod usage_queries;

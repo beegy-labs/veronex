@@ -16,6 +16,7 @@ use super::conversation_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
 use super::role_handlers;
+use super::setup_handlers;
 use super::admin_modelfile_handlers;
 use super::model_selection_handlers;
 use super::global_model_handlers;
@@ -192,6 +193,13 @@ fn build_jwt_router() -> Router<AppState> {
         .route(
             "/v1/admin/blobs/{sha256}",
             axum::routing::delete(admin_modelfile_handlers::delete_blob),
+        )
+        // First-run storage wizard + admin runtime config (Setup-B)
+        .route("/v1/setup/storage", post(setup_handlers::setup_storage))
+        .route("/v1/admin/config", get(setup_handlers::list_config))
+        .route(
+            "/v1/admin/config/{key}",
+            patch(setup_handlers::upsert_config).delete(setup_handlers::delete_config),
         )
         // Global model settings
         .route("/v1/models/global-settings", get(global_model_handlers::list_global_model_settings))
@@ -385,7 +393,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             get(mcp_handlers::list_mcp_targets),
         )
         // First-run setup (no auth — only usable before any account exists)
-        .route("/v1/setup/status", get(auth_handlers::setup_status))
+        .route("/v1/setup/status", get(setup_handlers::setup_status_v2))
         .route("/v1/setup", post(auth_handlers::setup))
         // Public auth routes (no middleware)
         .route("/v1/auth/login", post(auth_handlers::login))

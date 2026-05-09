@@ -135,6 +135,19 @@ CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 CREATE UNIQUE INDEX uq_llm_providers_llama_server_url ON llm_providers(url) WHERE provider_type = 'llama_server';
 
+-- ── App config (Phase 2 first-install wizard) ─────────────────────────────────
+-- Runtime-mutable configuration for self-hosted Veronex. Values are
+-- environment-overridable: bootstrap reads `env > app_config > default`.
+-- Secret rows store an aes-gcm ciphertext (re-uses VERONEX_ENCRYPTION_KEY,
+-- same master key as `llm_providers.api_key_encrypted`).
+CREATE TABLE app_config (
+    key             TEXT        PRIMARY KEY,
+    value_encrypted TEXT,                                -- NULL only for unset rows
+    is_secret       BOOLEAN     NOT NULL DEFAULT false,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by      UUID        REFERENCES accounts(id) ON DELETE SET NULL
+);
+
 -- ── Modelfile registry (Phase 2 — AI BaaS) ────────────────────────────────────
 -- CAS (Content-Addressable Storage) for GGUF binaries. sha256 is the SSOT key.
 -- Multiple veronex_models rows can reference the same gguf_blobs row (dedup).

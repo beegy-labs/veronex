@@ -406,6 +406,7 @@ pub(crate) fn make_app() -> axum::Router {
         clickhouse_db: None,
         vespa_environment: Arc::from(""),
         vespa_tenant_id: Arc::from(""),
+        app_config_repo: None,
         modelfile_registry: None,
         blob_registry: None,
         install_attempts_log: None,

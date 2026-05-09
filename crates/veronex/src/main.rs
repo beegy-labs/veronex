@@ -87,6 +87,18 @@ async fn async_main() -> Result<()> {
     // ── Bootstrap super account ────────────────────────────────────
     bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config, &infra.pg_pool).await;
 
+    // ── Wire Phase 2 model store (env > app_config > default) ──────
+    // Reuses the same master key as the provider registry; the wizard
+    // writes encrypted secrets to `app_config` and we decrypt on read.
+    // When required keys aren't set, returns all-None and admin endpoints
+    // surface 503 until the operator runs `/v1/setup/storage` and restarts.
+    let model_store = bootstrap::wire_model_store(&infra.pg_pool, config.gemini_encryption_key)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "model store wiring failed — Phase 2 disabled");
+            bootstrap::model_store::unconfigured()
+        });
+
     // ── Background tasks ───────────────────────────────────────────
     let shutdown = CancellationToken::new();
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -225,15 +237,15 @@ async fn async_main() -> Result<()> {
         clickhouse_db: config.clickhouse_db.as_deref().map(Arc::from),
         vespa_environment: Arc::from(config.vespa_environment.as_str()),
         vespa_tenant_id: Arc::from(config.vespa_tenant_id.as_str()),
-        // Phase 2 wiring lands in a follow-up commit (DI for Garage S3 +
-        // Local PV path + Postgres repos). Until then the admin endpoints
-        // return 503 when these are None.
-        modelfile_registry: None,
-        blob_registry: None,
-        install_attempts_log: None,
-        install_orchestrator: None,
-        blob_store: None,
-        local_pv: None,
+        // Phase 2 — env > app_config > default. None when the storage
+        // wizard hasn't run yet; admin endpoints return 503 in that state.
+        app_config_repo: model_store.app_config_repo,
+        modelfile_registry: model_store.modelfile_registry,
+        blob_registry: model_store.blob_registry,
+        install_attempts_log: model_store.install_attempts_log,
+        install_orchestrator: model_store.install_orchestrator,
+        blob_store: model_store.blob_store,
+        local_pv: model_store.local_pv,
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────
