@@ -42,7 +42,7 @@ use serde_json::json;
 
 use crate::application::ports::outbound::blob_registry::OrphanFilter;
 use crate::application::ports::outbound::install_attempts_log::AttemptsFilter;
-use crate::application::ports::outbound::modelfile_registry::ListFilter;
+use crate::application::ports::outbound::modelfile_registry::{ListFilter, ModelfilePatch};
 use crate::domain::entities::{InstallStatus, TriggeredBy, VeronexModel};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::inbound::http::state::AppState;
@@ -231,6 +231,99 @@ pub async fn get_model(
         )
             .into_response(),
         Err(e) => internal_err("get_failed", e),
+    }
+}
+
+/// `PATCH /v1/admin/models/{id}` — partial update.
+///
+/// Each field in the body is independently optional:
+///
+/// ```jsonc
+/// {
+///   "display_name":  "qwen3 8b q4",
+///   "runtime":       { "n_gpu_layers": 999, "ctx_size": 8192 },
+///   "defaults":      { "temperature": 0.7, "top_p": 0.9 },
+///   "chat_template": { "format": "chatml" },
+///   "stop_tokens":   ["</s>"],          // null clears
+///   "system_prompt": "You are ...",     // null clears
+///   "tags":          ["coder","int8"],  // null clears
+///   "source_spec":   { "kind": "hf", ... }  // triggers re-install via swap_blob
+/// }
+/// ```
+///
+/// `family` and `quantization` are not patchable — those are identity.
+/// `source_spec` requires the blob swap dance and currently returns 501
+/// until the orchestrator wires `swap_blob` into the FSM. Other fields
+/// take effect on the next ProcessManager start.
+#[derive(Debug, Deserialize)]
+pub struct PatchModelRequest {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_name: Option<Option<String>>,
+    #[serde(default)]
+    pub source_spec: Option<serde_json::Value>,
+    #[serde(default)]
+    pub runtime: Option<serde_json::Value>,
+    #[serde(default)]
+    pub defaults: Option<serde_json::Value>,
+    #[serde(default)]
+    pub chat_template: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_tokens: Option<Option<serde_json::Value>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system_prompt: Option<Option<String>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tags: Option<Option<Vec<String>>>,
+}
+
+pub async fn patch_model(
+    _claims: RequireProviderManage,
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    Json(req): Json<PatchModelRequest>,
+) -> impl IntoResponse {
+    let Some(registry) = state.modelfile_registry.as_ref() else {
+        return not_wired().into_response();
+    };
+
+    // source_spec requires re-install; defer to a future endpoint.
+    if req.source_spec.is_some() {
+        return (
+            StatusCode::NOT_IMPLEMENTED,
+            Json(json!({
+                "error": "source_spec_patch_not_supported",
+                "message": "Changing source_spec triggers a re-install. Delete the model and re-register, or wait for the swap_blob endpoint.",
+            })),
+        )
+            .into_response();
+    }
+
+    let patch = ModelfilePatch {
+        display_name: req.display_name,
+        source_spec: req.source_spec,
+        runtime: req.runtime,
+        defaults: req.defaults,
+        chat_template: req.chat_template,
+        stop_tokens: req.stop_tokens,
+        system_prompt: req.system_prompt,
+        tags: req.tags,
+    };
+
+    match registry.patch(&id, &patch).await {
+        Ok(true) => match registry.get(&id).await {
+            Ok(Some(m)) => (StatusCode::OK, Json(model_to_json(&m))).into_response(),
+            // Race: row was deleted between PATCH and re-fetch. Surface as
+            // 200 with just the id so the caller doesn't 500 on a successful
+            // write.
+            Ok(None) => (StatusCode::OK, Json(json!({ "model_id": id, "stale": true })))
+                .into_response(),
+            Err(e) => internal_err("get_after_patch_failed", e),
+        },
+        Ok(false) => (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": "model_not_found", "model_id": id })),
+        )
+            .into_response(),
+        Err(e) => internal_err("patch_failed", e),
     }
 }
 

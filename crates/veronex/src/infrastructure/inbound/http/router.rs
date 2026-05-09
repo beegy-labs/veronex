@@ -164,6 +164,7 @@ fn build_jwt_router() -> Router<AppState> {
         .route(
             "/v1/admin/models/{id}",
             get(admin_modelfile_handlers::get_model)
+                .patch(admin_modelfile_handlers::patch_model)
                 .delete(admin_modelfile_handlers::delete_model),
         )
         .route(

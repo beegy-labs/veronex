@@ -262,6 +262,20 @@ impl InstallOrchestrator {
             .await
             .ok();
 
+        // Best-effort LRU eviction before the new write. Reads
+        // VERONEX_MODEL_MAX_DISK_GB internally (env-or-DB resolved at
+        // bootstrap); when unset the call is a no-op. Failures are
+        // non-fatal — the worst case is the FS fills and write_streaming
+        // surfaces the OS error.
+        if let Err(e) = self
+            .inner
+            .local_pv
+            .evict_to(super::local_pv::EVICT_TARGET_PCT)
+            .await
+        {
+            tracing::warn!(model_id, error = %e, "pre-install LRU eviction failed");
+        }
+
         let stream = match source.stream_blob().await {
             Ok(s) => s,
             Err(e) => {
