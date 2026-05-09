@@ -15,7 +15,9 @@
 //! exists.
 
 pub mod activity_tracker;
+pub mod agent_client;
 pub mod port_pool;
 
 pub use activity_tracker::{ActivityTracker, RequestGuard};
+pub use agent_client::{HttpNodeClient, NodeClient, SpawnRequest, SpawnResponse, StubNodeClient};
 pub use port_pool::{PortLease, PortPool};

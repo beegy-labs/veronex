@@ -4,6 +4,7 @@ members = [
     "crates/veronex-analytics",
     "crates/veronex-agent",
     "crates/veronex-consumer",
+    "crates/veronex-llm-agent",
     "crates/veronex-mcp",
     "crates/veronex-embed",
     "workspace-hack",
@@ -19,6 +20,7 @@ default-members = [
     "crates/veronex-analytics",
     "crates/veronex-agent",
     "crates/veronex-consumer",
+    "crates/veronex-llm-agent",
     "crates/veronex-mcp",
     "workspace-hack",
 ]
