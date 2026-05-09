@@ -16,8 +16,14 @@
 //! [`stream_blob`]: ModelSource::stream_blob
 
 pub mod hf_source;
+pub mod s3_pointer_source;
+pub mod upload_source;
+pub mod url_source;
 
 pub use hf_source::HfSource;
+pub use s3_pointer_source::S3PointerSource;
+pub use upload_source::UploadSource;
+pub use url_source::UrlSource;
 
 use anyhow::Result;
 use bytes::Bytes;

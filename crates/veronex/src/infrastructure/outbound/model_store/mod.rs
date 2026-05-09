@@ -24,7 +24,9 @@
 //! orchestrator FSM (`install_orchestrator`).
 
 pub mod blob_store;
+pub mod local_pv;
 pub mod source;
 
 pub use blob_store::BlobStore;
+pub use local_pv::{LocalPv, WriteOutcome};
 pub use source::{HfSource, ModelSource};
