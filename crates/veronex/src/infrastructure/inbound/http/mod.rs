@@ -1,4 +1,5 @@
 pub mod account_handlers;
+pub mod admin_modelfile_handlers;
 pub mod audit_handlers;
 pub mod role_handlers;
 pub mod audit_helpers;

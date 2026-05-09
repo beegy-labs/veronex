@@ -32,6 +32,10 @@ use crate::application::ports::outbound::ollama_model_repository::OllamaModelRep
 use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::blob_registry::BlobRegistry;
+use crate::application::ports::outbound::install_attempts_log::InstallAttemptsLog;
+use crate::application::ports::outbound::modelfile_registry::ModelfileRegistry;
+use crate::infrastructure::outbound::model_store::{BlobStore, InstallOrchestrator, LocalPv};
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
@@ -151,4 +155,14 @@ pub struct AppState {
     pub clickhouse_user: Option<Arc<str>>,
     pub clickhouse_password: Option<Arc<str>>,
     pub clickhouse_db: Option<Arc<str>>,
+    // ── Phase 2 — Modelfile registry + CAS blob store ────────────────────
+    /// Modelfile registry. `None` until Phase 2 wiring lands in `main.rs`
+    /// (and `test_support`); admin endpoints return 503 when absent so the
+    /// AppState construction sites that haven't been updated still compile.
+    pub modelfile_registry: Option<Arc<dyn ModelfileRegistry>>,
+    pub blob_registry: Option<Arc<dyn BlobRegistry>>,
+    pub install_attempts_log: Option<Arc<dyn InstallAttemptsLog>>,
+    pub install_orchestrator: Option<InstallOrchestrator>,
+    pub blob_store: Option<BlobStore>,
+    pub local_pv: Option<LocalPv>,
 }

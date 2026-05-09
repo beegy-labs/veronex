@@ -225,6 +225,15 @@ async fn async_main() -> Result<()> {
         clickhouse_db: config.clickhouse_db.as_deref().map(Arc::from),
         vespa_environment: Arc::from(config.vespa_environment.as_str()),
         vespa_tenant_id: Arc::from(config.vespa_tenant_id.as_str()),
+        // Phase 2 wiring lands in a follow-up commit (DI for Garage S3 +
+        // Local PV path + Postgres repos). Until then the admin endpoints
+        // return 503 when these are None.
+        modelfile_registry: None,
+        blob_registry: None,
+        install_attempts_log: None,
+        install_orchestrator: None,
+        blob_store: None,
+        local_pv: None,
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────
