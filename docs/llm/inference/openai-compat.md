@@ -49,8 +49,9 @@ All inference endpoints require `X-API-Key` auth + rate limiting.
 
 ## POST /v1/chat/completions
 
-**Auth**: `X-API-Key` (also accepts `Authorization: Bearer` and `x-goog-api-key`).
-Supports streaming (`stream: true`) and non-streaming.
+**Auth**: any of `X-API-Key`, `Authorization: Bearer {api_key}`, or
+`x-goog-api-key` (Gemini-CLI compatibility). Supports streaming
+(`stream: true`) and non-streaming.
 
 ### Request Struct
 
@@ -59,7 +60,7 @@ Supports streaming (`stream: true`) and non-streaming.
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    pub provider_type: Option<String>,          // "llama-server" | "gemini-free" | "gemini"
+    pub provider_type: Option<String>,          // "llama_server" | "gemini-free" | "gemini"
     pub tools: Option<Vec<serde_json::Value>>,
     pub tool_choice: Option<serde_json::Value>,
     pub temperature: Option<f64>,
@@ -89,18 +90,18 @@ pub struct ChatMessage {
 
 | `provider_type` | Path | Behavior |
 |-----------------|------|----------|
-| `"llama-server"` (default) | **llama-server proxy** | Full conversation history forwarded. Tools, temperature, top_p, max_tokens passed through. Tool call args: OpenAI JSON string → llama-server JSON object. |
-| `"gemini-free"`, `"gemini"` | **Legacy queue** | Only last `user` message extracted as prompt. Enqueued via Valkey queue. |
+| `"llama_server"` (default) | **llama-server proxy** | Full conversation history forwarded. Tools, temperature, top_p, max_tokens passed through. Tool call args: OpenAI JSON string → llama-server JSON object (`ChatMessage::into_chat_value`). |
+| `"gemini-free"`, `"gemini"` | **Queue path** | Last `user` message extracted as prompt. Enqueued via Valkey queue and dispatched by `dispatcher`. |
 
 ### `provider_type` Field
 
 | Value | Routing |
 |-------|---------|
-| `"llama-server"` | VRAM-aware llama-server selection |
+| `"llama_server"` | VRAM-aware llama-server selection |
 | `"gemini-free"` | `is_free_tier=true` only |
 | `"gemini"` | Free-first → paid fallback on RPD exhaustion |
 
-`"gemini-free"` maps to `ProviderType::Gemini` with `tier_filter = Some("free")`. `ProviderType` enum has only two variants: `llama-server` and `Gemini`.
+`"gemini-free"` maps to `ProviderType::Gemini` with `tier_filter = Some("free")`. `ProviderType` enum has only two variants: `LlamaServer` and `Gemini`. The legacy `Ollama` variant was removed in the post-Ollama refactor.
 
 ### SSE Response
 

@@ -79,12 +79,13 @@ UNKNOWN mode: available_vram_mb = (max_concurrent - active) × 1024 MB
 ## VRAM Reservation Logic
 
 ```
-Model already loaded (in /api/ps)?
+Model already loaded (ProcessManager.list_running has the (provider, model))?
   YES → reserve KV cache only      = ctx_size × bytes_per_token × 2
   NO  → reserve weight + KV cache  = weight_mb + KV
+        ProcessManager.ensure_running spawns the llama-server process
 
 On request completion:
-  release KV only (weight stays — LLAMA_SERVER_KEEP_ALIVE=-1)
+  release KV only (process keeps the model loaded; lifetime governed by IdleManager TTL)
 ```
 
 ---

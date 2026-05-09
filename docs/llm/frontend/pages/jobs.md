@@ -49,7 +49,7 @@ The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Ov
 |  Group Sessions                                                       |
 |  "Assign conversation IDs to completed jobs before the selected date."|
 |  [date input: yesterday] [Group Now]  -> success/error/already-running|
-+-- [API 호출별] [대화별] [Network Flow]  <- shadcn/ui Tabs -------------+
++-- [API 호출별] [대화별] [Network Flow]  <- verodesign Tabs ------------+
 |                                                                       |
 | Tab: "API 호출별" / "Tasks" (default, i18n key: jobs.tasks)           |
 |   [search] [status filter]      <- queries ?source=api                |

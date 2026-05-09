@@ -71,7 +71,7 @@ Web page `/api-docs` links to all three. → See `docs/llm/frontend/pages/api-te
 curl http://localhost:3001/v1/chat/completions \
   -H "X-API-Key: veronex-bootstrap-admin-key" \
   -H "Content-Type: application/json" \
-  -d '{"model":"llama3.2","messages":[{"role":"user","content":"Hello"}],"provider_type":"llama-server"}'
+  -d '{"model":"llama3.2","messages":[{"role":"user","content":"Hello"}],"provider_type":"llama_server"}'
 ```
 
 ### OpenAI Python SDK
@@ -83,7 +83,7 @@ client = OpenAI(api_key="key", base_url="http://localhost:3001/v1",
 stream = client.chat.completions.create(
     model="llama3.2",
     messages=[{"role":"user","content":"Hello"}],
-    stream=True, extra_body={"provider_type":"llama-server"},
+    stream=True, extra_body={"provider_type":"llama_server"},
 )
 for chunk in stream:
     print(chunk.choices[0].delta.content, end="")

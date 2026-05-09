@@ -20,33 +20,45 @@ Manage VRAM as a **global pool** per provider. Instead of fixed per-model slots,
 - Model **not loaded** → deduct **weight + KV cache** (llama-server auto-loads)
 - On completion → release **KV cache only** (weight stays in VRAM)
 
-**Model lifecycle**: VramPool + provider `keep_alive` window (default `LLAMA_SERVER_KEEP_ALIVE=10m` per low-power policy; lifecycle probes use `LIFECYCLE_KEEP_ALIVE=30m`) manages model retention. `LlamaServerModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
+**Model lifecycle**: `ProcessManager` owns the running llama-server
+process; one process holds exactly one model. `IdleManager` (default 30s
+tick / 60s TTL) reaps processes whose `ActivityTracker.idle_for >= ttl`.
+The Ollama-era `keep_alive` request option and `LlamaServerModelManager`
+LRU evictor are gone — eviction = process stop.
 
 **Phase 1 entry point** (`MCP_LIFECYCLE_PHASE=on`, see `flows/model-lifecycle.md`):
-- `LlamaServerAdapter::ensure_ready(model)` is the SSOT for "is model loaded on
-  this provider". Warm hit → `VramPool::loaded_model_names` lookup; cold miss
-  → zero-prompt `/api/generate` probe → on success, adapter calls
-  `VramPool::record_loaded(provider_id, model)` so subsequent dispatches
-  observe the model present.
-- `LlamaServerAdapter::evict(model, reason)` is the eviction entry point and updates
-  VramPool symmetrically.
+- `LlamaServerAdapter::ensure_ready(model)` is now a thin `/health` check;
+  the heavy spawn/coalesce/probe work has moved to
+  `ProcessManager::ensure_running` (called by the dispatcher before claim).
+- Eviction = `ProcessManager::stop(provider_id)` — releases the
+  PortLease, unregisters the provider from `ActivityTracker` +
+  `AimdRegistry`, and drops the agent's process handle.
 
 ---
 
-## Phase 1: Initial Probe
+## Phase 1: Initial Probe (per-node)
 
-llama-server has no GPU info API (issue #3822), so VRAM capacity is learned via probing.
+llama-server has no GPU-info API. Capacity is reported by the
+per-node `veronex-llm-agent` at registration time.
 
 ### 1-1. After Provider Registration
 
 ```
-POST /v1/servers (register provider)
-  → GET {llama_url}/api/ps     ← already loaded models
-  → GET {llama_url}/api/tags   ← available models + file sizes
+POST /v1/admin/nodes (register node — agent + auth credentials)
+  → veronex-llm-agent.probe()
+       returns NodeProbeInfo {
+         total_vram_mb,
+         drm_devices,
+         backend: "amd_vulkan" | "apple_metal",
+         …
+       }
+  → ProcessManager.register_node(node_id, NodeClient, PortPool)
 ```
 
-- `/api/ps` has models: sum `size_vram` → minimum VRAM capacity
-- `/api/ps` empty: VRAM capacity unknown, start with pass-through
+There is no `/api/ps` or `/api/tags` scrape — those endpoints don't
+exist on llama-server. Models loaded on a node are tracked by
+`ProcessManager.list_running()` (in-process state, one entry per
+running llama-server process).
 
 ### 1-2. Progressive VRAM Learning
 
@@ -79,7 +91,7 @@ The operator-registered value is the **declared envelope**: AIMD `max_concurrent
 if provider.vram_total == None:
     dispatch(request)        # llama-server's own scheduler handles OOM
     after_success:
-        poll /api/ps → record size_vram
+        veronex-llm-agent reports actual VRAM usage in next heartbeat
         update vram_total estimate
 ```
 
@@ -98,8 +110,8 @@ estimated = known_model.vram_model_mb * (target_params / known_params)
 
 **Strategy C — Quantization table**:
 ```
-param_count = parse "72B" from /api/show details.parameter_size
-bytes_per_param = quantization_table[details.quantization_level]
+param_count = modelfiles.parameter_count          (from Modelfile registry)
+bytes_per_param = quantization_table[modelfiles.quantization]
 estimated_weight_mb = param_count * bytes_per_param / 1_048_576
 
 quantization_table = {
@@ -121,7 +133,10 @@ elif param_size <= 72B: kv_per_token_est = 192 KB
 else:                   kv_per_token_est = 256 KB
 ```
 
-Replaced with exact architecture params from `/api/show` after first success.
+Replaced with exact architecture params (`num_layers`, `num_kv_heads`,
+`head_dim`) from the Modelfile registry row after first success — those
+fields are populated when the install_orchestrator inspects the GGUF
+during install, no `/api/show` round-trip required.
 
 ---
 
@@ -150,17 +165,17 @@ on_inference_failure(provider_id, model_name, error):
 
 ```
 on_inference_success(provider_id, model_name):
-    ps_response = GET /api/ps
-    entry.actual_weight_mb = model.size_vram / 1_048_576
+    actual_weight_mb = veronex-llm-agent.last_heartbeat.vram_used_mb
+    entry.actual_weight_mb = actual_weight_mb
     entry.estimated = false
 ```
 
 ### 3-4. Learning Cycle
 
 ```
-Unknown → first request → success → /api/ps measurement → Confirmed
+Unknown → first request → success → agent heartbeat measurement → Confirmed
                         → failure → estimate ×1.2 → retry
-                                  → 3 consecutive OOM → preload_fail_count=3 → 300s preload exclusion
+                                  → 3 consecutive OOM → spawn_fail_count=3 → 300s spawn cooldown
 ```
 
 ---
@@ -176,7 +191,8 @@ else: cost = weight_mb(model) + kv_cache_mb(model, context_len)
 
 ### 4-2. KV Cache Calculation (Throughput-Based)
 
-Computed during `sync_provider()` using architecture info (`/api/show`) and throughput stats.
+Computed at Modelfile install time using architecture info parsed from
+the GGUF, plus per-request throughput stats accumulated by the dispatcher.
 
 ```
 kv_bytes_per_token = 2 * num_layers * num_kv_heads * head_dim * bytes_per_element
@@ -233,7 +249,8 @@ REQUEST(model_name, context_len)
 ├─ 8. Dispatch → llama-server
 │
 └─ 9. On completion: drop(VramPermit) → KV cache released
-              weight stays loaded (LLAMA_SERVER_KEEP_ALIVE=-1)
+              process keeps the model loaded (no per-request keep_alive
+              option; lifetime is governed by IdleManager TTL instead)
 ```
 
 ### 4-4. VRAM Pool Data Structure
@@ -327,25 +344,27 @@ impl Drop for VramPermit {
 
 ## Phase 5: Background Sync
 
-### 5-1. /api/ps Periodic Polling (30s)
+### 5-1. Per-node heartbeat (replaces /api/ps polling)
 
 ```
-every 30s per provider:
-    ps = GET /api/ps
-    observed_used = sum(model.size_vram for model in ps.models)
-    loaded_models_cache.update(provider_id, ps.models)
-    if provider.total_mb.is_none():
-        provider.total_mb = Some(max(observed_used * 1.15, previous_estimate))
+veronex-llm-agent (per node):
+    every 30s:
+        compute current VRAM utilisation, drm temp, loaded model list
+        push to Veronex via heartbeat (HTTP or Valkey)
+        Veronex updates VramPool.cached_loaded_weight_mb +
+                          ProviderVramState.last_mem_available_mb
+        Veronex updates provider:hb:{provider_id} TTL
 ```
 
-### 5-2. /api/show Architecture Cache
+### 5-2. Architecture data (replaces /api/show)
 
-```
-on sync_provider() per model:
-    show = POST /api/show {"model": model_name}
-    // Parse architecture (hybrid Mamba+Attention support)
-    // Compute KV per request from throughput stats
-```
+Architecture parameters (`num_layers`, `num_kv_heads`, `head_dim`,
+quantization, parameter_count) are populated when the
+`install_orchestrator` ingests the GGUF — they live on the
+`modelfiles` row, not on a per-provider /api/show round-trip.
+
+`KV per request` is then computed at dispatch time using throughput
+stats and the static modelfile fields.
 
 ---
 
@@ -758,13 +777,12 @@ LLAMA_SERVER_LOAD_TIMEOUT=900           # 15 min for large model loading
   ├── Thermal gate (per-provider thresholds, auto-detected from gpu_vendor)
   │     Soft: block when active_count>0 (drain first); exit requires temp<normal_below AND active_count==0
   │     Hard: block all → 60s forced drain → Cooldown(300s min) → RampUp(mc=1) → Normal when Σmc≥pre_hard_total
-  ├── Success → /api/ps measurement → VRAM profile learning
+  ├── Success → veronex-llm-agent heartbeat measurement → VRAM profile learning
   ├── Failure (OOM) → estimate ×1.2 + safety_permil +50 + max_concurrent ×3/4
   └── drop(VramPermit) → KV cache released + last_active_at updated
 
 [Background loops]
-  ├── Sync (30s): /api/ps weight + /api/show arch + KV calculation
-  │     AIMD: TPS ratio + p95 spike → max_concurrent (capped at num_parallel)
+  ├── AIMD per request: TPS ratio + p95 spike → max_concurrent (capped at num_parallel)
   │     LLM Batch: all-model analysis → increase-only (floor=current, ceil=current+2)
   │     DB persist → restored on restart
   ├── IdleManager (30s tick): stop processes whose idle_for >= TTL (default 60s)

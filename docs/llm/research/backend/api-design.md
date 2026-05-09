@@ -19,7 +19,7 @@ DELETE /v1/resource/{id}         # delete
 # Nested resources
 GET    /v1/servers/{id}/metrics          # server-scoped resource
 GET    /v1/providers/{id}/models  # sub-resource list
-POST   /v1/llama-server/models/sync            # action (verb as last segment)
+POST   /v1/admin/models/{id}/install/retry     # action (verb as last segment)
 ```
 
 ### Error Shape

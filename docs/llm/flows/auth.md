@@ -79,7 +79,7 @@ jwt_auth middleware
 ## `InferCaller` — Dual Auth (inference endpoints)
 
 ```
-POST /v1/chat/completions  /api/chat  /api/generate
+POST /v1/chat/completions   POST /v1/inference   POST /v1beta/models/{m}:generateContent
   │
   ▼
 infer_auth::InferCaller extractor

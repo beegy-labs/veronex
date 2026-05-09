@@ -30,7 +30,7 @@ Legacy text completion. Maps a single prompt to the Veronex inference queue via 
 
 ## POST /v1/embeddings
 
-Generates embeddings using the first available llama-server provider's `/api/embed`.
+Generates embeddings via the first available llama-server provider. The proxy posts to the upstream `/api/embed` endpoint that llama-server exposes — note this is **not** the deleted Ollama `/api/embed` route on Veronex's own gateway, but the upstream model server's path.
 
 **Security**: Provider URL SSRF-validated before each outbound request.
 
@@ -52,14 +52,14 @@ Generates embeddings using the first available llama-server provider's `/api/emb
 
 ## GET /v1/models
 
-Lists all available models (llama-server from DB + Gemini).
+Lists all available models (Modelfile registry + Gemini).
 
 **Response**:
 ```json
-{"object": "list", "data": [{"id": "llama3.2", "object": "model", "created": 1712345678, "owned_by": "llama-server"}]}
+{"object": "list", "data": [{"id": "llama3.2", "object": "model", "created": 1712345678, "owned_by": "llama_server"}]}
 ```
 
-`owned_by`: `"llama-server"` for llama-server models, `"google"` for Gemini models.
+`owned_by`: `"llama_server"` for llama-server models, `"google"` for Gemini models.
 
 ## GET /v1/models/{model_id}
 

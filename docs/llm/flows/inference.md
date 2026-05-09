@@ -48,20 +48,26 @@ openai_handlers::chat_completions()
        │
        ├── vram_pool.reserve(provider_id, model)       ← acquire KV permit
        │
+       ├── ProcessManager.ensure_running(provider_id, model)  ← lazy spawn (one-shot)
+       │     ├── per-provider Mutex serialises concurrent spawns
+       │     ├── if Ready → return immediately
+       │     └── else → NodeClient.spawn → poll NodeClient.health → Ready
+       │
+       ├── AimdAdmission.acquire(provider_id) → Option<AdmissionGuard>
+       │     └── None (window full) → 503; client retries another instance
+       │
        └── spawn_job_direct(job_id, provider_id)
              │
              ▼
        runner::run_job()
              │
              ├── [MCP_LIFECYCLE_PHASE=on]?            ← see flows/model-lifecycle.md
-             │     └── provider.ensure_ready(model)   ← Phase 1 — explicit load probe
-             │           ├── VramPool warm? → AlreadyLoaded
-             │           ├── Coalesced? → LoadCoalesced{waited_ms}
-             │           ├── Cold load → LoadCompleted (≤ LIFECYCLE_LOAD_TIMEOUT 600s)
-             │           └── Err(LifecycleError) → mark failed (failure_reason=lifecycle_failed)
+             │     └── provider.ensure_ready(model)   ← Phase 1 — thin /health verify
+             │           ├── /health 200 ok    → AlreadyLoaded
+             │           └── /health err / 5xx → ProviderError → mark failed
              │
              ├── provider.stream_tokens(&job)         ← Phase 2 — inference
-             │     └── POST /api/chat or /api/generate (streaming)
+             │     └── POST /v1/chat/completions (SSE, OpenAI-compat)
              ├── emit tokens → broadcast_channel
              │     └── SSE handler consumes stream → Client
              ├── on completion: record prompt/completion tokens
@@ -97,9 +103,13 @@ Dispatch order: lowest score wins (ZRANGEBYSCORE)
 | Job cleanup TTL | 60s | `domain/constants.rs` |
 | `MCP_LIFECYCLE_PHASE_FLAG_ENV` | `MCP_LIFECYCLE_PHASE` | `domain/constants.rs` |
 | `MCP_LIFECYCLE_PHASE_DEFAULT` | `false` | `domain/constants.rs` |
-| `LIFECYCLE_LOAD_TIMEOUT` | 600s | `infrastructure/outbound/llama_server/lifecycle.rs` |
-| `LIFECYCLE_STALL_INTERVAL` | 60s | `infrastructure/outbound/llama_server/lifecycle.rs` |
-| `LIFECYCLE_KEEP_ALIVE` | `30m` | `infrastructure/outbound/llama_server/lifecycle.rs` |
+| `IDLE_CHECK_INTERVAL_SECS` | 30s | `system_settings.llama_server.idle_check_interval_secs` |
+| `IDLE_TTL_SECONDS` | 60s (per-provider override available) | `system_settings.llama_server.idle_ttl_seconds` |
+
+(The legacy Ollama-era lifecycle constants — `LIFECYCLE_LOAD_TIMEOUT`,
+`LIFECYCLE_STALL_INTERVAL`, `LIFECYCLE_KEEP_ALIVE` — were removed with
+the `infrastructure/outbound/llama_server/lifecycle.rs` module.
+Process-level timeouts now live in `ProcessManager` / `IdleManager`.)
 
 ---
 
@@ -114,9 +124,10 @@ ClickHouse (via OTel)
   inference_sessions (grouped conversation analytics)
 
 Valkey
-  veronex:ratelimit:rpm:{key_id}   sorted set, TTL=62s
-  veronex:ratelimit:tpm:{key_id}:{minute}  counter, TTL=120s
-  veronex:heartbeat:{provider_id}  liveness, TTL=180s
+  veronex:ratelimit:rpm:{key_id}            sorted set, TTL=62s
+  veronex:ratelimit:tpm:{key_id}:{minute}   counter, TTL=120s
+  veronex:provider:hb:{provider_id}         liveness, TTL=180s (set by veronex-llm-agent)
+  veronex:model:ctx:{provider_id}:{model}   per-model context window cache, TTL=600s
 ```
 
 ---
@@ -130,3 +141,6 @@ Valkey
 | `application/use_cases/inference/use_case.rs` | `submit()`, job lifecycle |
 | `application/use_cases/inference/dispatcher.rs` | Queue loop, provider selection |
 | `application/use_cases/inference/runner.rs` | Job execution, streaming |
+| `infrastructure/outbound/process_manager/manager.rs` | `ProcessManager::ensure_running` (lazy spawn) |
+| `infrastructure/outbound/process_manager/idle_manager.rs` | TTL-based idle reaper |
+| `infrastructure/outbound/capacity/admission.rs` | `AimdAdmission::acquire` window gate |
