@@ -22,7 +22,7 @@ server_id: string | null,
  */
 is_free_tier: boolean, 
 /**
- * Maximum parallel requests per Ollama num_parallel setting.
+ * Maximum parallel requests per num_parallel setting.
  * Used as AIMD upper bound. Default 4.
  */
 num_parallel: number, status: LlmProviderStatus, registered_at: string, 

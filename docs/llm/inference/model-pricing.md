@@ -18,17 +18,17 @@ CREATE TABLE model_pricing (
 );
 ```
 
-- `provider` matches `inference_jobs.provider_type` (e.g. `'gemini'`, `'ollama'`).
+- `provider` matches `inference_jobs.provider_type` (e.g. `'gemini'`, `'llama-server'`).
 - `model_name` is either an exact model name (e.g. `'gemini-2.0-flash'`) or `'*'` as a default fallback when no exact match exists.
 - Lookup priority: **exact name first**, then `'*'` wildcard.
 
-## Ollama — Always $0.00
+## llama-server — Always $0.00
 
-Ollama has **no rows** in `model_pricing`. The cost expression short-circuits:
+llama-server has **no rows** in `model_pricing`. The cost expression short-circuits:
 
 ```sql
 CASE
-    WHEN j.provider_type = 'ollama' THEN 0.0
+    WHEN j.provider_type = 'llama_server' THEN 0.0
     ...
 END
 ```
@@ -74,7 +74,7 @@ The `ORDER BY CASE` ensures exact model name wins over the `'*'` wildcard. The `
 
 ```sql
 CASE
-    WHEN j.provider_type = 'ollama' THEN 0.0
+    WHEN j.provider_type = 'llama_server' THEN 0.0
     WHEN pricing.input_per_1m IS NOT NULL
          AND j.prompt_tokens IS NOT NULL
          AND j.completion_tokens IS NOT NULL THEN
@@ -88,7 +88,7 @@ Result semantics:
 
 | Value | Meaning |
 |-------|---------|
-| `0.0` | Ollama (self-hosted, no cost) |
+| `0.0` | llama-server (self-hosted, no cost) |
 | `> 0` | Gemini — computed from token counts × per-1M rate |
 | `NULL` | No pricing data (unknown provider, or tokens not yet recorded) |
 
@@ -97,7 +97,7 @@ Result semantics:
 ### Job List and Detail
 
 `GET /v1/dashboard/jobs` → `JobSummary[]`
-- `estimated_cost_usd: number | null` — per-job cost; `0.0` for Ollama
+- `estimated_cost_usd: number | null` — per-job cost; `0.0` for llama-server
 
 `GET /v1/dashboard/jobs/{id}` → `JobDetail`
 - `estimated_cost_usd: number | null` — same computation as job list
@@ -127,7 +127,7 @@ Insert or `UPDATE` rows directly in `model_pricing`. No application restart requ
 
 1. Insert rows with `provider = '<new_provider>'` and appropriate model names.
 2. Add a `'*'` wildcard row as a fallback for unrecognized model names.
-3. The Ollama `CASE` guard is hardcoded; other providers automatically pick up pricing rows.
+3. The llama-server `CASE` guard is hardcoded; other providers automatically pick up pricing rows.
 
 ## Related Docs
 

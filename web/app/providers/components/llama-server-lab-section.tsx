@@ -15,7 +15,7 @@ import { api } from '@/lib/api'
 
 const BYTES_PER_MB = 1024 * 1024
 
-export function OllamaLabSection() {
+export function LlamaServerLabSection() {
   const { t } = useTranslation()
   const { labSettings, refetch: refetchLabSettings } = useLabSettings()
   const [labLoading, setLabLoading] = useState(false)
@@ -49,14 +49,14 @@ export function OllamaLabSection() {
     <div className="vds-space-y-4">
       <div className="vds-flex vds-items-center vds-gap-2">
         <Sliders className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
-        <h2 className="vds-text-base vds-font-600 vds-text-bright">{t('providers.ollama.labTitle')}</h2>
+        <h2 className="vds-text-base vds-font-600 vds-text-bright">{t('providers.llama_server.labTitle')}</h2>
       </div>
-      <p className="vds-text-xs vds-text-dim">{t('providers.ollama.labDesc')}</p>
+      <p className="vds-text-xs vds-text-dim">{t('providers.llama_server.labDesc')}</p>
 
       {/* ── Image input ────────────────────────────────────────────────────── */}
       <Card>
         <CardContent className="vds-p-4 vds-space-y-4">
-          <h3 className="vds-text-sm vds-font-600">{t('providers.ollama.labImageSection')}</h3>
+          <h3 className="vds-text-sm vds-font-600">{t('providers.llama_server.labImageSection')}</h3>
 
           <Row
             label={t('common.maxImagesPerRequest')}
@@ -76,8 +76,8 @@ export function OllamaLabSection() {
           </Row>
 
           <Row
-            label={t('providers.ollama.labMaxImageBytes')}
-            desc={t('providers.ollama.labMaxImageBytesDesc')}
+            label={t('providers.llama_server.labMaxImageBytes')}
+            desc={t('providers.llama_server.labMaxImageBytesDesc')}
             suffix="MB"
           >
             <Input
@@ -125,7 +125,7 @@ export function OllamaLabSection() {
 
           <div className="vds-space-y-1.5">
             <p className="vds-text-xs vds-font-500">{t('common.labCompressionModel')}</p>
-            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.ollama.labCompressionModelDesc')}</p>
+            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.llama_server.labCompressionModelDesc')}</p>
             <CompressionModelSelector
               value={labSettings?.compression_model ?? null}
               disabled={disabled}
@@ -134,8 +134,8 @@ export function OllamaLabSection() {
           </div>
 
           <Row
-            label={t('providers.ollama.labContextBudgetRatio')}
-            desc={t('providers.ollama.labContextBudgetRatioDesc')}
+            label={t('providers.llama_server.labContextBudgetRatio')}
+            desc={t('providers.llama_server.labContextBudgetRatioDesc')}
           >
             <Input
               type="number" min={0.1} max={1} step={0.05}
@@ -151,8 +151,8 @@ export function OllamaLabSection() {
           </Row>
 
           <Row
-            label={t('providers.ollama.labCompressionTriggerTurns')}
-            desc={t('providers.ollama.labCompressionTriggerTurnsDesc')}
+            label={t('providers.llama_server.labCompressionTriggerTurns')}
+            desc={t('providers.llama_server.labCompressionTriggerTurnsDesc')}
           >
             <Input
               type="number" min={1} max={20}
@@ -168,8 +168,8 @@ export function OllamaLabSection() {
           </Row>
 
           <Row
-            label={t('providers.ollama.labRecentVerbatim')}
-            desc={t('providers.ollama.labRecentVerbatimDesc')}
+            label={t('providers.llama_server.labRecentVerbatim')}
+            desc={t('providers.llama_server.labRecentVerbatimDesc')}
           >
             <Input
               type="number" min={0} max={20}
@@ -185,8 +185,8 @@ export function OllamaLabSection() {
           </Row>
 
           <Row
-            label={t('providers.ollama.labCompressionTimeout')}
-            desc={t('providers.ollama.labCompressionTimeoutDesc')}
+            label={t('providers.llama_server.labCompressionTimeout')}
+            desc={t('providers.llama_server.labCompressionTimeoutDesc')}
             suffix="s"
           >
             <Input
@@ -218,7 +218,7 @@ export function OllamaLabSection() {
 
             <Row
               label={t('common.labHandoffThreshold')}
-              desc={t('providers.ollama.labHandoffThresholdDesc')}
+              desc={t('providers.llama_server.labHandoffThresholdDesc')}
             >
               <Input
                 type="number" min={0.1} max={1} step={0.05}
@@ -243,7 +243,7 @@ export function OllamaLabSection() {
 
           <Row
             label={t('common.labMultiturnMinParams')}
-            desc={t('providers.ollama.labMultiturnMinParamsDesc')}
+            desc={t('providers.llama_server.labMultiturnMinParamsDesc')}
             suffix="B"
           >
             <Input
@@ -261,7 +261,7 @@ export function OllamaLabSection() {
 
           <Row
             label={t('common.labMultiturnMinCtx')}
-            desc={t('providers.ollama.labMultiturnMinCtxDesc')}
+            desc={t('providers.llama_server.labMultiturnMinCtxDesc')}
           >
             <Input
               type="number" min={0}
@@ -278,7 +278,7 @@ export function OllamaLabSection() {
 
           <div className="vds-space-y-1.5">
             <p className="vds-text-xs vds-font-500">{t('common.labMultiturnAllowedModels')}</p>
-            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.ollama.labMultiturnAllowedModelsDesc')}</p>
+            <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.llama_server.labMultiturnAllowedModelsDesc')}</p>
             <MultiturnAllowedModelsSelector
               selected={labSettings?.multiturn_allowed_models ?? []}
               disabled={disabled}

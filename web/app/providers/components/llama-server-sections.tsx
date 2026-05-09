@@ -3,9 +3,9 @@
 import { useState, useEffect, useRef, useOptimistic } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { OllamaSyncJob } from '@/lib/types'
-import { ollamaSyncStatusQuery, ollamaModelsQuery } from '@/lib/queries'
-import { useGlobalDisabledSet } from '@/hooks/use-enabled-ollama-models'
+import type { LlamaServerSyncJob } from '@/lib/types'
+import { llamaServerSyncStatusQuery, llamaServerModelsQuery } from '@/lib/queries'
+import { useGlobalDisabledSet } from '@/hooks/use-enabled-llama_server-models'
 import { withJitter } from '@/lib/constants'
 import { RotateCcw, Search, Cpu, Server, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -15,9 +15,9 @@ import { Switch } from '@/components/ui/switch'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { hasPermission } from '@/lib/auth'
-import { OllamaModelProvidersModal } from './modals'
+import { LlamaServerModelProvidersModal } from './modals'
 
-export { OllamaCapacitySection, ThermalBadge, VramBar } from './ollama-capacity-section'
+export { LlamaServerCapacitySection, ThermalBadge, VramBar } from './llama-server-capacity-section'
 
 // ── Shared page size ───────────────────────────────────────────────────────────
 
@@ -39,14 +39,14 @@ function GlobalModelToggle({ modelName, isEnabled }: { modelName: string; isEnab
     <Switch
       checked={optimistic}
       onCheckedChange={(checked) => { setOptimistic(checked); mutation.mutate(checked) }}
-      aria-label={t('providers.ollama.modelToggle', { model: modelName })}
+      aria-label={t('providers.llama_server.modelToggle', { model: modelName })}
     />
   )
 }
 
-// ── Ollama Global Sync Section ─────────────────────────────────────────────────
+// ── llama-server Global Sync Section ─────────────────────────────────────────────────
 
-export function OllamaSyncSection() {
+export function LlamaServerSyncSection() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
@@ -56,14 +56,14 @@ export function OllamaSyncSection() {
   const [selectedModel, setSelectedModel] = useState<string | null>(null)
 
   const { data: syncJob } = useQuery({
-    ...ollamaSyncStatusQuery,
+    ...llamaServerSyncStatusQuery,
     refetchInterval: (query) => {
-      const data = query.state.data as OllamaSyncJob | undefined
+      const data = query.state.data as LlamaServerSyncJob | undefined
       return data?.status === 'running' ? withJitter(2000, 200) : false
     },
   })
 
-  const { data: ollamaModelsData } = useQuery(ollamaModelsQuery({ search: debouncedSearch, page, limit: MODEL_LIMIT }))
+  const { data: llamaServerModelsData } = useQuery(llamaServerModelsQuery({ search: debouncedSearch, page, limit: MODEL_LIMIT }))
 
   // This section is where operators *manage* the global disable set, so it must
   // still show disabled models (with a "disabled" badge). Re-uses the shared
@@ -73,16 +73,16 @@ export function OllamaSyncSection() {
   const canManageModels = hasPermission('model_manage')
 
   const syncMutation = useMutation({
-    mutationFn: () => api.syncOllamaModels(),
+    mutationFn: () => api.syncLlamaServerModels(),
     onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['ollama-sync-status'] })
-      queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
+      queryClient.invalidateQueries({ queryKey: ['llama_server-sync-status'] })
+      queryClient.invalidateQueries({ queryKey: ['llama_server-models'] })
     },
   })
 
   const isRunning = syncJob?.status === 'running' || syncMutation.isPending
-  const models = ollamaModelsData?.models ?? []
-  const total = ollamaModelsData?.total ?? 0
+  const models = llamaServerModelsData?.models ?? []
+  const total = llamaServerModelsData?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / MODEL_LIMIT))
 
   useEffect(() => () => { if (debounceRef.current) clearTimeout(debounceRef.current) }, [])
@@ -98,7 +98,7 @@ export function OllamaSyncSection() {
     <div className="vds-space-y-3">
       <h2 className="vds-text-base vds-font-600 vds-text-bright vds-flex vds-items-center vds-gap-2">
         <RotateCcw className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
-        {t('providers.ollama.ollamaSyncSection')}
+        {t('providers.llama_server.syncSection')}
       </h2>
 
       <Card>
@@ -106,7 +106,7 @@ export function OllamaSyncSection() {
           <div className="vds-flex vds-items-center vds-gap-3">
             <Button size="sm" onClick={() => syncMutation.mutate()} disabled={isRunning} className="vds-gap-1.5">
               <RotateCcw className={isRunning ? 'vds-h-3.5 vds-w-3.5 vds-animate-spin' : 'vds-h-3.5 vds-w-3.5'} />
-              {isRunning ? t('providers.ollama.ollamaSyncing') : t('providers.ollama.ollamaSyncAll')}
+              {isRunning ? t('providers.llama_server.syncing') : t('providers.llama_server.syncAll')}
             </Button>
             {syncJob?.status === 'running' && (
               <span className="vds-text-xs vds-text-dim">
@@ -114,12 +114,12 @@ export function OllamaSyncSection() {
               </span>
             )}
             {syncJob?.status === 'completed' && !syncMutation.isPending && (
-              <span className="vds-text-xs vds-text-success">✓ {t('providers.ollama.ollamaSyncDone')}</span>
+              <span className="vds-text-xs vds-text-success">✓ {t('providers.llama_server.syncDone')}</span>
             )}
           </div>
 
           {total === 0 && !debouncedSearch && (
-            <p className="vds-text-xs vds-text-dim vds-italic">{t('providers.ollama.ollamaNoSync')}</p>
+            <p className="vds-text-xs vds-text-dim vds-italic">{t('providers.llama_server.noSync')}</p>
           )}
 
           {(total > 0 || debouncedSearch) && (
@@ -128,21 +128,21 @@ export function OllamaSyncSection() {
                 <Search className="vds-absolute vds-left-2.5 vds-top-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim/60 vds-pointer-events-none" />
                 <Input
                   className="vds-pl-8 vds-h-8 vds-text-sm"
-                  placeholder={t('providers.ollama.ollamaSearchModels')}
+                  placeholder={t('providers.llama_server.searchModels')}
                   value={search}
                   onChange={(e) => handleSearch(e.target.value)}
                 />
               </div>
               <div className="vds-flex vds-items-center vds-justify-between">
                 <p className="vds-text-xs vds-font-500 vds-text-dim">
-                  {t('providers.ollama.ollamaAvailableModels')}
+                  {t('providers.llama_server.availableModels')}
                 </p>
                 <span className="vds-text-xs vds-text-dim vds-tabular-nums">{total}</span>
               </div>
               <div className="vds-divide-y vds-divide-border vds-rounded-md vds-border-1 vds-border-subtle vds-overflow-hidden">
                 {models.length === 0 && debouncedSearch && (
                   <p className="vds-text-xs vds-text-dim vds-italic vds-py-3 vds-px-3">
-                    {t('providers.ollama.noModelsMatch')} &ldquo;{debouncedSearch}&rdquo;
+                    {t('providers.llama_server.noModelsMatch')} &ldquo;{debouncedSearch}&rdquo;
                   </p>
                 )}
                 {models.map((m) => {
@@ -196,7 +196,7 @@ export function OllamaSyncSection() {
       </Card>
 
       {selectedModel && (
-        <OllamaModelProvidersModal modelName={selectedModel} onClose={() => setSelectedModel(null)} />
+        <LlamaServerModelProvidersModal modelName={selectedModel} onClose={() => setSelectedModel(null)} />
       )}
     </div>
   )

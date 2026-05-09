@@ -123,7 +123,7 @@ pub async fn text_completions(
     let job_id = state.use_case.submit(SubmitJobRequest {
         prompt,
         model_name: model.clone(),
-        provider_type: ProviderType::Ollama,
+        provider_type: ProviderType::LlamaServer,
         gemini_tier: None,
         api_key_id: caller.api_key_id(),
         account_id: caller.account_id(),

@@ -18,7 +18,7 @@ import { redirectToLogin } from '@/lib/auth-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { useTimezone } from '@/components/timezone-provider'
 import { NavSettingsDialog } from '@/components/nav-settings-dialog'
-import { HexLogo, OllamaIcon } from '@/components/nav-icons'
+import { HexLogo, LlamaServerIcon } from '@/components/nav-icons'
 import { useNav404 } from '@/components/nav-404-context'
 import { SidebarFrame } from '@/components/layout/SidebarFrame'
 
@@ -89,7 +89,7 @@ const navItems: NavItem[] = [
     basePath: '/providers',
     permission: 'provider_manage',
     children: [
-      { href: '/providers?s=ollama', labelKey: 'nav.ollama', icon: OllamaIcon, section: 'ollama', permission: 'provider_manage' },
+      { href: '/providers?s=llama_server', labelKey: 'nav.llama_server', icon: LlamaServerIcon, section: 'llama_server', permission: 'provider_manage' },
       { href: '/providers?s=gemini', labelKey: 'nav.gemini', icon: Sparkles,   section: 'gemini', permission: 'provider_manage' },
     ],
   },
@@ -139,7 +139,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
       if (item.type !== 'group') continue
       const isActive = item.children.some((child) =>
         child.section
-          ? pathname === item.basePath && (searchParams.get('s') ?? 'ollama') === child.section
+          ? pathname === item.basePath && (searchParams.get('s') ?? 'llama_server') === child.section
           : pathname === child.href,
       )
       if (isActive) {
@@ -173,7 +173,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
   function isChildActive(child: NavGroupChild, basePath: string): boolean {
     if (child.section) {
       if (pathname !== basePath) return false
-      return (searchParams.get('s') ?? 'ollama') === child.section
+      return (searchParams.get('s') ?? 'llama_server') === child.section
     }
     return pathname === child.href
   }

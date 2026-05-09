@@ -1,5 +1,4 @@
 use anyhow::Result;
-use tracing::Instrument;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
@@ -8,7 +7,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::domain::constants::OLLAMA_HEALTH_CHECK_TIMEOUT;
+use crate::domain::constants::LLAMA_SERVER_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::domain::value_objects::{GpuServerId, ProviderId};
@@ -28,34 +27,11 @@ use crate::domain::constants::MODELS_CACHE_TTL_SECS as MODELS_CACHE_TTL;
 
 /// Fetch the list of available models directly from the provider (bypasses cache).
 ///
-/// * Ollama → `GET {url}/api/tags`
-/// * Gemini → `GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key}`
-///   filtered to models that support `generateContent`.
+/// * Gemini       → `GET https://generativelanguage.googleapis.com/v1beta/models?key={api_key}`
+///                  filtered to models that support `generateContent`.
+/// * LlamaServer  → `GET {url}/v1/models` (OpenAI-compatible).
 async fn fetch_models_live(client: &reqwest::Client, provider: &LlmProvider) -> Result<Vec<String>> {
     match provider.provider_type {
-        ProviderType::Ollama => {
-            let url = format!("{}/api/tags", provider.url.trim_end_matches('/'));
-            let json: serde_json::Value = client
-                .get(&url)
-                .send()
-                .await
-                .map_err(|e| anyhow::anyhow!("cannot reach ollama: {e}"))?
-                .error_for_status()
-                .map_err(|e| anyhow::anyhow!("ollama returned error: {e}"))?
-                .json()
-                .await
-                .map_err(|e| anyhow::anyhow!("failed to parse ollama response: {e}"))?;
-
-            let models = json["models"]
-                .as_array()
-                .map_or(&[] as &[_], |v| v)
-                .iter()
-                .filter_map(|m| m["name"].as_str().map(String::from))
-                .collect();
-
-            Ok(models)
-        }
-
         ProviderType::Gemini => {
             let api_key = provider
                 .api_key_encrypted
@@ -123,9 +99,9 @@ pub struct VerifyProviderRequest {
 pub struct RegisterProviderRequest {
     /// Human-readable label.
     pub name: String,
-    /// `"ollama"` or `"gemini"`.
+    /// `"llama_server"` or `"gemini"`.
     pub provider_type: String,
-    /// Required for Ollama. E.g. `"http://192.168.1.10:11434"`.
+    /// Required for llama_server. E.g. `"http://192.168.1.10:11434"`.
     pub url: Option<String>,
     /// Required for Gemini. Encrypted at rest via AES-256-GCM.
     pub api_key: Option<String>,
@@ -138,7 +114,7 @@ pub struct RegisterProviderRequest {
     /// true = key is on a Google free-tier project.
     /// RPM/RPD limits are managed globally via `gemini_rate_limit_policies`.
     pub is_free_tier: Option<bool>,
-    /// Ollama num_parallel setting. Default 4. Used as AIMD upper bound.
+    /// num_parallel setting. Default 4. Used as AIMD upper bound.
     pub num_parallel: Option<i16>,
     /// Phase 3 lifecycle ownership. `external` (default) or `managed`.
     /// `managed` requires `node_id` to be set; rejected otherwise.
@@ -157,7 +133,7 @@ pub struct RegisterProviderRequest {
 #[derive(Debug, Deserialize)]
 pub struct UpdateProviderRequest {
     pub name: String,
-    /// Ollama URL. Leave empty for Gemini.
+    /// Provider URL. Leave empty for Gemini.
     pub url: Option<String>,
     /// Replace the stored key when non-empty; otherwise keep existing.
     pub api_key: Option<String>,
@@ -165,7 +141,7 @@ pub struct UpdateProviderRequest {
     pub gpu_index: Option<i16>,
     pub server_id: Option<GpuServerId>,
     pub is_free_tier: Option<bool>,
-    /// Ollama num_parallel setting.
+    /// num_parallel setting.
     pub num_parallel: Option<i16>,
 }
 
@@ -231,7 +207,9 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
 
 // ── Handlers ──────────────────────────────────────────────────────────────────
 
-/// `POST /v1/providers/verify` — validate Ollama URL format, duplicate check, and connectivity.
+/// `POST /v1/providers/verify` — validate llama-server URL format,
+/// duplicate check, and connectivity. The `/health` endpoint is the
+/// llama.cpp readiness probe (Phase 1).
 pub async fn verify_provider(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -249,7 +227,7 @@ pub async fn verify_provider(
 
     // Duplicate check.
     let count_result: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'ollama'",
+        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'llama_server'",
     )
     .bind(&url)
     .fetch_one(&state.pg_pool)
@@ -264,12 +242,13 @@ pub async fn verify_provider(
         _ => {}
     }
 
-    // Connectivity check: GET {url}/api/version must succeed.
-    let check_url = format!("{}/api/version", url.trim_end_matches('/'));
+    // Connectivity check — llama.cpp `/health` returns 200 when the
+    // server is alive.
+    let check_url = format!("{}/health", url.trim_end_matches('/'));
     match state
         .http_client
         .get(&check_url)
-        .timeout(OLLAMA_HEALTH_CHECK_TIMEOUT)
+        .timeout(LLAMA_SERVER_HEALTH_CHECK_TIMEOUT)
         .send()
         .await
     {
@@ -277,21 +256,21 @@ pub async fn verify_provider(
             (StatusCode::OK, Json(serde_json::json!({"reachable": true}))).into_response()
         }
         Ok(r) => {
-            tracing::warn!(url = %url, status = %r.status(), "Ollama verify probe returned unexpected status");
+            tracing::warn!(url = %url, status = %r.status(), "llama-server verify probe returned unexpected status");
             AppError::BadGateway(
-                format!("Ollama returned unexpected status {}", r.status()),
+                format!("llama-server returned unexpected status {}", r.status()),
             )
             .into_response()
         }
         Err(e) => {
-            tracing::warn!(url = %url, error = %e, "Ollama verify probe failed");
-            AppError::BadGateway("Ollama is not reachable at the given URL".into())
+            tracing::warn!(url = %url, error = %e, "llama-server verify probe failed");
+            AppError::BadGateway("llama-server is not reachable at the given URL".into())
                 .into_response()
         }
     }
 }
 
-/// `POST /v1/providers` — register a new Ollama or Gemini provider.
+/// `POST /v1/providers` — register a new llama_server or Gemini provider.
 ///
 /// Immediately runs a health check and sets the initial status.
 pub async fn register_provider(
@@ -301,25 +280,13 @@ pub async fn register_provider(
 ) -> impl IntoResponse {
     let Some(provider_type) = parse_provider_type(&req.provider_type) else {
         return AppError::BadRequest(
-            "provider_type must be 'ollama', 'gemini', or 'llama_server'".into(),
+            "provider_type must be 'gemini' or 'llama_server'".into(),
         )
         .into_response();
     };
 
     // Validate required fields per provider type.
     match provider_type {
-        ProviderType::Ollama => {
-            let url = req.url.as_deref().unwrap_or("");
-            if url.is_empty() {
-                return AppError::BadRequest("url is required for ollama providers".into())
-                    .into_response();
-            }
-            if let Err(e) = validate_provider_url(url) {
-                return e.into_response();
-            }
-            // Duplicate URL is enforced by the `uq_llm_providers_ollama_url` unique
-            // partial index — a conflicting INSERT returns a 23505 violation below.
-        }
         ProviderType::Gemini => {
             if req.api_key.as_deref().unwrap_or("").is_empty() {
                 return AppError::BadRequest("api_key is required for gemini providers".into())
@@ -382,12 +349,12 @@ pub async fn register_provider(
         idle_ttl_seconds_override: req.idle_ttl_seconds_override,
     };
 
-    // Health check before persisting.
+    // Health check before persisting. Reachability is mandatory for
+    // self-hosted backends (LlamaServer) — Gemini is a remote API and
+    // a brief outage shouldn't block registration.
     let initial_status = check_provider(&state.http_client, &provider).await;
-    if matches!(
-        provider_type,
-        ProviderType::Ollama | ProviderType::LlamaServer
-    ) && initial_status == LlmProviderStatus::Offline
+    if matches!(provider_type, ProviderType::LlamaServer)
+        && initial_status == LlmProviderStatus::Offline
     {
         return AppError::BadGateway(format!(
             "{} is not reachable at the given URL",
@@ -402,9 +369,9 @@ pub async fn register_provider(
 
     let registry = &state.provider_registry;
     if let Err(e) = registry.register(&provider).await {
-        // 23505 unique_violation on uq_llm_providers_ollama_url → duplicate URL.
+        // 23505 unique_violation on the llama-server URL unique index → dup.
         let msg = format!("{e:#}");
-        if msg.contains("23505") || msg.contains("uq_llm_providers_ollama_url") {
+        if msg.contains("23505") || msg.contains("uq_llm_providers_llama_server_url") {
             return AppError::Conflict(
                 "a provider with this URL is already registered".into(),
             ).into_response();
@@ -445,7 +412,7 @@ pub struct ListProvidersParams {
     pub search: Option<String>,
     pub page: Option<i64>,
     pub limit: Option<i64>,
-    /// Filter by provider type: "ollama" | "gemini". Omit for all types.
+    /// Filter by provider type: "llama_server" | "gemini". Omit for all types.
     pub provider_type: Option<String>,
 }
 
@@ -570,7 +537,7 @@ pub async fn update_provider(
 /// `GET /v1/providers/{id}/models` — list models available on a provider.
 ///
 /// Returns the cached model list if available (TTL: 1 h).
-/// On cache miss, fetches live from Ollama (`/api/tags`) or the Gemini models API,
+/// On cache miss, fetches live from the configured provider or the Gemini models API,
 /// stores the result in Valkey, and returns it.
 pub async fn list_provider_models(
     State(state): State<AppState>,
@@ -618,7 +585,7 @@ pub async fn reveal_provider_key(
 
 /// `POST /v1/providers/{id}/models/sync` — force-refresh the model list from the provider.
 ///
-/// For Ollama providers: ignores Valkey cache, fetches live, stores the fresh list.
+/// For llama_server providers: ignores Valkey cache, fetches live, stores the fresh list.
 /// For Gemini providers: returns 400 — use `POST /v1/gemini/models/sync` instead.
 pub async fn sync_provider_models(
     State(state): State<AppState>,
@@ -644,10 +611,6 @@ pub async fn sync_provider_models(
             if let Some(ref pool) = state.valkey_pool {
                 store_models_cache(pool, &cache_key, &models).await;
             }
-            // Also persist to the global ollama_models table.
-            if let Err(e) = state.ollama_model_repo.sync_provider_models(id, &models).await {
-                tracing::warn!(%id, error = %e, "failed to persist ollama models to DB (non-fatal)");
-            }
             // Upsert model selections (is_enabled defaults to true for new rows).
             if let Err(e) = state.model_selection_repo.upsert_models(id, &models).await {
                 tracing::warn!(%id, error = %e, "failed to upsert model selections (non-fatal)");
@@ -668,11 +631,13 @@ pub async fn sync_provider_models(
 
 // ── Unified sync endpoints ──────────────────────────────────────────────────
 
-/// `POST /v1/providers/{id}/sync` — unified sync for a single provider.
+/// `POST /v1/providers/{id}/sync` — refresh a provider's model cache.
 ///
-/// Combines health check + model sync + VRAM probing + LLM analysis.
-/// Runs in the background and returns 202 immediately to avoid the JWT router
-/// 30-second timeout (LLM analysis can exceed 30s under load).
+/// With the migration to llama-server, the heavy capacity analyzer (VRAM probing + LLM
+/// analysis) is gone too — capacity now lives behind Phase 4 AIMD,
+/// driven by live `/health` slot counts. This endpoint reduces to a
+/// model-list refresh; the response is synchronous because the work is
+/// bounded by one HTTP round-trip.
 pub async fn sync_single_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -684,58 +649,19 @@ pub async fn sync_single_provider(
         Err(e) => return e.into_response(),
     };
 
-    if !matches!(provider.provider_type, ProviderType::Ollama) {
-        return AppError::BadRequest("sync is only supported for Ollama providers".into())
-            .into_response();
-    }
-
-    let settings = state.capacity_settings_repo.get().await.unwrap_or_default();
     let pid_str = pid.to_string();
 
-    tokio::spawn(
-        async move {
-            match crate::infrastructure::outbound::capacity::analyzer::sync_provider(
-                &state.http_client,
-                provider.id,
-                &provider.name,
-                &provider.url,
-                provider.total_vram_mb,
-                provider.num_parallel.max(1) as u32,
-                &settings.analyzer_model,
-                &*state.capacity_repo,
-                &*state.vram_pool,
-                state.valkey_pool.as_ref(),
-                &*state.provider_registry,
-                &*state.ollama_model_repo,
-                &*state.model_selection_repo,
-                &*state.vram_budget_repo,
-                None,
-            )
-            .await
-            {
-                Ok(()) => {
-                    emit_audit(
-                        &state, &claims, "sync", "ollama_provider", &pid_str,
-                        &provider.name, &format!("Provider '{}' synced", provider.name),
-                    )
-                    .await;
-                }
-                Err(e) => {
-                    tracing::warn!(%id, error = %e, "background sync_provider failed");
-                }
-            }
-        }
-        .instrument(tracing::info_span!("veronex.provider_handlers.spawn")),
-    );
-
-    (
-        StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "message": "provider sync triggered" })),
+    let resp = sync_provider_models(State(state.clone()), Path(pid)).await;
+    emit_audit(
+        &state, &claims, "sync", provider.provider_type.resource_type(),
+        &pid_str, &provider.name,
+        &format!("Provider '{}' models synced", provider.name),
     )
-        .into_response()
+    .await;
+    resp.into_response()
 }
 
-/// `POST /v1/providers/sync` — unified sync for all active Ollama providers.
+/// `POST /v1/providers/sync` — unified sync for all active llama_server providers.
 pub async fn sync_all_providers_handler(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -768,11 +694,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn provider_summary_from_llm_provider_ollama() {
+    fn provider_summary_from_llm_provider_llama_server() {
         let b = LlmProvider {
             id: Uuid::now_v7(),
-            name: "test-ollama".to_string(),
-            provider_type: ProviderType::Ollama,
+            name: "local-llama".to_string(),
+            provider_type: ProviderType::LlamaServer,
             url: "http://localhost:11434".to_string(),
             api_key_encrypted: None,
             total_vram_mb: 8192,
@@ -787,7 +713,7 @@ mod tests {
             idle_ttl_seconds_override: None,
         };
         let s = ProviderSummary::from(b);
-        assert_eq!(s.provider_type, "ollama");
+        assert_eq!(s.provider_type, "llama_server");
         assert_eq!(s.status, "online");
         assert_eq!(s.url, "http://localhost:11434");
         assert_eq!(s.gpu_index, Some(0));

@@ -62,9 +62,9 @@ pub struct JobDetail {
     pub message_count: Option<i64>,
     /// Full conversation context sent to the model (messages_json JSONB array).
     pub messages_json: Option<serde_json::Value>,
-    /// Estimated API cost in USD. $0.00 for Ollama (self-hosted). None = no pricing data.
+    /// Estimated API cost in USD. $0.00 for self-hosted (llama_server). None = no pricing data.
     pub estimated_cost_usd: Option<f64>,
-    /// Name of the Ollama server / provider that processed this job.
+    /// Name of the llama-server provider that processed this job.
     pub provider_name: Option<String>,
     /// S3 keys for stored WebP images.
     pub image_keys: Option<Vec<String>>,
@@ -176,7 +176,7 @@ pub(super) async fn fetch_job_detail(
                 j.account_id,
                 p.name AS provider_name,
                 CASE
-                    WHEN j.provider_type = 'ollama' THEN 0.0
+                    WHEN j.provider_type = 'llama_server' THEN 0.0
                     WHEN pricing.input_per_1m IS NOT NULL
                          AND j.prompt_tokens IS NOT NULL
                          AND j.completion_tokens IS NOT NULL THEN
@@ -323,7 +323,7 @@ pub(super) async fn fetch_jobs(
                 a.name AS account_name,
                 p.name AS provider_name,
                 CASE
-                    WHEN j.provider_type = 'ollama' THEN 0.0
+                    WHEN j.provider_type = 'llama_server' THEN 0.0
                     WHEN pricing.input_per_1m IS NOT NULL
                          AND j.prompt_tokens IS NOT NULL
                          AND j.completion_tokens IS NOT NULL THEN

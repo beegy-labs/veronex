@@ -125,9 +125,9 @@ pub struct JobSummary {
     pub request_path: Option<String>,
     /// True when the model responded with tool calls instead of (or in addition to) text.
     pub has_tool_calls: bool,
-    /// Estimated API cost in USD. $0.00 for Ollama (self-hosted). None = no pricing data.
+    /// Estimated API cost in USD. $0.00 for self-hosted (llama_server). None = no pricing data.
     pub estimated_cost_usd: Option<f64>,
-    /// Name of the provider (Ollama server) that processed this job.
+    /// Name of the provider (llama-server) that processed this job.
     pub provider_name: Option<String>,
     /// Conversation this job belongs to (multi-turn), if any.
     pub conversation_id: Option<String>,

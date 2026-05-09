@@ -49,7 +49,7 @@ prompt_tokens: number | null,
 completion_tokens: number | null, 
 /**
  * Tokens served from cache (Gemini `cachedContentTokenCount`).
- * Always `None` for Ollama (not exposed by API).
+ * Always `None` for llama_server (not exposed by API).
  */
 cached_tokens: number | null, 
 /**
@@ -57,7 +57,7 @@ cached_tokens: number | null,
  */
 source: JobSource, 
 /**
- * The specific provider instance (Ollama server) that processed this job.
+ * The specific provider instance (llama-server) that processed this job.
  * `None` until dispatched. Set by the queue dispatcher before running.
  */
 provider_id: string | null, 
@@ -66,10 +66,10 @@ provider_id: string | null,
  */
 api_format: ApiFormat, 
 /**
- * Full LLM input context — complete messages array in Ollama `/api/chat` format.
+ * Full LLM input context — complete messages array in chat-completion `messages` format.
  *
  * Contains: system prompt + prior turns (user/assistant/tool) + current user message.
- * When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
+ * When Some, the LlamaServerAdapter routes to chat-completions; when None, to text-completion.
  *
  * Stored in S3 `ConversationRecord.messages` (not persisted to Postgres).
  * Serves as ground-truth training input: input=messages, output=result+tool_calls.
@@ -77,7 +77,7 @@ api_format: ApiFormat,
  */
 messages: JsonValue | null, 
 /**
- * Tool/function definitions forwarded from the client (OpenAI or Ollama format).
+ * Tool/function definitions forwarded from the client (OpenAI/chat format).
  * Passed to the provider so it can produce proper `tool_calls` responses.
  * Not persisted to DB — in-memory only during dispatch.
  */
@@ -108,7 +108,7 @@ cancelled_at: string | null,
 conversation_id: string | null, 
 /**
  * Structured tool calls returned by the model (JSONB in DB).
- * Ollama format: `[{function: {name, arguments}}]`
+ * Wire format: `[{function: {name, arguments}}]`
  * Populated when the model made at least one tool call; None for text-only responses.
  */
 tool_calls_json: JsonValue | null, 

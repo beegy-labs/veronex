@@ -30,12 +30,12 @@
 
 ## Design Rationale
 
-One physical server may run multiple Ollama providers (one per GPU). To avoid scraping
+One physical server may run multiple llama-server providers (one per GPU). To avoid scraping
 node-exporter multiple times per host, `GpuServer` is a separate entity from `LlmProvider`.
 
 ```
 gpu_servers   (1 physical host = 1 node-exporter)
-llm_providers (1 Ollama process = 1 GPU)
+llm_providers (1 llama-server process = 1 GPU)
   └── server_id → gpu_servers (nullable; Gemini = NULL)
 ```
 
@@ -86,7 +86,7 @@ GET    /v1/servers/{id}/metrics/history?hours=N
        → Vec<ServerMetricsPoint>  (adaptive buckets from otel_metrics_gauge)
 
 GET    /v1/metrics/targets
-       Agent target discovery — no auth, returns two target types (server + ollama)
+       Agent target discovery — no auth, returns two target types (server + llama-server)
        → [{ "targets": ["host:9100"], "labels": { type, server_id, server_name } },
           { "targets": ["host:11434"], "labels": { type, provider_id, provider_name, server_id? } }]
 ```

@@ -127,8 +127,6 @@ struct TreeEntry {
     kind: String,
     path: String,
     #[serde(default)]
-    size: Option<u64>,
-    #[serde(default)]
     lfs: Option<LfsInfo>,
 }
 

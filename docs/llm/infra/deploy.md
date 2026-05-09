@@ -42,7 +42,7 @@
 | veronex | local build | **3001**->3000 | Rust API server |
 | veronex-analytics | local build | internal 3003 | Analytics (OTel write + ClickHouse read) |
 | veronex-web | local build | **3000** | Next.js admin dashboard |
-| veronex-agent | local build | 9091 (health) | OTLP push collector (node-exporter + Ollama → OTel Collector) |
+| veronex-agent | local build | 9091 (health) | OTLP push collector (node-exporter + llama-server → OTel Collector) |
 | veronex-mcp | local build | **3100** | MCP tool server (multi-tool, single deployment) |
 | veronex-embed | local build | **3200** | Embedding server |
 | otel-collector | docker/otel/Dockerfile | 4317, 4318, 13133 | Metrics + traces + logs -> Redpanda |
@@ -58,7 +58,7 @@
 # Rust API (veronex)
 DATABASE_URL=postgres://veronex:veronex@localhost:5433/veronex
 VALKEY_URL=redis://localhost:6380/0   # DB index recommended when sharing Valkey
-OLLAMA_URL=http://localhost:11434
+LLAMA_SERVER_URL=http://localhost:11434
 GEMINI_API_KEY=<optional legacy>
 PORT=3000
 OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
@@ -75,7 +75,7 @@ S3_BUCKET=veronex-messages
 S3_IMAGE_BUCKET=veronex-images       # separate bucket for inference job images (WebP); default: veronex-images
 S3_IMAGE_PUBLIC_URL=http://localhost:9010/veronex-images  # public URL base for image thumbnails served to browser; required when S3_ENDPOINT set
 S3_REGION=us-east-1
-CAPACITY_ANALYZER_OLLAMA_URL=http://localhost:11434
+CAPACITY_ANALYZER_LLAMA_SERVER_URL=http://localhost:11434
 SESSION_GROUPING_INTERVAL_SECS=86400 # session grouping loop interval (default: 86400 = 24h)
 ANALYTICS_URL=http://localhost:3003
 ANALYTICS_SECRET=<shared-secret>
@@ -165,20 +165,20 @@ Single consolidated file — no migration framework.
 |-------|-------------|
 | `api_keys` | Bearer tokens with RPM/TPM rate limits and per-key usage tracking |
 | `inference_jobs` | Job lifecycle: `provider_type`, `provider_id`, `messages_json`, `image_keys` (TEXT[]) |
-| `llm_providers` | Provider config (Ollama/Gemini): `provider_type`, VRAM, server FK |
+| `llm_providers` | Provider config (llama-server/Gemini): `provider_type`, VRAM, server FK |
 | `gpu_servers` | GPU hardware nodes with `node_exporter_url` |
 | `gemini_rate_limit_policies` | Per-model RPM/RPD limits + `available_on_free_tier` flag |
 | `provider_selected_models` | Per-provider model enable/disable (`PK (provider_id, model_name)`) |
 | `gemini_sync_config` | Singleton admin API key for Gemini model sync |
 | `gemini_models` | Global Gemini model pool (synced via admin key) |
-| `ollama_models` | Per-provider model list (`PK (model_name, provider_id)`) |
-| `ollama_sync_jobs` | Async global sync tracking |
+| `llama_server_models` | Per-provider model list (`PK (model_name, provider_id)`) |
+| `llama_server_sync_jobs` | Async global sync tracking |
 | `accounts` | RBAC accounts (super / admin, Argon2id password_hash) |
 | `account_sessions` | JWT sessions: `jti`, `refresh_token_hash` (BLAKE2b) |
 | `model_vram_profiles` | VRAM profiles per `(provider_id, model_name)` — weight, KV, arch params |
 | `capacity_settings` | Singleton (id=1): analyzer model, sync interval, sync_enabled |
 | `lab_settings` | Singleton (id=1): `gemini_function_calling` BOOLEAN |
-| `model_pricing` | `(provider, model_name)` PK; Gemini seed rows; Ollama = $0.00 |
+| `model_pricing` | `(provider, model_name)` PK; Gemini seed rows; llama-server = $0.00 |
 
 ---
 
@@ -197,7 +197,7 @@ Categories of `Arc<dyn Port>` fields wired in `main.rs` composition root:
 | Category | Key fields |
 |----------|------------|
 | Inference core | `use_case`, `job_repo`, `api_key_repo` |
-| Provider routing | `provider_registry`, `gpu_server_registry`, `ollama_model_repo`, `gemini_*` repos, `model_selection_repo` |
+| Provider routing | `provider_registry`, `gpu_server_registry`, `modelfile_registry`, `gemini_*` repos, `model_selection_repo` |
 | Auth / RBAC | `account_repo`, `session_repo`, `jwt_secret`, `login_rate_limit` |
 | Observability | `audit_port`, `analytics_repo` |
 | Capacity / thermal | `vram_pool`, `thermal`, `vram_profile_repo`, `capacity_settings_repo`, `sync_trigger`, `analyzer_url` |

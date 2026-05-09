@@ -42,7 +42,7 @@ export const JobStatusSchema = z.enum([
 
 export const JobSourceSchema = z.enum(['api', 'api_paid', 'test', 'analyzer'])
 
-export const ProviderTypeSchema = z.enum(['ollama', 'gemini'])
+export const ProviderTypeSchema = z.enum(['llama_server', 'gemini'])
 
 export const LlmProviderStatusSchema = z.enum(['online', 'degraded', 'offline'])
 

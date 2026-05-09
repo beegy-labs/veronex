@@ -1,11 +1,11 @@
-/// veronex-agent: Collects hardware + Ollama metrics independently and pushes
+/// veronex-agent: Collects hardware metrics from node-exporter and pushes
 /// them to OTel Collector via OTLP HTTP.
 ///
-/// Two target types, each collected on its own:
-///   type=server  — node-exporter (CPU, mem, GPU)
-///   type=ollama  — Ollama /api/ps (loaded models, VRAM)
+/// Per-node llama-server capacity is reported separately by `veronex-llm-agent`
+/// via heartbeats — this crate scrapes node-exporter only.
 ///
-/// When linked (server_id FK), analytics can correlate both.
+/// Target type:
+///   type=server  — node-exporter (CPU, mem, GPU)
 ///
 /// Supports N replicas via modulus sharding — no external coordination.
 ///
@@ -31,7 +31,6 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-mod capacity_push;
 mod health;
 mod heartbeat;
 mod orphan_sweeper;
@@ -354,11 +353,11 @@ fn agent_self_gauges(stats: &AgentStats, cycle: &CycleResult) -> Vec<scraper::Ga
     ]
 }
 
-/// Shard key for a target — server_id for servers, provider_id for ollama.
+/// Shard key for a target — server_id for servers, provider_id for llama_server.
 fn shard_key(t: &SdTarget) -> &str {
     match t.labels.get("type").map(|s| s.as_str()) {
         Some("server") => t.labels.get("server_id").map(|s| s.as_str()).unwrap_or(""),
-        Some("ollama") => t.labels.get("provider_id").map(|s| s.as_str()).unwrap_or(""),
+        Some("llama_server") => t.labels.get("provider_id").map(|s| s.as_str()).unwrap_or(""),
         _ => "",
     }
 }
@@ -476,35 +475,12 @@ async fn scrape_cycle(
             let url = host_port.to_string();
             let labels = t.labels.clone();
             let sem = semaphore.clone();
-            let valkey = valkey.cloned();
 
             Some(async move {
                 let _permit = sem.acquire().await;
                 match target_type {
                     "server" => {
                         let metrics = scraper::scrape_node_exporter(client, &url).await;
-                        (labels, metrics)
-                    }
-                    "ollama" => {
-                        let raw = scraper::scrape_ollama_raw(client, &url).await;
-                        let metrics = scraper::ollama_gauges_from_raw(&raw);
-                        // Push heartbeat + capacity state when scrape succeeded.
-                        if let (Some(pool), Some(provider_id)) = (&valkey, labels.get("provider_id")) {
-                            if !raw.is_empty() || metrics.iter().any(|g| g.name == "ollama_loaded_models") {
-                                heartbeat::set_online(pool, provider_id, HEARTBEAT_TTL_SECS).await;
-                            }
-                            // Push capacity state (arch profiles) even when no models are loaded —
-                            // this lets the analyzer skip HTTP /api/ps + /api/show calls.
-                            let total_vram_mb: u64 = labels
-                                .get("total_vram_mb")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            let loaded: Vec<(String, u64)> = raw
-                                .iter()
-                                .filter_map(|m| Some((m.name.clone()?, m.size_vram.unwrap_or(0))))
-                                .collect();
-                            capacity_push::push(client, pool, &url, provider_id, total_vram_mb, &loaded).await;
-                        }
                         (labels, metrics)
                     }
                     _ => (labels, vec![]),

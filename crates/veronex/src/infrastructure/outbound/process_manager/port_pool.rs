@@ -16,7 +16,7 @@ use dashmap::DashSet;
 /// Default range — `11430..=11530` gives 101 slots, well above the
 /// realistic concurrent-process count per node (Mac mini has 16-32 GB
 /// unified memory, so ~2-4 simultaneous models). The range starts above
-/// Ollama's 11434 so a co-resident Ollama install doesn't conflict.
+/// 11434 so a co-resident upstream service doesn't conflict.
 pub const DEFAULT_RANGE: RangeInclusive<u16> = 11430..=11530;
 
 /// Allocator state. Cheap to clone (`Arc`-of-state).

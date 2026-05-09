@@ -1,4 +1,4 @@
-import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, ConversationSummary, ConversationDetail, TurnInternals, KeyPage, McpServer, McpServerAccess, McpServerStat, McpSettings, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, OllamaModelPage, OllamaProviderPage, OllamaSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
+import type { Account, AccountPage, AnalyticsStats, ApiKey, AuditEvent, ConversationSummary, ConversationDetail, TurnInternals, KeyPage, McpServer, McpServerAccess, McpServerStat, McpSettings, Provider, ProviderPage, ProviderSelectedModel, CapacityPageResponse, RoleSummary, ServerPage, SyncSettings, CreateAccountRequest, CreateAccountResponse, CreateKeyRequest, CreateKeyResponse, DashboardStats, GeminiModel, GeminiRateLimitPolicy, GeminiStatusSyncResponse, GeminiSyncConfig, GpuServer, HourlyUsage, Job, JobDetail, LabSettings, LoginRequest, LoginResponse, ModelBreakdown, NodeMetrics, LlamaServerModelPage, LlamaServerProviderPage, LlamaServerSyncJob, PatchSyncSettings, PatchLabSettings, PerformanceStats, QueueDepth, RegisterMcpServerRequest, RegisterProviderRequest, RegisterProviderResponse, RegisterGpuServerRequest, ServerMetricsPoint, SessionRecord, UpdateProviderRequest, UpdateGpuServerRequest, UpsertGeminiPolicyRequest, UsageAggregate, UsageBreakdown } from './types'
 import { ApiHttpError } from './types'
 import { apiClient } from './api-client'
 import { BASE_API_URL } from './constants'
@@ -244,29 +244,29 @@ export const api = {
   geminiModels: () =>
     apiClient.get<{ models: GeminiModel[] }>('/v1/gemini/models'),
 
-  // ── Ollama (JWT-protected) ────────────────────────────────────────────────
-  ollamaModels: (params?: { search?: string; page?: number; limit?: number }) => {
+  // ── llama-server (JWT-protected) ──────────────────────────────────────────
+  llamaServerModels: (params?: { search?: string; page?: number; limit?: number }) => {
     const qs = new URLSearchParams()
     if (params?.search) qs.set('search', params.search)
     if (params?.page) qs.set('page', String(params.page))
     if (params?.limit) qs.set('limit', String(params.limit))
     const q = qs.toString()
-    return apiClient.get<OllamaModelPage>(`/v1/ollama/models${q ? '?' + q : ''}`)
+    return apiClient.get<LlamaServerModelPage>(`/v1/llama_server/models${q ? '?' + q : ''}`)
   },
 
-  syncOllamaModels: () =>
-    apiClient.post<{ job_id: string; status: string }>('/v1/ollama/models/sync'),
+  syncLlamaServerModels: () =>
+    apiClient.post<{ job_id: string; status: string }>('/v1/llama_server/models/sync'),
 
-  ollamaSyncStatus: () =>
-    apiClient.get<OllamaSyncJob>('/v1/ollama/sync/status'),
+  llamaServerSyncStatus: () =>
+    apiClient.get<LlamaServerSyncJob>('/v1/llama_server/sync/status'),
 
-  ollamaModelProviders: (modelName: string, params?: { search?: string; page?: number; limit?: number }) => {
+  llamaServerModelProviders: (modelName: string, params?: { search?: string; page?: number; limit?: number }) => {
     const qs = new URLSearchParams()
     if (params?.search) qs.set('search', params.search)
     if (params?.page) qs.set('page', String(params.page))
     if (params?.limit) qs.set('limit', String(params.limit))
     const q = qs.toString()
-    return apiClient.get<OllamaProviderPage>(`/v1/ollama/models/${encodeURIComponent(modelName)}/providers${q ? '?' + q : ''}`)
+    return apiClient.get<LlamaServerProviderPage>(`/v1/llama_server/models/${encodeURIComponent(modelName)}/providers${q ? '?' + q : ''}`)
   },
 
   // ── Setup (public — no auth, first-run only) ──────────────────────────────

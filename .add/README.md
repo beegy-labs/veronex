@@ -35,7 +35,7 @@ All code — Rust and frontend — is written and reviewed against:
 
 | Axis | Target |
 |------|--------|
-| Providers (Ollama servers) | **10,000** |
+| Providers (llama-server nodes) | **10,000** |
 | MCP servers | **1,000+** |
 | Concurrent requests (TPS) | **1,000,000** |
 

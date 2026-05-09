@@ -144,7 +144,7 @@ fn extract_text(candidates: &[Candidate]) -> String {
         .unwrap_or_default()
 }
 
-/// Extract `functionCall` parts from Gemini candidates, converted to Ollama tool_calls format.
+/// Extract `functionCall` parts from Gemini candidates, converted to upstream tool_calls format.
 /// Returns None when no function calls are present.
 fn extract_function_calls(candidates: &[Candidate]) -> Option<serde_json::Value> {
     let calls: Vec<serde_json::Value> = candidates
@@ -155,7 +155,7 @@ fn extract_function_calls(candidates: &[Candidate]) -> Option<serde_json::Value>
                 .iter()
                 .filter_map(|p| p.function_call.as_ref())
                 .map(|fc| {
-                    // Normalise Gemini `{name, args}` to Ollama `{function: {name, arguments}}`
+                    // Normalise Gemini `{name, args}` to chat `{function: {name, arguments}}`
                     serde_json::json!({
                         "function": {
                             "name": fc.get("name").and_then(|v| v.as_str()).unwrap_or(""),

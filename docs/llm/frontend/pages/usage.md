@@ -125,7 +125,7 @@ Token costs estimated at query time via LATERAL JOIN on `model_pricing`. No cost
 
 | `estimated_cost_usd` | Meaning | UI |
 |-----------------------|---------|----|
-| `0.0` | Ollama (self-hosted) | "Free" |
+| `0.0` | llama-server (self-hosted) | "Free" |
 | `> 0` | Gemini (input+output tokens x per-1M rate) | `$0.0000` (4dp) |
 | `null` | No pricing row or tokens not recorded | "--" |
 
@@ -138,7 +138,7 @@ Token costs estimated at query time via LATERAL JOIN on `model_pricing`. No cost
 | `by_model[].estimated_cost_usd` | Exact-then-wildcard pricing, SUM per model+provider |
 | `total_cost_usd` | Sum of `by_providers[]` costs (nulls filtered). Shown as badge when > 0 |
 
-Ollama: no `model_pricing` rows; provider cost short-circuits to `0.0`. Gemini: `cost = (prompt/1M x input_rate) + (completion/1M x output_rate)`, exact name first then `*` wildcard.
+llama-server: no `model_pricing` rows; provider cost short-circuits to `0.0`. Gemini: `cost = (prompt/1M x input_rate) + (completion/1M x output_rate)`, exact name first then `*` wildcard.
 
 ## i18n Keys
 

@@ -13,7 +13,7 @@ use super::otlp_client::OtlpClient;
 /// Spec: https://opentelemetry.io/docs/specs/semconv/gen-ai/gen-ai-spans/
 fn gen_ai_system(provider_type: &str) -> &'static str {
     match provider_type {
-        "ollama" => "ollama",
+
         "gemini" => "gemini",
         "llama_server" => "llama_cpp",
         _ => "unknown",
@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn gen_ai_system_maps_known_provider_types() {
-        assert_eq!(gen_ai_system("ollama"), "ollama");
+
         assert_eq!(gen_ai_system("gemini"), "gemini");
         assert_eq!(gen_ai_system("llama_server"), "llama_cpp");
     }

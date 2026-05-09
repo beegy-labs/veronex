@@ -11,9 +11,7 @@ use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::message_store::MessageStore;
-use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
@@ -37,32 +35,26 @@ use super::runner::run_job;
 
 // ── Provider filtering ──────────────────────────────────────────────────────
 
-/// Five-stage filter: global model gate → active+type+tier → model availability → model selection → preload exclusion.
+/// Three-stage filter: global model gate → active+type+tier → model selection.
 async fn filter_candidates(
     registry: &dyn LlmProviderRegistry,
-    ollama_model_repo: &Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: &Option<Arc<dyn ProviderModelSelectionRepository>>,
     global_model_settings_repo: &Option<Arc<dyn GlobalModelSettingsRepository>>,
-    vram_pool: &dyn VramPoolPort,
+    _vram_pool: &dyn VramPoolPort,
     provider_type: ProviderType,
     model: &str,
     gemini_tier: Option<&str>,
 ) -> Vec<LlmProvider> {
-    // Stage 0: global model gate — if model is globally disabled, reject immediately
-    if !model.is_empty() {
-        if let Some(repo) = global_model_settings_repo {
-            if let Ok(enabled) = repo.is_enabled(model).await {
-                if !enabled {
-                    tracing::debug!(model, "model globally disabled — rejecting all providers");
-                    return vec![];
-                }
-            }
-        }
+    if !model.is_empty()
+        && let Some(repo) = global_model_settings_repo
+        && let Ok(false) = repo.is_enabled(model).await
+    {
+        tracing::debug!(model, "model globally disabled — rejecting all providers");
+        return vec![];
     }
 
     let all = registry.list_all().await.unwrap_or_default();
 
-    // Stage 1: type + tier (standby providers included — woken on demand)
     let mut candidates: Vec<_> = all.into_iter()
         .filter(|b| {
             b.provider_type == provider_type
@@ -70,23 +62,9 @@ async fn filter_candidates(
         })
         .collect();
 
-    if provider_type != ProviderType::Ollama || model.is_empty() {
-        return candidates;
-    }
-
-    // Stage 2: model availability
-    if let Some(repo) = ollama_model_repo
-        && let Ok(ids) = repo.providers_for_model(model).await
-            && !ids.is_empty() {
-                let id_set: std::collections::HashSet<Uuid> = ids.into_iter().collect();
-                let filtered: Vec<_> = candidates.iter()
-                    .filter(|b| id_set.contains(&b.id)).cloned().collect();
-                if !filtered.is_empty() { candidates = filtered; }
-            }
-
-    // Stage 3: model selection (disabled models) — denylist semantics.
-    // Only providers where the model is EXPLICITLY disabled (is_enabled=false) are excluded.
-    // Models absent from provider_selected_models default to enabled (cold-start safe).
+    // Model selection (denylist) — providers that explicitly disabled the
+    // model are excluded; models absent from provider_selected_models
+    // default to enabled (cold-start safe).
     if let Some(repo) = model_selection_repo {
         let futs: Vec<_> = candidates.iter()
             .map(|b| {
@@ -105,17 +83,6 @@ async fn filter_candidates(
             }
         }
         candidates = filtered;
-    }
-
-    // Stage 4: preload exclusion (Phase 6) — skip model+provider pairs
-    // with 3 consecutive preload failures within the 300s exclusion window.
-    if provider_type == ProviderType::Ollama && !model.is_empty() {
-        let before = candidates.len();
-        candidates.retain(|b| !vram_pool.is_preload_excluded(b.id, model));
-        let excluded = before - candidates.len();
-        if excluded > 0 {
-            tracing::debug!(%model, excluded, "providers excluded due to preload failures");
-        }
     }
 
     candidates
@@ -142,7 +109,7 @@ fn score_and_claim(
     let mut scored: Vec<(LlmProvider, i64)> = Vec::with_capacity(candidates.len());
     for b in candidates {
         let avail = match b.provider_type {
-            ProviderType::Ollama => {
+            ProviderType::LlamaServer => {
                 // Use VramPool's O(1) atomic read instead of per-provider Valkey call.
                 // Thermal/overheating checks are handled below in the find_map closure.
                 let base = vram.available_vram_mb(b.id) as i64;
@@ -155,19 +122,12 @@ fn score_and_claim(
                 } else { base }
             }
             ProviderType::Gemini => i64::MAX,
-            ProviderType::LlamaServer => {
-                // Phase 1 external mode: VRAM is opaque to Veronex. Treat as
-                // effectively-unlimited so the dispatcher never blocks; the
-                // router's slots-aware scoring (Phase 1-3) is what actually
-                // selects between candidates.
-                i64::MAX
-            }
         };
         scored.push((b, avail));
     }
 
     scored.sort_by(|a, b| {
-        if provider_type == ProviderType::Ollama {
+        if provider_type == ProviderType::LlamaServer {
             let tier_pref = |p: &LlmProvider| match key_tier {
                 Some(KeyTier::Paid) => !p.is_free_tier,
                 Some(KeyTier::Free) => p.is_free_tier,
@@ -289,7 +249,6 @@ pub(super) fn spawn_job_direct(
     message_store: Option<Arc<dyn MessageStore>>,
     valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
-    model_manager: Option<Arc<dyn ModelManagerPort>>,
     vram_pool: Arc<dyn VramPoolPort>,
     thermal: Arc<dyn ThermalPort>,
     circuit_breaker: Arc<dyn CircuitBreakerPort>,
@@ -356,7 +315,7 @@ pub(super) fn spawn_job_direct(
                 .on_request_start(provider_id, chrono::Utc::now());
 
             match run_job(
-                jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
+                jobs, adapter, job_repo, message_store, valkey, observability,
                 provider_dispatch, uuid, job, Some(provider_id), is_free,
                 event_tx, instance_id, cancel_notifiers, mcp_lifecycle_phase_enabled,
             ).await {
@@ -386,7 +345,6 @@ pub(super) async fn queue_dispatcher_loop(
     message_store: Option<Arc<dyn MessageStore>>,
     valkey: Arc<dyn ValkeyPort>,
     observability: Option<Arc<dyn ObservabilityPort>>,
-    model_manager: Option<Arc<dyn ModelManagerPort>>,
     vram_pool: Arc<dyn VramPoolPort>,
     thermal: Arc<dyn ThermalPort>,
     circuit_breaker: Arc<dyn CircuitBreakerPort>,
@@ -394,7 +352,6 @@ pub(super) async fn queue_dispatcher_loop(
     event_tx: broadcast::Sender<JobStatusEvent>,
     instance_id: Arc<str>,
     cancel_notifiers: Arc<DashMap<Uuid, Arc<Notify>>>,
-    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     shutdown: CancellationToken,
@@ -502,7 +459,7 @@ pub(super) async fn queue_dispatcher_loop(
 
             // Find provider + claim VRAM
             let candidates = filter_candidates(
-                registry.as_ref(), &ollama_model_repo, &model_selection_repo,
+                registry.as_ref(), &model_selection_repo,
                 &global_model_settings_repo,
                 vram_pool.as_ref(), job.provider_type, model, gemini_tier.as_deref(),
             ).await;
@@ -577,9 +534,9 @@ pub(super) async fn queue_dispatcher_loop(
                 tracing::warn!(%uuid, key = %owner_key, error = %e, "dispatcher: failed to set job owner key");
             }
 
-            let (jobs_c, repo_c, ms_c, vk_c, obs_c, mm_c) = (
+            let (jobs_c, repo_c, ms_c, vk_c, obs_c) = (
                 jobs.clone(), job_repo.clone(), message_store.clone(),
-                valkey.clone(), observability.clone(), model_manager.clone(),
+                valkey.clone(), observability.clone(),
             );
             let (ev_c, cb_c, pd_c, iid_c, cn_c) = (
                 event_tx.clone(), circuit_breaker.clone(), provider_dispatch.clone(),
@@ -619,7 +576,7 @@ pub(super) async fn queue_dispatcher_loop(
                     );
     
                     match run_job(
-                        jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c, mm_c,
+                        jobs_c, adapter, repo_c, ms_c, Some(vk_c.clone()), obs_c,
                         pd_c, uuid, job, Some(pid), is_free, ev_c, iid_c, cn_c,
                         mcp_lifecycle_phase_enabled,
                     ).await {

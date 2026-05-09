@@ -34,7 +34,7 @@ pub struct SetModelEnabledRequest {
 
 /// `GET /v1/providers/{id}/selected-models` — list models with per-provider enabled state.
 ///
-/// **Ollama**: merges per-provider `ollama_models` with `provider_selected_models`.
+/// **llama_server**: merges per-provider modelfile registry with `provider_selected_models`.
 ///   New models default to `is_enabled = true`.
 /// **Gemini**: merges the global `gemini_models` pool with `provider_selected_models`.
 ///   New models default to `is_enabled = false`.
@@ -63,29 +63,6 @@ pub async fn list_selected_models(
         .collect();
 
     match provider.provider_type {
-        ProviderType::Ollama => {
-            // Use per-provider synced model list; default is_enabled = true.
-            let models = match state.ollama_model_repo.models_for_provider(id).await {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!(%id, "list_selected_models: failed to list ollama models: {e}");
-                    return db_error(e).into_response();
-                }
-            };
-            let dtos: Vec<SelectedModelDto> = models
-                .into_iter()
-                .map(|model_name| {
-                    let is_enabled = sel_map.get(&model_name).copied().unwrap_or(true);
-                    SelectedModelDto {
-                        model_name,
-                        is_enabled,
-                        synced_at: Utc::now(),
-                    }
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-
         ProviderType::Gemini => {
             // Global model pool; default is_enabled = false.
             let global = match state.gemini_model_repo.list().await {

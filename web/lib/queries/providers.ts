@@ -19,12 +19,12 @@ export const providerKeyQuery = (providerId: string) => queryOptions({
   enabled: false,
 })
 
-export const ollamaModelProvidersQuery = (
+export const llamaServerModelProvidersQuery = (
   modelName: string,
   params?: { search?: string; page?: number; limit?: number },
 ) => queryOptions({
-  queryKey: ['ollama-model-providers', modelName, params] as const,
-  queryFn: () => api.ollamaModelProviders(modelName, params),
+  queryKey: ['llama_server-model-providers', modelName, params] as const,
+  queryFn: () => api.llamaServerModelProviders(modelName, params),
   staleTime: STALE_TIME_FAST,
 })
 
@@ -35,20 +35,20 @@ export const selectedModelsQuery = (providerId: string) => queryOptions({
   retry: false,
 })
 
-// ── Ollama ────────────────────────────────────────────────────────────────────
+// ── llama-server ──────────────────────────────────────────────────────────────
 
-export const ollamaModelsQuery = (
+export const llamaServerModelsQuery = (
   params?: { search?: string; page?: number; limit?: number },
 ) => queryOptions({
-  queryKey: ['ollama-models', params] as const,
-  queryFn: () => api.ollamaModels(params),
+  queryKey: ['llama_server-models', params] as const,
+  queryFn: () => api.llamaServerModels(params),
   staleTime: STALE_TIME_SLOW,
   retry: false,
 })
 
-export const ollamaSyncStatusQuery = queryOptions({
-  queryKey: ['ollama-sync-status'] as const,
-  queryFn: () => api.ollamaSyncStatus(),
+export const llamaServerSyncStatusQuery = queryOptions({
+  queryKey: ['llama_server-sync-status'] as const,
+  queryFn: () => api.llamaServerSyncStatus(),
   staleTime: STALE_TIME_LIVE,
   retry: false,
 })

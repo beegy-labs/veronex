@@ -1,4 +1,4 @@
-//! McpBridgeAdapter — wraps the Ollama inference loop with MCP tool execution.
+//! McpBridgeAdapter — wraps the upstream inference loop with MCP tool execution.
 //!
 //! # Flow (per request)
 //!
@@ -58,7 +58,7 @@ const RESULT_CACHE_TTL_SECS: i64 = 300;
 /// + warmup. Active until a `StreamToken::phase_boundary()` arrives from the
 /// runner (S14 Lifecycle SoD post-`ensure_ready` signal). SSOT in
 /// [`crate::domain::constants::MCP_LIFECYCLE_LOAD_TIMEOUT`] — coupled with the
-/// `ollama::lifecycle` reqwest cold-load timeout (must stay equal).
+/// upstream cold-load reqwest timeout (must stay equal).
 const LIFECYCLE_TIMEOUT: tokio::time::Duration = MCP_LIFECYCLE_LOAD_TIMEOUT;
 
 /// Phase 2 first-token timeout — applies only after the runner emits the
@@ -150,7 +150,7 @@ impl McpBridgeAdapter {
 
     /// Run the full agentic MCP loop.
     ///
-    /// `base_messages` must be in Ollama format already.
+    /// `base_messages` must be in chat-completion format already.
     /// `base_tools` are caller-supplied tools (injected before MCP tools, up to cap).
     ///
     /// `sse_tap_tx` is the **stream-tap** sender (SDD `.specs/veronex/bridge-mcp-loop-correctness.md`):
@@ -311,7 +311,7 @@ impl McpBridgeAdapter {
     // Mirror of `run_loop` for models without native `tool_calls`. Injects a
     // minimal system prompt + tool catalogue, builds an `oneOf` JSON-Schema
     // covering every available tool plus a `final` terminator, and forwards
-    // the schema as Ollama's `format` parameter. Constrained decoding (GBNF
+    // the schema as the upstream `format` parameter. Constrained decoding (GBNF
     // grammar) guarantees the model's output is always a valid JSON object
     // matching one of the branches — so even tool-incapable models like
     // qwen3:8b can drive MCP deterministically. Replaces the prior text-template
@@ -412,7 +412,7 @@ impl McpBridgeAdapter {
             let job_id = match state.use_case.submit(SubmitJobRequest {
                 prompt,
                 model_name: model.clone(),
-                provider_type: ProviderType::Ollama,
+                provider_type: ProviderType::LlamaServer,
                 gemini_tier: None,
                 api_key_id: caller.api_key_id(),
                 account_id: caller.account_id(),
@@ -670,7 +670,7 @@ impl McpBridgeAdapter {
     ) -> Vec<(String, ToolCallRecord)> {
         use futures::stream::{self, StreamExt};
 
-        // `buffered`: preserves submission order (required for Ollama index-based mapping)
+        // `buffered`: preserves submission order (required for index-based mapping)
         // while capping in-flight calls at MAX_CONCURRENT_TOOL_CALLS.
         // Each future owns clones of the cheap Arc fields — no borrowed lifetime issues.
         stream::iter(calls.iter().cloned())
@@ -1026,7 +1026,7 @@ async fn collect_round(
                     if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
                         for (i, c) in calls.iter().enumerate() {
                             if validate_tool_call(c) {
-                                tool_calls.push(convert_ollama_tool_call(i, c));
+                                tool_calls.push(convert_chat_tool_call(i, c));
                             }
                         }
                     }
@@ -1054,8 +1054,8 @@ async fn collect_round(
     Ok(RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason, passthrough_streamed })
 }
 
-/// Convert an Ollama tool_call to OpenAI format, preserving index as ID.
-fn convert_ollama_tool_call(i: usize, c: &Value) -> Value {
+/// Convert an upstream tool_call to OpenAI format, preserving index as ID.
+fn convert_chat_tool_call(i: usize, c: &Value) -> Value {
     let name = c.get("function")
         .and_then(|f| f.get("name"))
         .and_then(|n| n.as_str())
@@ -1297,14 +1297,14 @@ mod tests {
     // (SHA256 determinism and collision resistance are library guarantees; only
     // our output format and capping behaviour need testing)
 
-    // ── convert_ollama_tool_call ──────────────────────────────────────────────
+    // ── convert_chat_tool_call ────────────────────────────────────────────────
 
     #[test]
-    fn convert_ollama_tool_call_produces_openai_format() {
+    fn convert_chat_tool_call_produces_openai_format() {
         let tc = serde_json::json!({
             "function": { "name": "get_weather", "arguments": {"city": "Seoul"} }
         });
-        let result = convert_ollama_tool_call(0, &tc);
+        let result = convert_chat_tool_call(0, &tc);
         assert_eq!(result["type"].as_str(), Some("function"));
         assert_eq!(result["id"].as_str(), Some("call_0"));
         assert_eq!(result["index"].as_u64(), Some(0));
@@ -1317,17 +1317,17 @@ mod tests {
     }
 
     #[test]
-    fn convert_ollama_tool_call_index_used_as_id() {
+    fn convert_chat_tool_call_index_used_as_id() {
         let tc = serde_json::json!({ "function": { "name": "tool", "arguments": {} } });
-        let r3 = convert_ollama_tool_call(3, &tc);
+        let r3 = convert_chat_tool_call(3, &tc);
         assert_eq!(r3["id"].as_str(), Some("call_3"));
         assert_eq!(r3["index"].as_u64(), Some(3));
     }
 
     #[test]
-    fn convert_ollama_tool_call_missing_name_gives_empty_string() {
+    fn convert_chat_tool_call_missing_name_gives_empty_string() {
         let tc = serde_json::json!({ "function": {} });
-        let result = convert_ollama_tool_call(0, &tc);
+        let result = convert_chat_tool_call(0, &tc);
         assert_eq!(result["function"]["name"].as_str(), Some(""));
     }
 
@@ -1349,21 +1349,21 @@ mod tests {
         assert_eq!(extract_last_user_prompt(&msgs), "");
     }
 
-    // ── convert_ollama_tool_call — edge cases ─────────────────────────────────
+    // ── convert_chat_tool_call — edge cases ───────────────────────────────────
 
     #[test]
-    fn convert_ollama_tool_call_invalid_args_string_becomes_empty() {
+    fn convert_chat_tool_call_invalid_args_string_becomes_empty() {
         // When arguments is a JSON string, it passes through as-is.
         let tc = serde_json::json!({ "function": { "name": "t", "arguments": "NOT_JSON" } });
-        let r = convert_ollama_tool_call(0, &tc);
+        let r = convert_chat_tool_call(0, &tc);
         // "NOT_JSON" is a valid JSON string value, serialised as `"NOT_JSON"`
         assert_eq!(r["function"]["arguments"].as_str(), Some("\"NOT_JSON\""));
     }
 
     #[test]
-    fn convert_ollama_tool_call_no_arguments_field_empty_string() {
+    fn convert_chat_tool_call_no_arguments_field_empty_string() {
         let tc = serde_json::json!({ "function": { "name": "t" } });
-        let r = convert_ollama_tool_call(0, &tc);
+        let r = convert_chat_tool_call(0, &tc);
         assert_eq!(r["function"]["arguments"].as_str(), Some(""));
     }
 
@@ -1432,8 +1432,8 @@ mod tests {
 
     #[test]
     fn round_error_stream_passes_through_provider_message() {
-        let s = RoundError::Stream("ollama 502 bad gateway".into()).to_string();
-        assert!(s.contains("ollama 502 bad gateway"), "msg = {s}");
+        let s = RoundError::Stream("upstream 502 bad gateway".into()).to_string();
+        assert!(s.contains("upstream 502 bad gateway"), "msg = {s}");
     }
 
     // ── Timeout constants — sanity invariants ─────────────────────────────────

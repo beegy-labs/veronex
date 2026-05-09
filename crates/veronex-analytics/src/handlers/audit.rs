@@ -55,7 +55,7 @@ pub async fn list_audit_events(
         "trigger", "reset_password", "toggle", "revoke",
     ];
     const ALLOWED_RESOURCE_TYPES: &[&str] = &[
-        "account", "ollama_provider", "gemini_provider", "api_key",
+        "account", "llm_provider", "gemini_provider", "api_key",
         "capacity_settings", "gemini_policy", "gpu_server", "lab_settings",
         "session",
     ];
@@ -151,7 +151,7 @@ mod tests {
         "trigger", "reset_password", "toggle", "revoke",
     ];
     const ALLOWED_RESOURCE_TYPES: &[&str] = &[
-        "account", "ollama_provider", "gemini_provider", "api_key",
+        "account", "llm_provider", "gemini_provider", "api_key",
         "capacity_settings", "gemini_policy", "gpu_server", "lab_settings",
         "session",
     ];

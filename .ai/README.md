@@ -4,7 +4,7 @@
 
 ## Project
 
-**Veronex** (Vero+Nexus) — Autonomous intelligence scheduler/gateway for N Ollama
+**Veronex** (Vero+Nexus) — Autonomous intelligence scheduler/gateway for N llama-server
 servers. Integrates request routing + capacity learning + thermal protection to
 maximize cluster-wide throughput. OpenAI-compatible API + Next.js admin dashboard.
 
@@ -14,7 +14,7 @@ All architecture decisions must consider this scale (O(1) counters, no DB pollin
 Three Rust crates:
 - `veronex` — main API server + scheduler (`crates/veronex/`)
 - `veronex-analytics` — internal analytics service (`crates/veronex-analytics/`, port 3003)
-- `veronex-agent` — metrics collector, scrapes node-exporter + Ollama, OTLP push (`crates/veronex-agent/`)
+- `veronex-agent` — metrics collector, scrapes node-exporter + llama-server, OTLP push (`crates/veronex-agent/`)
 
 ## Navigation
 
@@ -35,7 +35,7 @@ Three Rust crates:
 |--------|------|---------|
 | Auth | `docs/llm/auth/` | jwt-sessions (+impl), api-keys, security |
 | Inference | `docs/llm/inference/` | job-lifecycle, job-api, session-grouping, job-analytics, openai-compat, capacity, model-pricing, lab-features, mcp |
-| Providers | `docs/llm/providers/` | ollama (+impl), ollama-models, gemini, gemini-models, hardware |
+| Providers | `docs/llm/providers/` | llama-server (+impl), llama-server-models, gemini, gemini-models, hardware |
 | Infra | `docs/llm/infra/` | deploy, otel-pipeline (+ops), build-optimization |
 | Frontend | `docs/llm/frontend/` | design-system (core, i18n, components), charts, pages/* |
 | **Logic Flows** | `docs/llm/flows/` | **algorithm reference — read before implementing any subsystem logic** |

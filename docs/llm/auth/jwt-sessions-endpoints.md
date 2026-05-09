@@ -22,8 +22,8 @@ Logged-in accounts run inference without an API key. Jobs tracked by `account_id
 |--------|------|-------------|
 | POST | `/v1/test/completions` | OpenAI SSE stream |
 | GET | `/v1/test/jobs/{job_id}/stream` | SSE reconnect |
-| POST | `/v1/test/api/chat` | Ollama NDJSON stream |
-| POST | `/v1/test/api/generate` | Ollama NDJSON stream |
+| POST | `/v1/test/api/chat` | llama-server NDJSON stream |
+| POST | `/v1/test/api/generate` | llama-server NDJSON stream |
 | POST | `/v1/test/v1beta/models/{*path}` | Gemini SSE stream |
 
 All test routes: `api_key_id=NULL`, `account_id=claims.sub`, enqueued in `veronex:queue:zset` with tier=test (lowest priority score).

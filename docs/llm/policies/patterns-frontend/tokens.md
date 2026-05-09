@@ -13,8 +13,8 @@ All Tailwind class mappings live in `web/lib/constants.ts` — never duplicate a
 | `ROLE_STYLES` | system, user, assistant, tool | Chat message role badge classes |
 | `FINISH_BG` | stop, length, error, cancelled | Finish reason badge classes |
 | `FINISH_COLORS` | stop, length, error, cancelled | Finish reason chart colours |
-| `PROVIDER_BADGE` | ollama, gemini | Provider type badge classes |
-| `PROVIDER_COLORS` | ollama, gemini | Provider type chart colours |
+| `PROVIDER_BADGE` | llama-server, gemini | Provider type badge classes |
+| `PROVIDER_COLORS` | llama-server, gemini | Provider type chart colours |
 
 Import from `@/lib/constants` — never duplicate style mappings across components.
 

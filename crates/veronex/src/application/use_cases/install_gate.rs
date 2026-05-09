@@ -10,7 +10,7 @@
 //! - [`Gate::Ready`] → proceed (carries the resolved blob + Modelfile ref)
 //!
 //! Phase 2 ships this gate as a standalone utility. Phase 3 wires it into
-//! the inference handlers (OpenAI / Ollama / Gemini compat) once the
+//! the inference handlers (OpenAI / Gemini compat) once the
 //! ProcessManager owns the `model_id → llama-server provider_id` mapping.
 
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use crate::domain::entities::{ErrorKind, InstallStatus, VeronexModel};
 #[derive(Debug, Clone)]
 pub enum Gate {
     /// No Modelfile is registered for the supplied identifier. The caller
-    /// SHOULD fall through to legacy provider routing (Ollama/Gemini) so
+    /// SHOULD fall through to provider routing (llama_server / Gemini) so
     /// Phase 2 stays non-disruptive.
     NotRegistered,
     /// The Modelfile exists and is currently installing. Caller returns

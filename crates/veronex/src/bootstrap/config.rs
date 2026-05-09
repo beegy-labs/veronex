@@ -13,7 +13,6 @@ pub struct AppConfig {
     pub bootstrap_super_pass: Option<String>,
     pub port: u16,
     pub cors_origins: Vec<axum::http::HeaderValue>,
-    pub analyzer_url: String,
     pub session_grouping_interval_secs: u64,
     pub gemini_encryption_key: [u8; 32],
     /// Redpanda/Kafka broker address (e.g. `redpanda:9092`). Used for pipeline metrics.
@@ -75,9 +74,6 @@ impl AppConfig {
         let analytics_secret = std::env::var("ANALYTICS_SECRET").ok();
         let otel_http_endpoint = std::env::var("OTEL_HTTP_ENDPOINT").ok();
 
-        let ollama_url = std::env::var("OLLAMA_URL")
-            .unwrap_or_else(|_| "http://localhost:11434".to_string());
-
         // consumed but unused — kept to avoid silent ignore of the env var
         let _gemini_api_key = std::env::var("GEMINI_API_KEY").ok();
 
@@ -105,9 +101,6 @@ impl AppConfig {
             "CORS_ALLOWED_ORIGINS env var is required (use comma-separated origins or 'none')",
         );
         let cors_origins = parse_cors_origins(&cors_raw);
-
-        let analyzer_url = std::env::var("CAPACITY_ANALYZER_OLLAMA_URL")
-            .unwrap_or_else(|_| ollama_url.clone());
 
         let session_grouping_interval_secs: u64 = std::env::var("SESSION_GROUPING_INTERVAL_SECS")
             .ok()
@@ -171,7 +164,6 @@ impl AppConfig {
             bootstrap_super_pass,
             port,
             cors_origins,
-            analyzer_url,
             session_grouping_interval_secs,
             gemini_encryption_key,
             kafka_broker,

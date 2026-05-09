@@ -48,7 +48,7 @@ Jobs carry a `source` field that records their origin:
 | Value | Routes |
 |-------|--------|
 | `OpenaiCompat` | `POST /v1/chat/completions`, `POST /v1/test/completions` |
-| `OllamaNative` | `POST /api/generate`, `POST /api/chat`, `POST /v1/test/api/generate`, `POST /v1/test/api/chat` |
+| `(removed)` | `POST /api/generate`, `POST /api/chat`, `POST /v1/test/api/generate`, `POST /v1/test/api/chat` |
 | `GeminiNative` | `POST /v1beta/models/*`, `POST /v1/test/v1beta/models/*` |
 | `VeronexNative`| `POST /v1/inference` |
 
@@ -151,7 +151,7 @@ Entity: `domain/entities/mod.rs` — `InferenceJob`. Key fields:
 |-------|------|-------|
 | `id` | `Uuid` | UUIDv7 PK |
 | `model_name` | `String` | |
-| `provider_type` | `ProviderType` | Ollama / Gemini |
+| `provider_type` | `ProviderType` | llama-server / Gemini |
 | `status` | `JobStatus` | Pending / Running / Completed / Failed / Cancelled |
 | `source` | `JobSource` | Api / Test (immutable) |
 | `prompt_preview` | `Option<String>` | ≤200 chars of prompt, CJK-safe truncation with `…` — DB only, full prompt in S3 |

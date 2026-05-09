@@ -4,7 +4,7 @@
 
 Veronex acts as an **MCP client** — it connects to external MCP servers and
 executes their tools on behalf of LLM inference loops.
-MCP servers do NOT call Ollama; the API server (veronex) handles all Ollama calls.
+MCP servers do NOT call llama-server; the API server (veronex) handles all llama-server calls.
 
 ---
 
@@ -18,7 +18,7 @@ Client → POST /v1/chat/completions
     chat_completions()
            │ should_intercept() → true (≥1 active MCP session)
            ▼
-    mcp_ollama_chat()
+    mcp_llama_chat()
            │
            ▼
     McpBridgeAdapter.run_loop()              ← unified entry point
@@ -31,7 +31,7 @@ Client → POST /v1/chat/completions
                   │
                   ├── Round 0: build oneOf schema
                   │     allow_final_for_round(0) == false → tool branches only
-                  │     POST Ollama /api/chat with `format: <schema>` → GBNF mask
+                  │     POST chat-completion with `format: <schema>` → GBNF mask
                   │     model output is grammar-bound JSON: {"action":"tool",...}
                   │
                   ├── execute_calls() → buffered(8) per tool call
@@ -55,7 +55,7 @@ reactive workarounds for the native path's failure modes
 (conv_33AfPaddqdXSiqIHX081T) that constrained decoding prevents structurally.
 
 **Key invariants**:
-- Ollama is always called from `run_loop()` inside `openai_handlers.rs`.
+- llama-server is always called from `run_loop()` inside `openai_handlers.rs`.
 - MCP servers receive only tool invocations — they never receive inference requests.
 - Every MCP-routed request runs through GBNF logit masking — the model literally
   cannot emit non-JSON or invalid arguments. The dispatch contract is enforced,
@@ -67,7 +67,7 @@ reactive workarounds for the native path's failure modes
 
 | File | Purpose |
 |------|---------|
-| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | `chat_completions()` dispatch + `mcp_ollama_chat()` |
+| `crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs` | `chat_completions()` dispatch + `mcp_llama_chat()` |
 | `crates/veronex/src/infrastructure/outbound/mcp/bridge.rs` | `McpBridgeAdapter` — `run_loop()`, `execute_calls()`, `execute_one()` |
 | `crates/veronex-mcp/src/session.rs` | Per-server MCP session lifecycle + re-init on 404 |
 | `crates/veronex-mcp/src/tool_cache.rs` | Two-level (L1 DashMap + L2 Valkey) tool schema cache |
@@ -82,7 +82,7 @@ reactive workarounds for the native path's failure modes
 has an active session (`session_manager.has_sessions()`).
 
 The caller (`openai_handlers.rs`) additionally checks:
-- `provider_type == "ollama"` (MCP loop only supported for Ollama)
+- `provider_type == "llama-server"` (MCP loop only supported for llama-server)
 - `mcp_bridge.is_some()` (feature enabled at startup)
 
 ACL filtering happens inside `run_loop()` after interception — API-key callers with
@@ -192,13 +192,13 @@ Implementation:
 |---------|-----------|
 | Headers | `sse_response()` (`handlers.rs`) attaches `Content-Type: text/event-stream`, `Cache-Control: no-cache, no-transform`, `Connection: keep-alive`, `X-Accel-Buffering: no` |
 | Heartbeat | `axum::response::sse::KeepAlive::new().interval(SSE_KEEP_ALIVE)` (15 s) |
-| Response is constructed BEFORE bridge completes | `mcp_ollama_chat` spawns `bridge.run_loop` on `tokio::spawn`; SSE stream consumes a `tap_rx` (token-by-token forward channel) until the bridge drops it, then awaits the bridge `oneshot` for the final summary. axum flushes 200 + headers + first heartbeat within ms of the request |
+| Response is constructed BEFORE bridge completes | `mcp_llama_chat` spawns `bridge.run_loop` on `tokio::spawn`; SSE stream consumes a `tap_rx` (token-by-token forward channel) until the bridge drops it, then awaits the bridge `oneshot` for the final summary. axum flushes 200 + headers + first heartbeat within ms of the request |
 | OpenAI-compat shape | `chat.completion.chunk` events with `delta.content` / `delta.tool_calls`; final `[DONE]` sentinel |
 | Round-level synchronous collection (S20) | All rounds — including the final text round — go through `collect_round` synchronously. The legacy streaming fast-path (skip collection of round N+1 when `rounds > 0` and stream the runner job directly) was dropped because (1) it bypassed MCP detection on round N+1, breaking the loop invariant when a model emitted another tool_call, (2) its sole driving constraint (CF Edge 100 s idle) was removed by platform-gitops PRs #598/#599/#600 (CF-bypass routing). SDD: `.specs/veronex/bridge-mcp-loop-correctness.md`. |
 | Token-by-token UX preserved (S20 stream-tap) | `collect_round` accepts an optional `sse_tx: UnboundedSender<String>`. On the first non-empty delta of a round: tool_calls → silent intercept (bridge executes MCP tool, runs next round); content → passthrough mode (forward this and subsequent content tokens to the SSE writer). OpenAI spec round-level XOR ensures the first delta classifies the entire round. Mixed-delta rounds (vLLM bug class — content first, tool_call later) → passthrough wins, tool_calls dropped with `warn!` log per SDD §3.3. |
 | Cancel-on-disconnect | spawned bridge task runs to completion (best-effort detached); `runner::persist_partial_conversation` writes partial state to S3 for each affected round |
 | S3 ConversationRecord | **Bridge is the sole writer for MCP loops** (revised 2026-05-01). Runner skips S3 writes + `update_conversation_counters` whenever `job.mcp_loop_id IS Some`; bridge persists exactly one consolidated `TurnRecord` (with `tool_calls` = every round's emitted MCP calls, `result` = final text) at loop end and bumps `conversations.turn_count` by 1. One user question with N agentic rounds therefore maps to one logical turn. UI surfaces "MCP {N}회" from the head turn's `tool_calls.length`. Per-round persistence (the prior policy from `.specs/veronex/history/inference-mcp-per-round-persist.md`) yielded `turn_count = N` for one question and is no longer in effect. |
-| Phase-aware timing (S19 + S19.1) | `bridge::collect_round` uses three distinct timeouts (canonical SSOT names; bridge.rs has local aliases `LIFECYCLE_TIMEOUT`/`TOKEN_FIRST_TIMEOUT`/`STREAM_IDLE_TIMEOUT`/`ROUND_TOTAL_TIMEOUT` that re-export them) gated by a `StreamToken::phase_boundary()` sentinel emitted by `runner` after `ensure_ready` succeeds: `MCP_LIFECYCLE_LOAD_TIMEOUT=600s` (Phase 1 cold-load slack — ~2.4× the observed 248 s worst case on `qwen3-coder-next-200k:latest`; this constant is shared with `ollama::lifecycle` which sets the actual `reqwest::timeout` so both layers stay coupled), `MCP_TOKEN_FIRST_TIMEOUT=300s` (Phase 2 first token after load — bumped from 60s in S19.1 after live verify showed 60s too tight for 200K-context prefill + ~5K MCP prompt tokens; first token is **not** sub-second when prefill is large), `MCP_STREAM_IDLE_TIMEOUT=45s` (mid-stream idle), `MCP_ROUND_TOTAL_TIMEOUT=1500s` (round cap, locked strictly less than upstream Cilium HTTPRoute `timeouts.request=1800s` by `tests::round_total_under_gateway_request_timeout`). RoundError variants `LifecycleTimeout` / `FirstTokenTimeout` distinguish cold-stuck vs hung-post-load for retry decisions. `MCP_LIFECYCLE_PHASE=off` legacy path: no boundary emitted → bridge stays Phase 1 the whole round, single 600 s applies. Long-stream public access uses CF-bypass direct hostname (`*.girok.dev`) — see `.add/domain-integration.md`. SDD: `.specs/veronex/bridge-phase-aware-timing.md`. |
+| Phase-aware timing (S19 + S19.1) | `bridge::collect_round` uses three distinct timeouts (canonical SSOT names; bridge.rs has local aliases `LIFECYCLE_TIMEOUT`/`TOKEN_FIRST_TIMEOUT`/`STREAM_IDLE_TIMEOUT`/`ROUND_TOTAL_TIMEOUT` that re-export them) gated by a `StreamToken::phase_boundary()` sentinel emitted by `runner` after `ensure_ready` succeeds: `MCP_LIFECYCLE_LOAD_TIMEOUT=600s` (Phase 1 cold-load slack — ~2.4× the observed 248 s worst case on `qwen3-coder-next-200k:latest`; this constant is shared with `llama-server::lifecycle` which sets the actual `reqwest::timeout` so both layers stay coupled), `MCP_TOKEN_FIRST_TIMEOUT=300s` (Phase 2 first token after load — bumped from 60s in S19.1 after live verify showed 60s too tight for 200K-context prefill + ~5K MCP prompt tokens; first token is **not** sub-second when prefill is large), `MCP_STREAM_IDLE_TIMEOUT=45s` (mid-stream idle), `MCP_ROUND_TOTAL_TIMEOUT=1500s` (round cap, locked strictly less than upstream Cilium HTTPRoute `timeouts.request=1800s` by `tests::round_total_under_gateway_request_timeout`). RoundError variants `LifecycleTimeout` / `FirstTokenTimeout` distinguish cold-stuck vs hung-post-load for retry decisions. `MCP_LIFECYCLE_PHASE=off` legacy path: no boundary emitted → bridge stays Phase 1 the whole round, single 600 s applies. Long-stream public access uses CF-bypass direct hostname (`*.girok.dev`) — see `.add/domain-integration.md`. SDD: `.specs/veronex/bridge-phase-aware-timing.md`. |
 
 Verified live 2026-04-29 — 240 s response held alive (4 min, > 2× Cloudflare timeout); no 524 observed; final answer streamed in 195 tokens. Note: §9.5 of the streaming-first SDD recorded this as PASS based on SSE output only; the dashboard detail GET's `result_text` non-empty assertion was added in `.specs/veronex/history/inference-mcp-per-round-persist.md` §8.
 
@@ -210,14 +210,14 @@ The veronex gateway promise (`docs/llm/inference/lab-features.md`) — "feature-
 |---|---|
 | System prompt | `mcp::forced_json::build_forced_json_system_prompt(tools)` — pushes tool-first behaviour ("tools have real-time access; do NOT claim 'I don't have access to real-time data' or 'web search is disabled' — those statements are FALSE"); demands `final.answer` to cite tool results that have been gathered; explains when `refuse` is the correct action. Schema does the bulk of enforcement; this prompt is the semantic guide. |
 | Schema | `mcp::forced_json::build_forced_json_schema(tools, allow_final)` — `oneOf` over per-tool branches (`{action: "tool", tool: <const tool_name>, args: <tool.parameters>}`); the terminator branches `{action: "final", answer: string}` and `{action: "refuse", reason: string(minLength=8)}` are only emitted when `allow_final = true`. `allow_final_for_round(prior_tool_calls)` returns `true` iff `prior_tool_calls > 0`. **Round 0 sets `allow_final = false`** so the model is logit-masked into a tool branch — defends against weak-model and even native-tool-calling-model "I don't have access to real-time data" disclaimers emitted before a tool is even tried (conv_33AfPaddqdXSiqIHX081T Turn 2/4). |
-| Submission | Job submitted WITHOUT OpenAI `tools[]` and WITH `response_format = {type: "json_schema", json_schema: {schema}}`. The Ollama adapter extracts `.json_schema.schema` and forwards it as Ollama's `format` parameter — llama.cpp's GBNF grammar masks logits at every decoding step. |
-| Output parsing | `mcp::forced_json::parse_forced_action(text)` — single `serde_json::from_str`. Constrained decoding guarantees valid JSON; defensive fail-open returns the raw text as `Final` if parse fails (older Ollama, schema bypass). |
+| Submission | Job submitted WITHOUT OpenAI `tools[]` and WITH `response_format = {type: "json_schema", json_schema: {schema}}`. The llama-server adapter extracts `.json_schema.schema` and forwards it as llama-server's `format` parameter — llama.cpp's GBNF grammar masks logits at every decoding step. |
+| Output parsing | `mcp::forced_json::parse_forced_action(text)` — single `serde_json::from_str`. Constrained decoding guarantees valid JSON; defensive fail-open returns the raw text as `Final` if parse fails (older llama-server, schema bypass). |
 | Action execution | `execute_calls` machinery — circuit breaker, ACL, result cache, analytics, observability spans. |
 | Observation feedback | Tool result appended back into `messages[]` as `{"role":"user","content":"Observation: ..."}` along with the assistant's serialized JSON action. |
 | Loop detection | `(name, args_hash)` × `LOOP_DETECT_THRESHOLD=3` — terminates loop on repeated identical calls. |
 | Termination | `action: "final"` → `McpLoopResult.content = answer`. `action: "refuse"` → `McpLoopResult.content = "REFUSED: " + reason` (sentinel `forced_json::REFUSAL_PREFIX`). Token totals roll up to `first_job_id`; intermediate-round DB rows cleaned up. |
 
-**Why this honors the gateway promise**: with constrained decoding the gateway *enforces* the dispatch contract — the model literally cannot emit non-JSON or invalid arguments. Tool dispatch is deterministic across every Ollama-served model regardless of fine-tuning. ACL 2025 reported JSON validity errors 38.2% → 0% under constrained decoding.
+**Why this honors the gateway promise**: with constrained decoding the gateway *enforces* the dispatch contract — the model literally cannot emit non-JSON or invalid arguments. Tool dispatch is deterministic across every llama-server-served model regardless of fine-tuning. ACL 2025 reported JSON validity errors 38.2% → 0% under constrained decoding.
 
 **Why the legacy native path was deleted**: Qwen3-Coder + Llama 3.1 (in the prior `heuristic_supports_native` allow-list) demonstrably failed the dispatch contract — conv_33AfPaddqdXSiqIHX081T showed all four turns either emitting "실시간 데이터 접근 권한 없음" disclaimer prose after running 5 successful tool rounds (Turn 1/3) or skipping tools entirely on round 0 (Turn 2/4). S23 convergence boundary (PR #128) and S24 synthesis fallback (PR #129) only triggered on `content.is_empty()`; non-empty disclaimer prose passed the gates. The patches were post-failure detectors; constrained decoding is pre-generation prevention. SDD `.specs/veronex/mcp-constrained-decoding-unification.md`.
 
@@ -236,7 +236,7 @@ for the full state machine.
 
 `LlmProviderPort: InferenceProviderPort + ModelLifecyclePort` (blanket impl in
 `application/ports/outbound/inference_provider.rs`) lets call sites hold one
-trait object and drive both phases. `OllamaAdapter` implements both;
+trait object and drive both phases. `LlamaServerAdapter` implements both;
 `GeminiAdapter` ships a no-op `ModelLifecyclePort` (cloud — `AlreadyLoaded`).
 
 When the flag is **off**, behaviour is byte-identical to pre-Tier-C — implicit

@@ -25,7 +25,7 @@ import type { FlowEvent } from '@/hooks/use-inference-stream'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_GEMINI, JOB_STATUS_COLORS } from '@/lib/constants'
-import { getOllamaProviders, getGeminiProviders } from '@/lib/utils'
+import { getLlamaServerProviders, getGeminiProviders } from '@/lib/utils'
 import { tokens } from '@/lib/design-tokens'
 import { fmtCompact } from '@/lib/chart-theme'
 
@@ -55,10 +55,10 @@ const PROV_CX    = 460
 const PROV_W     = 108
 const PROV_H     = 52
 const PROV_INSET = 10     // corner clip amount for octagon
-// When both providers: Ollama top, Gemini bottom. When Ollama only: centered.
-const OLLAMA_CY_DUAL   = 72
+// When both providers: llama-server top, Gemini bottom. When llama-server only: centered.
+const LLAMA_CY_DUAL   = 72
 const GEMINI_CY_DUAL   = 192
-const OLLAMA_CY_SINGLE = QUEUE_CY  // align with Queue center = straight line
+const LLAMA_CY_SINGLE = QUEUE_CY  // align with Queue center = straight line
 
 /* ─── connection endpoints ──────────────────────────────────── */
 const API_RIGHT   = API_CX   + API_W  / 2  // 126
@@ -70,15 +70,15 @@ const PROV_LEFT   = PROV_CX  - PROV_W / 2  // 406
 const PATH_API_QUEUE =
   `M ${API_RIGHT},${API_CY} C ${API_RIGHT + 24},${API_CY} ${QUEUE_LEFT - 24},${QUEUE_CY} ${QUEUE_LEFT},${QUEUE_CY}`
 
-/* ─── path builders (depend on runtime ollamaCy) ─────────────── */
-function pathQueueOllama(ollamaCy: number) {
-  return `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${ollamaCy} ${PROV_LEFT},${ollamaCy}`
+/* ─── path builders (depend on runtime llamaCy) ─────────────── */
+function pathQueueLlama(llamaCy: number) {
+  return `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${llamaCy} ${PROV_LEFT},${llamaCy}`
 }
 const PATH_QUEUE_GEMINI =
   `M ${QUEUE_RIGHT},${QUEUE_CY} C ${QUEUE_RIGHT + 30},${QUEUE_CY} ${PROV_LEFT - 30},${GEMINI_CY_DUAL} ${PROV_LEFT},${GEMINI_CY_DUAL}`
 
-function pathOllamaApi(ollamaCy: number) {
-  return `M ${PROV_LEFT},${ollamaCy} C ${PROV_LEFT - 60},${ollamaCy - 54} ${API_RIGHT + 60},${ollamaCy - 54} ${API_RIGHT},${API_CY}`
+function pathLlamaApi(llamaCy: number) {
+  return `M ${PROV_LEFT},${llamaCy} C ${PROV_LEFT - 60},${llamaCy - 54} ${API_RIGHT + 60},${llamaCy - 54} ${API_RIGHT},${API_CY}`
 }
 const PATH_GEMINI_API =
   `M ${PROV_LEFT},${GEMINI_CY_DUAL} C ${PROV_LEFT - 60},${GEMINI_CY_DUAL + 54} ${API_RIGHT + 60},${GEMINI_CY_DUAL + 54} ${API_RIGHT},${API_CY}`
@@ -162,7 +162,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
   const [scale,  setScale]  = useReducer((_: number, v: number) => v, 1)
   const [bees,   dispatch]  = useReducer(beeReducer, [])
 
-  const localBs = useMemo(() => getOllamaProviders(providers), [providers])
+  const localBs = useMemo(() => getLlamaServerProviders(providers), [providers])
   const apiBs   = useMemo(
     () => geminiEnabled ? getGeminiProviders(providers) : [],
     [providers, geminiEnabled],
@@ -170,10 +170,10 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
   const localOnline = useMemo(() => localBs.filter(b => b.status === 'online').length, [localBs])
   const apiOnline   = useMemo(() => apiBs.filter(b => b.status === 'online').length, [apiBs])
 
-  // Ollama Y position: centered when Gemini disabled, top when both active
-  const ollamaCy = geminiEnabled ? OLLAMA_CY_DUAL : OLLAMA_CY_SINGLE
-  const PATH_QUEUE_OLLAMA = useMemo(() => pathQueueOllama(ollamaCy), [ollamaCy])
-  const PATH_OLLAMA_API   = useMemo(() => pathOllamaApi(ollamaCy), [ollamaCy])
+  // llama-server Y position: centered when Gemini disabled, top when both active
+  const llamaCy = geminiEnabled ? LLAMA_CY_DUAL : LLAMA_CY_SINGLE
+  const PATH_QUEUE_LLAMA = useMemo(() => pathQueueLlama(llamaCy), [llamaCy])
+  const PATH_LLAMA_API   = useMemo(() => pathLlamaApi(llamaCy), [llamaCy])
 
   // Responsive scaling
   useEffect(() => {
@@ -204,16 +204,16 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
       if (e.phase === 'enqueue') {
         newBees.push({ id: `${e.id}-eq`, pathD: PATH_API_QUEUE, color: ENQUEUE_COLOR, phase: 'enqueue', size: enqueueSize, delay: 0 })
       } else if (e.phase === 'dispatch') {
-        const pathD = e.provider === PROVIDER_GEMINI ? PATH_QUEUE_GEMINI : PATH_QUEUE_OLLAMA
+        const pathD = e.provider === PROVIDER_GEMINI ? PATH_QUEUE_GEMINI : PATH_QUEUE_LLAMA
         newBees.push({ id: `${e.id}-qp`, pathD, color, phase: 'dispatch', size: dispatchSize, delay: 0 })
       } else {
-        const pathD = e.provider === PROVIDER_GEMINI ? PATH_GEMINI_API : PATH_OLLAMA_API
+        const pathD = e.provider === PROVIDER_GEMINI ? PATH_GEMINI_API : PATH_LLAMA_API
         newBees.push({ id: `${e.id}-pa`, pathD, color, phase: 'response', size: responseSize, delay: 0 })
       }
     }
 
     if (newBees.length > 0) dispatch({ type: 'SPAWN', bees: newBees })
-  }, [events, enqueueSize, dispatchSize, responseSize, PATH_QUEUE_OLLAMA, PATH_OLLAMA_API])
+  }, [events, enqueueSize, dispatchSize, responseSize, PATH_QUEUE_LLAMA, PATH_LLAMA_API])
 
   return (
     <Card>
@@ -275,8 +275,8 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
               <path d={PATH_API_QUEUE} fill="none" markerEnd="url(#pfp-arrow)"
                 style={{ stroke: tokens.border.base, strokeWidth: 1.5, strokeDasharray: '6 4' }} />
 
-              {/* Queue → Ollama */}
-              <path d={PATH_QUEUE_OLLAMA} fill="none" markerEnd="url(#pfp-arrow)"
+              {/* Queue → llama-server */}
+              <path d={PATH_QUEUE_LLAMA} fill="none" markerEnd="url(#pfp-arrow)"
                 style={{ stroke: tokens.border.base, strokeWidth: 1.5, strokeDasharray: '6 4' }} />
 
               {/* Queue → Gemini (lab-gated) */}
@@ -286,7 +286,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
               )}
 
               {/* Response arcs — dimmed (bypass Queue) */}
-              <path d={PATH_OLLAMA_API} fill="none"
+              <path d={PATH_LLAMA_API} fill="none"
                 style={{ stroke: tokens.border.base, strokeWidth: 1, strokeDasharray: '3 7', opacity: 0.4 }} />
               {geminiEnabled && (
                 <path d={PATH_GEMINI_API} fill="none"
@@ -298,7 +298,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
               <rect
                 x={API_CX - API_W / 2 + 2} y={API_CY - API_H / 2 + 2}
                 width={API_W} height={API_H} rx={8}
-                style={{ fill: 'rgba(0,0,0,0.15)' }}
+                style={{ fill: tokens.shadow.fill }}
               />
               {/* Card body */}
               <rect
@@ -379,28 +379,28 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                 style={{ fill: pendingJobs > 0 ? tokens.status.warning : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
                 {t('overview.pendingJobsCount', { count: pendingJobs })}
               </text>
-              {/* ── Node 3a: Ollama — octagon ────────────────────────── */}
+              {/* ── Node 3a: llama-server — octagon ────────────────────────── */}
               {/* Drop shadow */}
               <polygon
-                points={octPoints(PROV_CX + 2, ollamaCy + 2, PROV_W, PROV_H, PROV_INSET)}
-                style={{ fill: 'rgba(0,0,0,0.12)' }}
+                points={octPoints(PROV_CX + 2, llamaCy + 2, PROV_W, PROV_H, PROV_INSET)}
+                style={{ fill: tokens.shadow.fill }}
               />
               <polygon
-                points={octPoints(PROV_CX, ollamaCy, PROV_W, PROV_H, PROV_INSET)}
+                points={octPoints(PROV_CX, llamaCy, PROV_W, PROV_H, PROV_INSET)}
                 style={{ fill: tokens.bg.card, stroke: providerStroke(localBs), strokeWidth: 1.5 }}
               />
-              <text x={PROV_CX} y={ollamaCy - 4} textAnchor="middle"
+              <text x={PROV_CX} y={llamaCy - 4} textAnchor="middle"
                 style={{ fill: tokens.text.primary, fontSize: 11, fontWeight: 600 }}>
-                {t('nav.ollama')}
+                {t('nav.llama_server')}
               </text>
-              <text x={PROV_CX} y={ollamaCy + 10} textAnchor="middle"
+              <text x={PROV_CX} y={llamaCy + 10} textAnchor="middle"
                 style={{ fill: tokens.text.secondary, fontSize: 8 }}>
                 {localBs.length > 0
                   ? t('overview.flowOnlineCount', { online: localOnline, total: localBs.length })
                   : t('overview.flowNoProviders')}
               </text>
-              {/* Ollama: running count badge — always visible */}
-              <rect x={PROV_CX - 24} y={ollamaCy + PROV_H / 2 + 3} width={48} height={14} rx={7}
+              {/* llama-server: running count badge — always visible */}
+              <rect x={PROV_CX - 24} y={llamaCy + PROV_H / 2 + 3} width={48} height={14} rx={7}
                 style={{
                   fill: runningJobs > 0
                     ? `color-mix(in srgb, ${tokens.status.info} 15%, transparent)`
@@ -408,7 +408,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                   stroke: runningJobs > 0 ? tokens.status.info : tokens.border.base,
                   strokeWidth: 1,
                 }} />
-              <text x={PROV_CX} y={ollamaCy + PROV_H / 2 + 13} textAnchor="middle"
+              <text x={PROV_CX} y={llamaCy + PROV_H / 2 + 13} textAnchor="middle"
                 style={{ fill: runningJobs > 0 ? tokens.status.info : tokens.text.secondary, fontSize: 8, fontWeight: 700 }}>
                 {t('overview.runningJobsCount', { count: runningJobs })}
               </text>
@@ -418,7 +418,7 @@ export const ProviderFlowPanel = memo(function ProviderFlowPanel({ providers, ev
                   {/* Drop shadow */}
                   <polygon
                     points={octPoints(PROV_CX + 2, GEMINI_CY_DUAL + 2, PROV_W, PROV_H, PROV_INSET)}
-                    style={{ fill: 'rgba(0,0,0,0.12)' }}
+                    style={{ fill: tokens.shadow.fill }}
                   />
                   <polygon
                     points={octPoints(PROV_CX, GEMINI_CY_DUAL, PROV_W, PROV_H, PROV_INSET)}

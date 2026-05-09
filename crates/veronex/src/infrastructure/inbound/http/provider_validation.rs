@@ -7,7 +7,7 @@ use super::error::AppError;
 /// Parse a provider type string (case-insensitive).
 pub(super) fn parse_provider_type(s: &str) -> Option<ProviderType> {
     match s.to_lowercase().as_str() {
-        "ollama" => Some(ProviderType::Ollama),
+        "llama_server" => Some(ProviderType::LlamaServer),
         "gemini" => Some(ProviderType::Gemini),
         _ => None,
     }
@@ -16,7 +16,7 @@ pub(super) fn parse_provider_type(s: &str) -> Option<ProviderType> {
 /// SSRF prevention: block cloud metadata endpoints, IPv6 loopback/link-local,
 /// and IPv4-mapped IPv6 addresses. Enforce http(s) scheme.
 ///
-/// Localhost and private-network IPs are intentionally allowed because Ollama
+/// Localhost and private-network IPs are intentionally allowed because llama-server
 /// providers run on local machines (e.g. `http://192.168.1.10:11434`).
 pub(super) fn validate_provider_url(url: &str) -> Result<(), AppError> {
     if !(url.starts_with("http://") || url.starts_with("https://")) {
@@ -82,24 +82,25 @@ mod tests {
     /// Concrete example: parse_provider_type case insensitivity.
     #[test]
     fn parse_provider_type_examples() {
-        assert_eq!(parse_provider_type("Ollama"), Some(ProviderType::Ollama));
+        assert_eq!(parse_provider_type("Llama_Server"), Some(ProviderType::LlamaServer));
         assert_eq!(parse_provider_type("GEMINI"), Some(ProviderType::Gemini));
+        assert_eq!(parse_provider_type("openai"), None);
         assert_eq!(parse_provider_type("unknown"), None);
     }
 
     proptest! {
-        /// Any case variation of "ollama" or "gemini" is recognized.
+        /// Any case variation of "llama_server" or "gemini" is recognized.
         #[test]
         fn parse_provider_type_case_insensitive(
             mixed_case in prop::sample::select(vec![
-                "ollama", "OLLAMA", "Ollama", "oLlAmA",
+                "llama_server", "LLAMA_SERVER", "Llama_Server", "lLaMa_SeRvEr",
                 "gemini", "GEMINI", "Gemini", "gEmInI",
             ])
         ) {
             let result = parse_provider_type(mixed_case);
             let lower = mixed_case.to_lowercase();
             match lower.as_str() {
-                "ollama" => prop_assert_eq!(result, Some(ProviderType::Ollama)),
+                "llama_server" => prop_assert_eq!(result, Some(ProviderType::LlamaServer)),
                 "gemini" => prop_assert_eq!(result, Some(ProviderType::Gemini)),
                 _ => unreachable!(),
             }
@@ -110,7 +111,7 @@ mod tests {
         fn parse_provider_type_unknown_returns_none(
             s in "[a-z]{1,20}"
         ) {
-            prop_assume!(s.to_lowercase() != "ollama" && s.to_lowercase() != "gemini");
+            prop_assume!(s.to_lowercase() != "llama_server" && s.to_lowercase() != "gemini");
             prop_assert_eq!(parse_provider_type(&s), None);
         }
 

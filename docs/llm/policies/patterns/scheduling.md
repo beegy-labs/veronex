@@ -20,14 +20,14 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `PROVIDER_REQUEST_TIMEOUT` | 300s | Inference request to Ollama/Gemini |
-| `OLLAMA_METADATA_TIMEOUT` | 10s | Ollama `/api/show`, `/api/tags`, `/api/ps` |
-| `OLLAMA_HEALTH_CHECK_TIMEOUT` | 5s | Ollama `/api/version` in analyzer |
+| `PROVIDER_REQUEST_TIMEOUT` | 300s | Inference request to llama-server/Gemini |
+| `(removed)` | 10s | (removed), `/api/tags`, `/api/ps` |
+| `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` | 5s | llama-server `/api/version` in analyzer |
 | `LLM_ANALYSIS_TIMEOUT` | 30s | Single-model LLM analysis |
 | `LLM_BATCH_ANALYSIS_TIMEOUT` | 60s | Batch model LLM analysis |
 | `NODE_EXPORTER_TIMEOUT` | 5s | Node-exporter metrics fetch |
 | `CANCEL_TIMEOUT` | 5s | Job cancellation in CancelGuard |
-| `OLLAMA_MODEL_CACHE_TTL` | 10s | Provider-for-model lookup cache |
+| `(removed)` | 10s | Provider-for-model lookup cache |
 | `MODEL_SELECTION_CACHE_TTL` | 30s | Provider model-selection enabled list cache |
 | `HEALTH_CHECK_INTERVAL_SECS` | 30s | Health checker loop interval |
 | `STATS_TICK_INTERVAL` | 1s | FlowStats broadcast cadence |
@@ -36,7 +36,7 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `OLLAMA_HEALTH_TIMEOUT` | 5s | Ollama `/api/version` health check |
+| `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` | 5s | llama-server `/api/version` health check |
 | `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
 | `NODE_EXPORTER_METRICS_TIMEOUT` | 5s | node-exporter metrics scrape |
 
@@ -48,7 +48,7 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 
 | Component | Responsibility |
 |-----------|---------------|
-| `veronex-agent/src/heartbeat.rs` | `set_online(pool, provider_id, ttl_secs)` after each successful Ollama scrape |
+| `veronex-agent/src/heartbeat.rs` | `set_online(pool, provider_id, ttl_secs)` after each successful llama-server scrape |
 | `domain::constants::provider_heartbeat_key(id)` | Canonical key: `veronex:provider:hb:{uuid}` (pk-aware shim: `valkey_keys::provider_heartbeat`) |
 | `health_checker.rs` | MGET all known heartbeat keys → one round-trip; missing key = offline |
 | `domain::constants::PROVIDERS_ONLINE_COUNTER_KEY` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
@@ -61,7 +61,7 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 | `MAX_CONCURRENT_METRICS = 64` | `health_checker.rs` | Semaphore limits concurrent node-exporter polls |
 | `MAX_CONCURRENT_PROBES = 64` | `health_checker.rs` | Semaphore limits HTTP health probes (no-Valkey fallback) |
 | `pg_class.reltuples` | `dashboard_queries.rs` | O(1) total_jobs estimate instead of COUNT(*) |
-| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs`, `provider_router.rs`, `infra_health_handlers.rs`, `account_handlers.rs`, `gemini_compat_handlers.rs`, `gemini_model_handlers.rs`, `ollama_model_handlers.rs`, `gpu_server_handlers.rs`, `main.rs` (MCP startup) | Concurrent fan-out for fleet-wide reads/writes |
+| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs`, `provider_router.rs`, `infra_health_handlers.rs`, `account_handlers.rs`, `gemini_compat_handlers.rs`, `gemini_model_handlers.rs`, `(removed: legacy llama-server-models handlers)`, `gpu_server_handlers.rs`, `main.rs` (MCP startup) | Concurrent fan-out for fleet-wide reads/writes |
 | `MGET batch` | `analyzer.rs` (demand counters), `inference_helpers::lookup_model_max_ctx` | Single round-trip across N keys |
 | `EVALSHA` Lua cache | `valkey_adapter.rs` (`warmup()` + 4 pre-loaded `Script`) | Sends SHA1 only, not script body |
 | `concurrent_http_probes()` | `health_checker.rs` | Bounded parallel HTTP for MGET fallback |

@@ -20,7 +20,7 @@ use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
-use super::constants::{PROVIDER_GEMINI, PROVIDER_OLLAMA};
+use super::constants::{PROVIDER_GEMINI, PROVIDER_LLAMA_SERVER};
 use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
@@ -534,9 +534,20 @@ pub async fn patch_capacity_settings(
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
-    // Ollama list is independent of lab settings + Gemini fetch — race them
-    // concurrently to halve the wall-clock for this dashboard endpoint.
-    let ollama_fut = state.ollama_model_repo.list_all();
+    use crate::application::ports::outbound::modelfile_registry::ListFilter;
+
+    let llama_fut = async {
+        match state.modelfile_registry.as_ref() {
+            Some(repo) => repo
+                .list(&ListFilter::default())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.model_id)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        }
+    };
     let gemini_fut = async {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if !lab.gemini_function_calling {
@@ -558,11 +569,11 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
         gemini_models
     };
 
-    let (ollama_result, gemini_models) = tokio::join!(ollama_fut, gemini_fut);
+    let (llama_models, gemini_models) = tokio::join!(llama_fut, gemini_fut);
 
     let mut result: HashMap<String, Vec<String>> = HashMap::new();
-    if let Ok(models) = ollama_result && !models.is_empty() {
-        result.insert(PROVIDER_OLLAMA.to_string(), models);
+    if !llama_models.is_empty() {
+        result.insert(PROVIDER_LLAMA_SERVER.to_string(), llama_models);
     }
     if !gemini_models.is_empty() {
         result.insert(PROVIDER_GEMINI.to_string(), gemini_models);

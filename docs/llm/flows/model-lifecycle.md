@@ -46,7 +46,7 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
         ▼
    provider.ensure_ready(model)        ← LlmProviderPort super-trait method
         │
-        ├── 1. VramPool SSOT check (OllamaAdapter)
+        ├── 1. VramPool SSOT check (LlamaServerAdapter)
         │     └── loaded_model_names contains(provider_id, model)?
         │           ├── YES → LifecycleOutcome::AlreadyLoaded   (no HTTP)
         │           └── NO  → enter coalescing path
@@ -61,11 +61,11 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
         │     │                                        keep_alive:"30m",
         │     │                                        options:{num_ctx} }
         │     │                     num_ctx resolved from sync SSOT (Valkey
-        │     │                     ollama_model_ctx → fabricate fallback) —
+        │     │                     model_ctx → fabricate fallback) —
         │     │                     MUST equal what stream_chat will send
-        │     │                     (otherwise ollama spawns a second runner
+        │     │                     (otherwise llama-server spawns a second runner
         │     │                     subprocess for the same model — see
-        │     │                     `providers/ollama-impl.md` §"Context Length")
+        │     │                     `providers/llama-server-impl.md` §"Context Length")
         │     │                     reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)
         │     │                     wins on success → LoadCompleted{duration_ms}
         │     │                     wins on error   → ProviderError
@@ -86,9 +86,9 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
         │     └── hard_cap        sleep LIFECYCLE_LOAD_TIMEOUT + 5s → LoadTimeout
         │
         │     **Probe is NEVER cancelled** when stall/hard_cap wins the select.
-        │     Closing the connection mid-load triggers ollama
+        │     Closing the connection mid-load triggers llama-server
         │     `client connection closed before server finished loading`
-        │     (ollama#8006). Only `reqwest::timeout` may terminate the probe.
+        │     (llama-server#8006). Only `reqwest::timeout` may terminate the probe.
         │
         ├── 4. Resolve slot
         │     OnceCell stores Result<LifecycleOutcome, LifecycleError>
@@ -118,8 +118,8 @@ runner::run_job (post-VRAM reserve, pre-stream_tokens)
 
 ### Stall semantics — the sentinel `last_progress_at == 0`
 
-ollama's `POST /api/generate` is a **single request-response** — there is no
-streamed progress during silent cold-load (verified [ollama-python#439](https://github.com/ollama/ollama-python/issues/439)).
+llama-server's `POST /api/generate` is a **single request-response** — there is no
+streamed progress during silent cold-load (verified [llama-server-python#439](https://github.com/llama-server/llama-server-python/issues/439)).
 On 200K-context models a load is 163 s of zero bytes on the wire (measured on
 AI Max+ 395 / ROCm 7.2). A naive "stall = N seconds without bytes" detector
 therefore misfires on every cold load.
@@ -128,7 +128,7 @@ therefore misfires on every cold load.
 "no progress signal observed yet"). `stall_fut` is a no-op while the sentinel
 holds; only the `ps_poller` arm above transitions it to a real wall-clock
 timestamp on first `/api/ps` confirmation. Stall is then redefined as
-**post-load HTTP hang detection** — "ollama claims model loaded but probe HTTP
+**post-load HTTP hang detection** — "llama-server claims model loaded but probe HTTP
 is not returning". Initial silent-load duration is bounded only by
 `reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)` and the `hard_cap` arm.
 
@@ -166,8 +166,8 @@ Live verification (SDD §7.4) gates the dev/prod flip via
 | `domain/errors.rs` | `LifecycleError` |
 | `application/ports/outbound/model_lifecycle.rs` | `ModelLifecyclePort`, `LifecycleOutcome`, `MockLifecycle` |
 | `application/ports/outbound/inference_provider.rs` | `LlmProviderPort` super-trait + blanket impl |
-| `infrastructure/outbound/ollama/lifecycle.rs` | `LoadInFlight`, `probe_load`, `run_probe_with_stall`, constants |
-| `infrastructure/outbound/ollama/adapter.rs` | `OllamaAdapter::with_vram_pool`, `impl ModelLifecyclePort` |
+| `infrastructure/outbound/llama_server/lifecycle.rs` | `LoadInFlight`, `probe_load`, `run_probe_with_stall`, constants |
+| `infrastructure/outbound/llama_server/adapter.rs` | `LlamaServerAdapter::with_vram_pool`, `impl ModelLifecyclePort` |
 | `infrastructure/outbound/gemini/adapter.rs` | no-op cloud `impl ModelLifecyclePort` |
 | `infrastructure/outbound/provider_router.rs` | `make_adapter` returns `Arc<dyn LlmProviderPort>` |
 | `infrastructure/outbound/provider_dispatch.rs` | `ConcreteProviderDispatch` carries `vram_pool` |

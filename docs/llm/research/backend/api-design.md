@@ -18,8 +18,8 @@ DELETE /v1/resource/{id}         # delete
 
 # Nested resources
 GET    /v1/servers/{id}/metrics          # server-scoped resource
-GET    /v1/ollama/providers/{id}/models  # sub-resource list
-POST   /v1/ollama/models/sync            # action (verb as last segment)
+GET    /v1/providers/{id}/models  # sub-resource list
+POST   /v1/llama-server/models/sync            # action (verb as last segment)
 ```
 
 ### Error Shape
@@ -42,8 +42,8 @@ Response includes `jobs: []` + `total: N`.
 
 Long-running operations return 202 immediately:
 ```
-POST /v1/ollama/models/sync   → 202 Accepted  { "message": "sync started" }
-GET  /v1/ollama/sync/status   → { "status": "running" | "completed", "results": [...] }
+POST /v1/llama-server/models/sync   → 202 Accepted  { "message": "sync started" }
+GET  /v1/admin/sync-status   → { "status": "running" | "completed", "results": [...] }
 ```
 
 ---
@@ -77,12 +77,12 @@ components:
   schemas:
     ProviderConfig:
       oneOf:
-        - $ref: '#/components/schemas/OllamaConfig'
+        - $ref: '#/components/schemas/LlamaServerConfig'
         - $ref: '#/components/schemas/GeminiConfig'
       discriminator:
         propertyName: provider_type
         mapping:
-          ollama: '#/components/schemas/OllamaConfig'
+          llama-server: '#/components/schemas/LlamaServerConfig'
           gemini: '#/components/schemas/GeminiConfig'
 ```
 

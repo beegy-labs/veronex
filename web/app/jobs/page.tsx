@@ -156,7 +156,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
-              <SelectItem value="ollama">{t('jobs.providerOllama')}</SelectItem>
+              <SelectItem value="llama_server">{t('jobs.providerLlamaServer')}</SelectItem>
               {geminiEnabled && <SelectItem value="gemini">{t('jobs.providerGemini')}</SelectItem>}
             </SelectContent>
           </Select>

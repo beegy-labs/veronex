@@ -23,7 +23,7 @@ pub struct ProviderBreakdown {
     pub prompt_tokens: i64,
     pub completion_tokens: i64,
     pub success_rate: f64,
-    /// Estimated API cost (USD). $0.00 for Ollama. None = no pricing configured.
+    /// Estimated API cost (USD). $0.00 for self-hosted (llama_server). None = no pricing configured.
     pub estimated_cost_usd: Option<f64>,
 }
 
@@ -296,7 +296,7 @@ pub(super) async fn pg_key_model_breakdown(
             COALESCE(SUM(j.completion_tokens), 0)                                              AS completion_tokens,
             COALESCE(AVG(j.latency_ms) FILTER (WHERE j.status = 'completed' AND j.latency_ms > 0), 0)::float8 AS avg_latency_ms,
             CASE
-                WHEN j.provider_type = 'ollama' THEN 0.0
+                WHEN j.provider_type = 'llama_server' THEN 0.0
                 WHEN pricing.input_per_1m IS NOT NULL THEN
                     (COALESCE(SUM(j.prompt_tokens), 0)::float8     / 1000000.0 * pricing.input_per_1m) +
                     (COALESCE(SUM(j.completion_tokens), 0)::float8 / 1000000.0 * pricing.output_per_1m)
@@ -349,7 +349,7 @@ pub(super) async fn pg_usage_breakdown(
             COALESCE(SUM(j.prompt_tokens), 0)                    AS prompt_tokens,
             COALESCE(SUM(j.completion_tokens), 0)                AS completion_tokens,
             CASE
-                WHEN j.provider_type = 'ollama' THEN 0.0
+                WHEN j.provider_type = 'llama_server' THEN 0.0
                 WHEN pricing.input_per_1m IS NOT NULL THEN
                     (COALESCE(SUM(j.prompt_tokens), 0)::float8 / 1000000.0 * pricing.input_per_1m) +
                     (COALESCE(SUM(j.completion_tokens), 0)::float8 / 1000000.0 * pricing.output_per_1m)
@@ -403,7 +403,7 @@ pub(super) async fn pg_usage_breakdown(
             COALESCE(SUM(j.completion_tokens), 0)                 AS completion_tokens,
             SUM(
                 CASE
-                    WHEN j.provider_type = 'ollama' THEN 0.0
+                    WHEN j.provider_type = 'llama_server' THEN 0.0
                     WHEN j.prompt_tokens IS NOT NULL AND j.completion_tokens IS NOT NULL THEN
                         (j.prompt_tokens::float8 / 1000000.0 * COALESCE(pricing.input_per_1m, 0)) +
                         (j.completion_tokens::float8 / 1000000.0 * COALESCE(pricing.output_per_1m, 0))
@@ -456,7 +456,7 @@ pub(super) async fn pg_usage_breakdown(
             COALESCE(AVG(j.latency_ms) FILTER (WHERE j.latency_ms IS NOT NULL), 0)::float8 AS avg_latency_ms,
             SUM(
                 CASE
-                    WHEN j.provider_type = 'ollama' THEN 0.0
+                    WHEN j.provider_type = 'llama_server' THEN 0.0
                     WHEN j.prompt_tokens IS NOT NULL AND j.completion_tokens IS NOT NULL THEN
                         (j.prompt_tokens::float8 / 1000000.0 * COALESCE(pricing.input_per_1m, 0)) +
                         (j.completion_tokens::float8 / 1000000.0 * COALESCE(pricing.output_per_1m, 0))

@@ -18,7 +18,7 @@ InferCaller middleware
 openai_handlers::chat_completions()
   │
   ├─ [MCP intercept?] should_intercept() == true
-  │     └─→ mcp_ollama_chat() → bridge.run_loop()     ← see flows/mcp.md
+  │     └─→ mcp_llama_chat() → bridge.run_loop()     ← see flows/mcp.md
   │
   └─ [normal path]
        │
@@ -97,9 +97,9 @@ Dispatch order: lowest score wins (ZRANGEBYSCORE)
 | Job cleanup TTL | 60s | `domain/constants.rs` |
 | `MCP_LIFECYCLE_PHASE_FLAG_ENV` | `MCP_LIFECYCLE_PHASE` | `domain/constants.rs` |
 | `MCP_LIFECYCLE_PHASE_DEFAULT` | `false` | `domain/constants.rs` |
-| `LIFECYCLE_LOAD_TIMEOUT` | 600s | `infrastructure/outbound/ollama/lifecycle.rs` |
-| `LIFECYCLE_STALL_INTERVAL` | 60s | `infrastructure/outbound/ollama/lifecycle.rs` |
-| `LIFECYCLE_KEEP_ALIVE` | `30m` | `infrastructure/outbound/ollama/lifecycle.rs` |
+| `LIFECYCLE_LOAD_TIMEOUT` | 600s | `infrastructure/outbound/llama_server/lifecycle.rs` |
+| `LIFECYCLE_STALL_INTERVAL` | 60s | `infrastructure/outbound/llama_server/lifecycle.rs` |
+| `LIFECYCLE_KEEP_ALIVE` | `30m` | `infrastructure/outbound/llama_server/lifecycle.rs` |
 
 ---
 

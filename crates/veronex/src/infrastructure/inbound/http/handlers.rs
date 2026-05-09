@@ -14,7 +14,7 @@ use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::{JobId, pub_id_encode};
 
-use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_OLLAMA, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
+use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_LLAMA_SERVER, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
 use super::middleware::infer_auth::InferCaller;
 use super::error::AppError;
 use super::openai_sse_types::CompletionChunk;
@@ -150,7 +150,7 @@ pub struct SubmitRequest {
 }
 
 fn default_provider_type() -> String {
-    PROVIDER_OLLAMA.to_string()
+    PROVIDER_LLAMA_SERVER.to_string()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -182,7 +182,7 @@ pub async fn submit_inference(
     let (provider_type, gemini_tier) = match req.provider_type.as_str() {
         "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
         PROVIDER_GEMINI => (ProviderType::Gemini, None),
-        _ => (ProviderType::Ollama, None),
+        _ => (ProviderType::LlamaServer, None),
     };
 
     let job_id = state
@@ -329,7 +329,7 @@ mod tests {
         let body = serde_json::json!({
             "prompt": "Hello world",
             "model": "llama3.2",
-            "provider_type": "ollama"
+            "provider_type": "llama_server"
         });
 
         let request = Request::builder()

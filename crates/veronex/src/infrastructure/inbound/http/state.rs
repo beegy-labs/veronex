@@ -28,8 +28,6 @@ use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepo
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::model_capacity_repository::ModelCapacityRepository;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
-use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::app_config_repository::AppConfigRepository;
@@ -67,8 +65,6 @@ pub struct AppState {
     pub model_selection_repo: Arc<dyn ProviderModelSelectionRepository>,
     pub global_model_settings_repo: Arc<dyn GlobalModelSettingsRepository>,
     pub api_key_provider_access_repo: Arc<dyn ApiKeyProviderAccessRepository>,
-    pub ollama_model_repo: Arc<dyn OllamaModelRepository>,
-    pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
     pub valkey_pool: Option<fred::clients::Pool>,
     /// Analytics repository — proxies queries through veronex-analytics service.
     /// `None` when ANALYTICS_URL is not configured.
@@ -89,8 +85,6 @@ pub struct AppState {
     pub capacity_settings_repo: Arc<dyn CapacitySettingsRepository>,
     /// Fire to trigger an immediate sync run (bypasses sync interval).
     pub sync_trigger: Arc<Notify>,
-    /// Ollama URL used by the capacity analyzer (CAPACITY_ANALYZER_OLLAMA_URL).
-    pub analyzer_url: String,
     /// Broadcast channel sender for real-time job status events.
     /// Handlers subscribe by calling `.subscribe()` on this sender.
     pub job_event_tx: Arc<broadcast::Sender<JobStatusEvent>>,

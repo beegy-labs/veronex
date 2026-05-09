@@ -8,7 +8,7 @@
 //!   - `stream=false` for `infer`
 //!   - `stream=true` (SSE `data:` framing) for `stream_tokens`
 //! - Lifecycle path: GET `/health` → `SlotStatus`. No in-flight coalescing
-//!   needed — llama-server does not have ollama's per-runner-subprocess problem.
+//!   needed — llama-server runs as a single process per model.
 //! - `evict` is a no-op: in external mode we cannot unload from outside the
 //!   process. Phase 3 ProcessManager owns the actual lifecycle.
 
@@ -130,7 +130,7 @@ struct ChatMessage {
     content: Option<String>,
     // tool_calls are surfaced via the streaming path (`stream_tokens`).
     // Non-streaming `infer` flattens the assistant turn to plain text — same
-    // contract OllamaAdapter follows.
+    // contract follows the same metric semantics as upstream.
 }
 
 #[derive(Deserialize, Default)]
@@ -338,7 +338,7 @@ impl InferenceProviderPort for LlamaServerAdapter {
             }
 
             // Emit a final synthetic token carrying usage + finish_reason so
-            // the runner can record real counts. Mirrors OllamaAdapter pattern.
+            // the runner can record real counts.
             let mut done = StreamToken::done();
             if let Some(u) = last_usage {
                 done.prompt_tokens = u.prompt_tokens;

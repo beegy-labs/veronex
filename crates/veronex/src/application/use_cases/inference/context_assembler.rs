@@ -123,14 +123,14 @@ pub fn check_multiturn_eligibility(
 
 /// Assemble history messages for Turn N+1 from a `ConversationRecord`.
 ///
-/// Returns Ollama-format messages (`[{"role": "...", "content": "..."}]`).
+/// Returns chat-completion-format messages (`[{"role": "...", "content": "..."}]`).
 ///
 /// Strategy:
 /// - Last `recent_verbatim_window` turns → raw prompt + result (verbatim).
 /// - Earlier turns → compressed summary if available; raw fallback otherwise.
 /// - Budget enforcement: drops oldest messages when total tokens exceed limit.
 ///
-/// `configured_ctx`: real Ollama context window (from Valkey cache).
+/// `configured_ctx`: real model context window (from Valkey cache).
 /// Falls back to `32_768` if unknown.
 pub fn assemble(
     record: &ConversationRecord,

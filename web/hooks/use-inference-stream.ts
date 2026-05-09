@@ -10,7 +10,7 @@ export interface FlowEvent {
   /** Unique per-event: jobId + phase + spawn timestamp */
   id: string
   jobId: string
-  provider: 'ollama' | 'gemini' | string
+  provider: 'llama_server' | 'gemini' | string
   model: string
   status: string
   latencyMs: number | null

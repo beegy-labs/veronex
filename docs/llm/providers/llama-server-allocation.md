@@ -1,17 +1,17 @@
-# Ollama: Automatic Allocation Flow
+# llama-server: Automatic Allocation Flow
 
 > SSOT | **Last Updated**: 2026-03-24 | Classification: Operational
-> End-to-end automatic Ollama server allocation flow and scheduling logic.
+> End-to-end automatic llama-server node allocation flow and scheduling logic.
 
-## Automatic Ollama Allocation — End-to-End Flow
+## Automatic llama-server Allocation — End-to-End Flow
 
-Once an Ollama provider is registered, everything works automatically: model sync, VRAM management, concurrency limits, and throughput learning.
+Once an llama-server provider is registered, everything works automatically: model sync, VRAM management, concurrency limits, and throughput learning.
 Admins just register the provider and link a server — that's it.
 
 ### Full Lifecycle
 
 ```
-1. REGISTER     POST /v1/providers {name, provider_type: "ollama", url}
+1. REGISTER     POST /v1/providers {name, provider_type: "llama-server", url}
                 → health check → status: online/offline
                 → POST /v1/servers {name, node_exporter_url}
                 → PATCH /v1/providers/{id} {server_id, gpu_index}
@@ -34,14 +34,14 @@ Admins just register the provider and link a server — that's it.
 ### Phase 1: Provider Registration → Automatic Model Discovery
 
 ```
-POST /v1/providers {name: "gpu-server", provider_type: "ollama", url: "https://ollama.example.com"}
+POST /v1/providers {name: "gpu-server", provider_type: "llama-server", url: "https://llama-server.example.com"}
   │
   ├── health check: GET {url}/api/version
   │   → online: status = "online", model sync available
   │   → offline: status = "offline", sync skipped
   │
   ├── model sync: GET {url}/api/tags
-  │   → saved to ollama_models table (per provider)
+  │   → saved to llama_server_models table (per provider)
   │   → registered in provider_selected_models with default is_enabled=true
   │   → Valkey cache: veronex:models:{provider_id} (TTL 30s)
   │
@@ -66,8 +66,8 @@ POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
   ├── 3. queue_dispatcher_loop pops via Lua priority pop
   │
   ├── 4. Provider selection (pick_best_provider)
-  │     a. List active Ollama providers
-  │     b. Model filter: only providers that have the model in ollama_models
+  │     a. List active llama-server providers
+  │     b. Model filter: only providers that have the model in llama_server_models
   │     c. Selection filter: only enabled entries in provider_selected_models
   │     d. VRAM sort: highest available VRAM first (most headroom among servers)
   │     e. Tier sort: paid key → non-free-tier first, free key → free-tier first
@@ -78,9 +78,9 @@ POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
   │     c. Concurrency: block if exceeds max_concurrent (cold start=1)
   │     d. VRAM: vram_pool.try_reserve() → reserve KV cache + (weight if needed)
   │
-  ├── 6. Dispatch → Ollama API
-  │     OllamaAdapter: POST {url}/api/chat (streaming)
-  │     If model not loaded, Ollama auto-loads (weight stays in VRAM)
+  ├── 6. Dispatch → llama-server API
+  │     LlamaServerAdapter: POST {url}/api/chat (streaming)
+  │     If model not loaded, llama-server auto-loads (weight stays in VRAM)
   │
   └── 7. Completion → Cleanup
         Drop(VramPermit) → release KV cache, active_count -= 1
@@ -119,7 +119,7 @@ POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
 
 ### Phase 4: Multi-Server / Multi-Model Automatic Routing
 
-Registering multiple Ollama servers enables automatic routing to the optimal server.
+Registering multiple llama-server nodes enables automatic routing to the optimal server.
 
 ```
 Example: 3 servers, various models
@@ -139,7 +139,7 @@ Request: model=deepseek-r1:70b
 
 Request: model=qwen3:1.7b
   → Server C selected (has model)
-  → VRAM=0 (CPU) → delegated to Ollama, only concurrency gate applied
+  → VRAM=0 (CPU) → delegated to llama-server, only concurrency gate applied
 ```
 
 **Routing priority**:
@@ -151,19 +151,19 @@ Request: model=qwen3:1.7b
 
 ### Phase 5: Adding a New Model
 
-When a new model is pulled on Ollama, it is auto-detected on the next sync.
+When a new model is pulled on llama-server, it is auto-detected on the next sync.
 
 ```
-ollama pull llama3.3:70b  (directly on the Ollama server)
+llama-server pull llama3.3:70b  (directly on the llama-server node)
   │
   ├── Next sync (≤300s)
   │   GET /api/tags → new model discovered
-  │   → auto-added to ollama_models table
+  │   → auto-added to llama_server_models table
   │   → registered in provider_selected_models with is_enabled=true
   │
   ├── First request arrives
   │   → try_reserve: max_concurrent=1 (cold start, no learned data)
-  │   → Ollama auto-loads the model → weight occupies VRAM
+  │   → llama-server auto-loads the model → weight occupies VRAM
   │
   ├── First sync with loaded model
   │   → weight measured from /api/ps → saved to model_vram_profiles
@@ -189,4 +189,4 @@ ollama pull llama3.3:70b  (directly on the Ollama server)
 | analyzer_model | qwen2.5:3b | capacity_settings | Model for LLM analysis |
 | probe_permits | 1 | capacity_settings | +N (probe up), -N (probe down), 0=disabled |
 | probe_rate | 3 | capacity_settings | 1 probe per N limit hits |
-| CAPACITY_ANALYZER_OLLAMA_URL | (provider URL) | env | LLM analysis target (can be separate) |
+| CAPACITY_ANALYZER_LLAMA_SERVER_URL | (provider URL) | env | LLM analysis target (can be separate) |

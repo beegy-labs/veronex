@@ -17,32 +17,32 @@ Manage VRAM as a **global pool** per provider. Instead of fixed per-model slots,
 
 **Core rules**:
 - Model **already loaded** → deduct **KV cache only**
-- Model **not loaded** → deduct **weight + KV cache** (Ollama auto-loads)
+- Model **not loaded** → deduct **weight + KV cache** (llama-server auto-loads)
 - On completion → release **KV cache only** (weight stays in VRAM)
 
-**Model lifecycle**: VramPool + provider `keep_alive` window (default `OLLAMA_KEEP_ALIVE=10m` per low-power policy; lifecycle probes use `LIFECYCLE_KEEP_ALIVE=30m`) manages model retention. `OllamaModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
+**Model lifecycle**: VramPool + provider `keep_alive` window (default `LLAMA_SERVER_KEEP_ALIVE=10m` per low-power policy; lifecycle probes use `LIFECYCLE_KEEP_ALIVE=30m`) manages model retention. `LlamaServerModelManager` is disabled — its `ensure_loaded(max_loaded=1)` sends `keep_alive=0` which physically unloads other models, destroying multi-model co-residence.
 
 **Phase 1 entry point** (`MCP_LIFECYCLE_PHASE=on`, see `flows/model-lifecycle.md`):
-- `OllamaAdapter::ensure_ready(model)` is the SSOT for "is model loaded on
+- `LlamaServerAdapter::ensure_ready(model)` is the SSOT for "is model loaded on
   this provider". Warm hit → `VramPool::loaded_model_names` lookup; cold miss
   → zero-prompt `/api/generate` probe → on success, adapter calls
   `VramPool::record_loaded(provider_id, model)` so subsequent dispatches
   observe the model present.
-- `OllamaAdapter::evict(model, reason)` is the eviction entry point and updates
+- `LlamaServerAdapter::evict(model, reason)` is the eviction entry point and updates
   VramPool symmetrically.
 
 ---
 
 ## Phase 1: Initial Probe
 
-Ollama has no GPU info API (issue #3822), so VRAM capacity is learned via probing.
+llama-server has no GPU info API (issue #3822), so VRAM capacity is learned via probing.
 
 ### 1-1. After Provider Registration
 
 ```
 POST /v1/servers (register provider)
-  → GET {ollama_url}/api/ps     ← already loaded models
-  → GET {ollama_url}/api/tags   ← available models + file sizes
+  → GET {llama_url}/api/ps     ← already loaded models
+  → GET {llama_url}/api/tags   ← available models + file sizes
 ```
 
 - `/api/ps` has models: sum `size_vram` → minimum VRAM capacity
@@ -52,7 +52,7 @@ POST /v1/servers (register provider)
 
 | State | `total_mb` | Dispatch Behavior |
 |-------|-----------|------------------|
-| **Unknown** | `0` | Concurrency-headroom score — `available_vram_mb` returns `(max_concurrent - active) * 1_024 MB` (min 1); routing still works, delegates enforcement to Ollama |
+| **Unknown** | `0` | Concurrency-headroom score — `available_vram_mb` returns `(max_concurrent - active) * 1_024 MB` (min 1); routing still works, delegates enforcement to llama-server |
 | **Known** | `> 0` | Strict reservation — available VRAM checked before every dispatch |
 
 `total_mb` is set by the 30s sync loop. DB column `weight_estimated: bool` tracks whether per-model weight was measured or estimated, but is not consulted at dispatch time.
@@ -65,9 +65,9 @@ POST /v1/servers (register provider)
 | 2 | **agent-pushed mirror** (`veronex-agent` discovery label `total_vram_mb`) | provider DB value 0 but agent has value (analyzer cache miss / staleness window) |
 | 3 | **node-exporter DRM** (`node_drm_memory_vram_total_bytes` / `vram_size_bytes`) | unset operator + agent → pass-through; non-APU host |
 | 4 | **APU** (`mem_available_mb` from node-exporter, unified memory) | unset operator + agent → pass-through; AMD APU detected (`drm > 0 && mem_avail > drm × 2`) |
-| 5 | **Unknown** (no source) | `total_mb = 0` → vram_pool delegates capacity to Ollama (request still dispatches) |
+| 5 | **Unknown** (no source) | `total_mb = 0` → vram_pool delegates capacity to llama-server (request still dispatches) |
 
-The operator-registered value is the **declared envelope**: AIMD `max_concurrent`, `safety_permil` (auto +50 on real KV-OOM, decay −50/cycle on every provider), and Ollama's own OOM rejection together provide dynamic correction within the envelope. Inverted priority (auto-detect over operator value) was a regression introduced in commit `4891fbc` and reverted in this SDD.
+The operator-registered value is the **declared envelope**: AIMD `max_concurrent`, `safety_permil` (auto +50 on real KV-OOM, decay −50/cycle on every provider), and llama-server's own OOM rejection together provide dynamic correction within the envelope. Inverted priority (auto-detect over operator value) was a regression introduced in commit `4891fbc` and reverted in this SDD.
 
 ---
 
@@ -77,7 +77,7 @@ The operator-registered value is the **declared envelope**: AIMD `max_concurrent
 
 ```
 if provider.vram_total == None:
-    dispatch(request)        # Ollama's own scheduler handles OOM
+    dispatch(request)        # llama-server's own scheduler handles OOM
     after_success:
         poll /api/ps → record size_vram
         update vram_total estimate
@@ -129,7 +129,7 @@ Replaced with exact architecture params from `/api/show` after first success.
 
 ### 3-1. OOM Detection
 
-Ollama returns HTTP 500 on OOM:
+llama-server returns HTTP 500 on OOM:
 - `"model requires more system memory (X.XGiB) than is available (Y.YGiB)"`
 - `"model runner has unexpectedly stopped"`
 - `"exit status 2"` (CUDA OOM crash)
@@ -206,7 +206,7 @@ kv_heads = head_count_kv or head_count  // null fallback for hybrid models
 REQUEST(model_name, context_len)
 │
 ├─ 1. Candidate providers (active + provider_type match)
-│     Ollama: providers_for_model() → filter to providers that have the model
+│     llama-server: providers_for_model() → filter to providers that have the model
 │
 ├─ 2. Per-provider VRAM cost calculation
 │     if model loaded: cost = kv_only
@@ -230,10 +230,10 @@ REQUEST(model_name, context_len)
 │     Direct path: None → skip (VRAM unavailable)
 │     Queue path: None → re-enqueue with backoff
 │
-├─ 8. Dispatch → Ollama
+├─ 8. Dispatch → llama-server
 │
 └─ 9. On completion: drop(VramPermit) → KV cache released
-              weight stays loaded (OLLAMA_KEEP_ALIVE=-1)
+              weight stays loaded (LLAMA_SERVER_KEEP_ALIVE=-1)
 ```
 
 ### 4-4. VRAM Pool Data Structure
@@ -497,7 +497,7 @@ total_mb = mem_available_mb × (1 - safety_permil / 1000)
 ```
 
 - `mem_available_mb`: system available memory from node-exporter, refreshed every 30s
-- `safety_permil`: safety margin in permil (default 100 = 10%), absorbs memory drift from non-Ollama processes
+- `safety_permil`: safety margin in permil (default 100 = 10%), absorbs memory drift from non-llama-server processes
 
 ### safety_permil Constants
 
@@ -584,10 +584,10 @@ Called for each job to select and claim a provider slot:
 
 ```
 score_and_claim(job, candidates):
-  1. Filter: available_vram > 0 for Ollama; Gemini always passes
+  1. Filter: available_vram > 0 for llama-server; Gemini always passes
   2. Score per provider:
        Gemini: score = i64::MAX (always preferred when available)
-       Ollama: score = available_vram_mb + locality_bonus
+       llama-server: score = available_vram_mb + locality_bonus
                 locality_bonus = MODEL_LOCALITY_BONUS_MB (100_000 MB = +100GB)
                                  when model already loaded on that provider
   3. Tier sort: score used to rank; highest score wins
@@ -647,7 +647,7 @@ On each cycle, for each model with `scale_out_needed`:
 
 The placement planner marks a provider as standby when it is idle and not the last server:
 
-- **Trigger (Step ⑤)**: `server_idle` = no loaded models with demand AND `total_active = 0` AND no model preloading. Provider must not be in `scale_out_servers` for this cycle, not in hold-down, and not already standby/transitioning. **Last-server protection**: Step ⑤ only runs when `ollama_providers.len() > 1` — the final provider is never sent to standby.
+- **Trigger (Step ⑤)**: `server_idle` = no loaded models with demand AND `total_active = 0` AND no model preloading. Provider must not be in `scale_out_servers` for this cycle, not in hold-down, and not already standby/transitioning. **Last-server protection**: Step ⑤ only runs when `llm_providers.len() > 1` — the final provider is never sent to standby.
 - **Effect**: `set_standby(provider_id, true)` + `set_transition_until(provider_id, now + 30s)`. Server remains physically running but is excluded from new request routing (dispatcher skips standby providers).
 - **`transition_until` guard**: 30-second window after state change (both Scale-In and STANDBY recovery) during which the provider is skipped from further state changes.
 
@@ -673,7 +673,7 @@ PK: `(provider_id, model_name)`
 
 | Column | Type | Description |
 |--------|------|-------------|
-| `provider_id` | UUID | Ollama provider |
+| `provider_id` | UUID | llama-server provider |
 | `model_name` | TEXT | Model name |
 | `weight_mb` | INT | Measured weight VRAM (MB) |
 | `weight_estimated` | BOOL | Whether estimated |
@@ -681,7 +681,7 @@ PK: `(provider_id, model_name)`
 | `num_layers` | SMALLINT | Attention-only layers (hybrid: block_count / attn_interval) |
 | `num_kv_heads` | SMALLINT | KV attention heads |
 | `head_dim` | SMALLINT | Head dimension |
-| `configured_ctx` | INT | Ollama num_ctx setting |
+| `configured_ctx` | INT | llama-server num_ctx setting |
 | `failure_count` | SMALLINT | Consecutive OOM count |
 | `llm_concern` | TEXT NULL | LLM analysis concern |
 | `llm_reason` | TEXT NULL | LLM analysis reason |
@@ -705,7 +705,7 @@ Persists VRAM management state that must survive restarts. `num_parallel` and `v
 
 **Related fields in `llm_providers`**:
 - `total_vram_mb` — confirmed total VRAM (0 = unknown → pass-through)
-- `num_parallel` — Ollama NUM_PARALLEL setting (AIMD upper bound)
+- `num_parallel` — llama-server NUM_PARALLEL setting (AIMD upper bound)
 
 ### `capacity_settings`
 
@@ -740,16 +740,16 @@ POST /v1/dashboard/capacity/sync → 202 | 409
 
 ---
 
-## Ollama Configuration (Provider Nodes)
+## llama-server Configuration (Provider Nodes)
 
 ```bash
-OLLAMA_MAX_LOADED_MODELS=0        # auto (3 × GPU count)
-OLLAMA_NUM_PARALLEL=4             # concurrent inference slots per model
-OLLAMA_KEEP_ALIVE=10m             # low-power policy — auto-unload on idle (VramPool tracks state)
-OLLAMA_GPU_OVERHEAD=5368709120    # 5GB reserved (CUDA/driver)
-OLLAMA_FLASH_ATTENTION=1          # Flash Attention (required for KV quant)
-OLLAMA_KV_CACHE_TYPE=q8_0         # KV cache quantization (50% VRAM saving)
-OLLAMA_LOAD_TIMEOUT=900           # 15 min for large model loading
+LLAMA_SERVER_MAX_LOADED_MODELS=0        # auto (3 × GPU count)
+LLAMA_SERVER_NUM_PARALLEL=4             # concurrent inference slots per model
+LLAMA_SERVER_KEEP_ALIVE=10m             # low-power policy — auto-unload on idle (VramPool tracks state)
+LLAMA_SERVER_GPU_OVERHEAD=5368709120    # 5GB reserved (CUDA/driver)
+LLAMA_SERVER_FLASH_ATTENTION=1          # Flash Attention (required for KV quant)
+LLAMA_SERVER_KV_CACHE_TYPE=q8_0         # KV cache quantization (50% VRAM saving)
+LLAMA_SERVER_LOAD_TIMEOUT=900           # 15 min for large model loading
 ```
 
 ### KV Cache Quantization Effect
@@ -760,7 +760,7 @@ OLLAMA_LOAD_TIMEOUT=900           # 15 min for large model loading
 | q8_0 | ~50% | Negligible (+0.002–0.05 ppl) |
 | q4_0 | ~25–33% | Moderate (+0.2–0.25 ppl) |
 
-### Ollama Limitations
+### llama-server Limitations
 
 - `NUM_PARALLEL`, `KV_CACHE_TYPE` are global settings (not per-model)
 - Cannot duplicate-load the same model name (requires separate Modelfile)
@@ -773,7 +773,7 @@ OLLAMA_LOAD_TIMEOUT=900           # 15 min for large model loading
 
 ```
 [Server startup]
-  ├── model_manager = None (VramPool + OLLAMA_KEEP_ALIVE=-1 manages lifecycle)
+  ├── model_manager = None (VramPool + LLAMA_SERVER_KEEP_ALIVE=-1 manages lifecycle)
   └── Restore max_concurrent / baseline_tps / baseline_p95_ms from DB
       → Learned models: DB limits apply immediately
       → New models: cold start = num_parallel (top-down)

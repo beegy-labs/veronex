@@ -103,7 +103,7 @@ async fn try_compress(
     let result = turn.result.clone().unwrap_or_default();
     let original_tokens = (estimate_tokens(&prompt) + estimate_tokens(&result)) as u32;
 
-    // 3. Call Ollama /api/chat for per-turn compression
+    // 3. Call the chat-completion API for per-turn compression
     let http = http_client();
     let endpoint = format!("{}/api/chat", params.provider_url.trim_end_matches('/'));
     let body = serde_json::json!({
@@ -124,7 +124,7 @@ async fn try_compress(
         .await?;
 
     if !resp.status().is_success() {
-        anyhow::bail!("Ollama compression API returned HTTP {}", resp.status());
+        anyhow::bail!("compression API returned HTTP {}", resp.status());
     }
 
     let json: serde_json::Value = resp.json().await?;
@@ -231,7 +231,7 @@ pub async fn compress_input_inline(
         .ok()?;
 
     if !resp.status().is_success() {
-        tracing::warn!(status = %resp.status(), "compress_input_inline: Ollama returned error");
+        tracing::warn!(status = %resp.status(), "compress_input_inline: provider returned error");
         return None;
     }
 

@@ -52,7 +52,7 @@
 | OpenAI Compat Endpoints | `inference/openai-compat-endpoints.md` | /v1/completions, /v1/embeddings, /v1/models, 501 stubs |
 | OpenAI Compat Native | `inference/openai-compat-native.md` | native endpoints, API doc endpoints, shared constants, SSE parsing, client examples |
 | Capacity | `inference/capacity.md` | VramPool, AIMD+p95, LLM Batch±2, thermal auto-detect, model stickiness, gate chain |
-| Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard |
+| Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, llama-server $0.00, provider wildcard |
 | Lab Features | `inference/lab-features.md` | gemini_function_calling, context_compression_enabled, multiturn gate, vision_model, handoff |
 | Lab Features (impl) | `inference/lab-features-impl.md` | Port, API, Frontend for lab_settings |
 | Context Compression | `inference/context-compression.md` | compression_router, context_assembler, session_handoff, compress_input_inline, conversation_renewed, TurnInternals |
@@ -65,10 +65,10 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Ollama | `providers/ollama.md` | LlmProvider, VRAM routing, DynamicProviderRouter, health_checker |
-| Ollama Allocation | `providers/ollama-allocation.md` | end-to-end automatic allocation flow, scheduling logic |
-| Ollama Implementation | `providers/ollama-impl.md` | OllamaAdapter, streaming protocol, num_ctx, format conversion |
-| Ollama Models | `providers/ollama-models.md` | ollama_models, ollama_sync_jobs, OllamaModelRepository, model-aware routing |
+| llama-server | `providers/llama-server.md` | LlmProvider, VRAM routing, DynamicProviderRouter, health_checker |
+| llama-server Allocation | `providers/llama-server-allocation.md` | end-to-end automatic allocation flow, scheduling logic |
+| llama-server Implementation | `providers/llama-server-impl.md` | LlamaServerAdapter, streaming protocol, num_ctx, format conversion |
+| llama-server Models | `providers/llama-server-models.md` | llama_server_models, llama_server_sync_jobs, LlamaServerModelRepository, model-aware routing |
 | Gemini | `providers/gemini.md` | GeminiRateLimitPolicy, RPM, RPD, pick_gemini_provider, tier routing |
 | Gemini Models | `providers/gemini-models.md` | gemini_sync_config, gemini_models, provider_selected_models, UPSERT |
 | Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, NodeMetrics, ServerMetricsPoint, API endpoints |
@@ -114,8 +114,8 @@
 |----------|------|---------|
 | Overview | `frontend/pages/overview.md` | /overview, dashboard KPIs, thermal alert, power, latency, top models, recent jobs |
 | Servers | `frontend/pages/servers.md` | /servers, ServersTable, ServerMetricsCell, ServerHistoryModal |
-| Providers | `frontend/pages/providers.md` | /providers, OllamaTab, GeminiTab, routing, lab gating |
-| Providers Impl | `frontend/pages/providers-impl.md` | OllamaServerMetrics, sync section, capacity settings |
+| Providers | `frontend/pages/providers.md` | /providers, LlamaServerTab, GeminiTab, routing, lab gating |
+| Providers Impl | `frontend/pages/providers-impl.md` | LlamaServerMetrics, sync section, capacity settings |
 | Providers Gemini | `frontend/pages/providers-gemini.md` | Gemini sync, rate limit table, EditPolicyModal, SetSyncKeyModal |
 | Jobs | `frontend/pages/jobs.md` | job-table, GroupSessionsPanel, NetworkFlowTab, i18n |
 | Jobs Impl | `frontend/pages/jobs-impl.md` | handleRetry, NetworkFlow SVG, detail modal, result branching |
@@ -150,7 +150,7 @@
 | MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
 | Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
 | Thermal Protection | `flows/thermal.md` | Normal→Soft→Hard→Cooldown→RampUp, forced drain, 60s/90s watchdog |
-| Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, ollama, OTLP, dynamic sharding, KEDA |
+| Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, llama-server, OTLP, dynamic sharding, KEDA |
 | Job Streaming | `flows/streaming.md` | SSE fan-out, job event streaming, stats streaming, pub/sub |
 | Multi-Instance Pub/Sub | `flows/pubsub-relay.md` | multi-instance relay, Valkey pub/sub, cross-instance fan-out |
 | Crash Recovery & Reaping | `flows/reaper.md` | crash recovery, job reaping, startup recovery, pending jobs |
@@ -203,7 +203,7 @@
 | Sensitive-header redaction | `auth/security.md` § Sensitive-Header Redaction + `policies/patterns/middleware.md` |
 | Job tracking / state machine | `inference/job-lifecycle.md` + `inference/job-analytics.md` |
 | Model pricing / Lab feature flag | `inference/model-pricing.md` / `inference/lab-features.md` |
-| Ollama / Gemini providers | `providers/{ollama,gemini}.md` + `-impl.md` + `-models.md` |
+| llama-server / Gemini providers | `providers/{llama-server,gemini}.md` + `-impl.md` + `-models.md` |
 | GPU server / hardware metrics / health | `providers/hardware.md` + `frontend/pages/health.md` |
 | Auth / JWT / RBAC / API keys | `auth/jwt-sessions.md` + `auth/api-keys.md` + `auth/security.md` |
 | VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/{scheduler,thermal}.md` |

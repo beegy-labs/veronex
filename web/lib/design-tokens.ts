@@ -79,6 +79,11 @@ export const tokens = {
     end:   'var(--vds-theme-logo-end)',
     inner: 'var(--vds-theme-logo-inner)',
   },
+
+  shadow: {
+    /** SVG drop-shadow fill — theme-aware (light: 15% black, dark: 40% black). */
+    fill: 'var(--vds-theme-shadow-fill)',
+  },
 } as const
 
 export type ThemeToken = (typeof tokens)[keyof typeof tokens][keyof (typeof tokens)[keyof typeof tokens]]

@@ -4,7 +4,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
+import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama_server-models'
 
 interface VisionModelSelectorProps {
   value: string | null
@@ -14,7 +14,7 @@ interface VisionModelSelectorProps {
 
 export function VisionModelSelector({ value, onChange, disabled }: VisionModelSelectorProps) {
   const { t } = useTranslation()
-  const { models } = useEnabledOllamaModels()
+  const { models } = useEnabledLlamaServerModels()
   // Prefer vision-capable models; if metadata unavailable, fall back to the full list.
   const visionModels = models.filter((m) => m.is_vision)
   const displayModels = visionModels.length > 0 ? visionModels : models

@@ -11,7 +11,7 @@ use crate::domain::enums::ProviderType;
 /// Port for provider selection, adapter construction, and rate-limit counter management.
 ///
 /// Abstracts over the concrete routing logic (`pick_best_provider`, `make_adapter`,
-/// `get_ollama_available_vram_mb`, `increment_gemini_counters`) so the application
+/// `get_provider_available_vram_mb`, `increment_gemini_counters`) so the application
 /// use-case layer does not depend on infrastructure adapters directly.
 #[async_trait]
 pub trait ProviderDispatchPort: Send + Sync {

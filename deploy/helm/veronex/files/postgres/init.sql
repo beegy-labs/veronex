@@ -116,6 +116,31 @@ CREATE TABLE gpu_servers (
 
 -- ── LLM Providers ─────────────────────────────────────────────────────────────
 
+-- ── LLM Nodes (Phase 3 — managed compute hosts) ───────────────────────────────
+-- Physical / virtual hosts that can run llama-server. Two deployment kinds:
+--   * `k8s`            — DaemonSet pod on the cluster (auto-registered)
+--   * `baremetal_mac`  — Mac mini / Studio outside the cluster (manual)
+-- The ProcessManager talks to each node via `agent_url` (HTTP).
+CREATE TABLE llm_nodes (
+    id              UUID        PRIMARY KEY DEFAULT uuidv7(),
+    hostname        VARCHAR(255) NOT NULL,
+    deployment_kind VARCHAR(32)  NOT NULL CHECK (deployment_kind IN ('k8s', 'baremetal_mac')),
+    os              VARCHAR(16)  NOT NULL CHECK (os IN ('linux', 'darwin')),
+    arch            VARCHAR(16)  NOT NULL CHECK (arch IN ('x86_64', 'aarch64')),
+    gpu_accel       VARCHAR(32)  NOT NULL CHECK (gpu_accel IN ('apple_metal', 'amd_vulkan')),
+    gpu_model       VARCHAR(255),
+    total_vram_mb   BIGINT      NOT NULL DEFAULT 0,
+    total_ram_mb    BIGINT      NOT NULL DEFAULT 0,
+    cpu_threads     SMALLINT    NOT NULL DEFAULT 0,
+    agent_url       TEXT        NOT NULL,
+    status          VARCHAR(32) NOT NULL DEFAULT 'offline',
+    registered_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_probe_at   TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX uq_llm_nodes_agent_url ON llm_nodes(agent_url);
+CREATE INDEX        idx_llm_nodes_status   ON llm_nodes(status);
+
 CREATE TABLE llm_providers (
     id                UUID        PRIMARY KEY DEFAULT uuidv7(),
     name              VARCHAR(255) NOT NULL,
@@ -128,11 +153,134 @@ CREATE TABLE llm_providers (
     gpu_index         SMALLINT,
     server_id         UUID        REFERENCES gpu_servers(id) ON DELETE SET NULL,
     is_free_tier      BOOLEAN     NOT NULL DEFAULT false,
-    num_parallel      SMALLINT    NOT NULL DEFAULT 4
+    num_parallel      SMALLINT    NOT NULL DEFAULT 4,
+    -- Phase 3: lifecycle ownership.
+    --   * external — operator runs llama.cpp; Veronex only routes.
+    --   * managed  — ProcessManager owns the process on `node_id`.
+    mode              VARCHAR(16) NOT NULL DEFAULT 'external'
+                                        CHECK (mode IN ('external', 'managed')),
+    node_id           UUID        REFERENCES llm_nodes(id) ON DELETE SET NULL,
+    -- Per-provider override for `system_settings.llama_server.idle_ttl_seconds`.
+    -- NULL = use the global setting; 0 = disable idle reaping.
+    idle_ttl_seconds_override INT
 );
 
 CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
-CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
+CREATE INDEX idx_llm_providers_mode      ON llm_providers(mode);
+CREATE INDEX idx_llm_providers_node_id   ON llm_providers(node_id) WHERE node_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_llm_providers_llama_server_url ON llm_providers(url) WHERE provider_type = 'llama_server';
+
+-- ── System settings (Phase 3 — operator-tunable singletons) ───────────────────
+-- Distinct from `app_config`: app_config holds bootstrap secrets (S3, HF) that
+-- only matter at restart; system_settings holds runtime knobs (idle TTLs, AIMD
+-- tuning, capacity heuristics) that take effect on the next setting read.
+-- All values are TEXT — typed parsing happens in the consuming module so the
+-- table stays generic and the schema doesn't migrate when knobs come and go.
+CREATE TABLE system_settings (
+    key         TEXT        PRIMARY KEY,
+    value       TEXT        NOT NULL,
+    description TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  UUID        REFERENCES accounts(id) ON DELETE SET NULL
+);
+
+INSERT INTO system_settings (key, value, description) VALUES
+    ('llama_server.idle_ttl_seconds', '60',
+     'Reap a managed llama-server process after this many seconds of zero activity. 0 disables idle reaping.'),
+    ('llama_server.warmup_short_tokens', '8',
+     'max_tokens used by the warmup probe short prompt.'),
+    ('llama_server.warmup_long_tokens',  '8',
+     'max_tokens used by the warmup probe long prompt (75% of n_ctx).')
+ON CONFLICT (key) DO NOTHING;
+
+-- ── App config (Phase 2 first-install wizard) ─────────────────────────────────
+-- Runtime-mutable configuration for self-hosted Veronex. Values are
+-- environment-overridable: bootstrap reads `env > app_config > default`.
+-- Secret rows store an aes-gcm ciphertext (re-uses VERONEX_ENCRYPTION_KEY,
+-- same master key as `llm_providers.api_key_encrypted`).
+CREATE TABLE app_config (
+    key             TEXT        PRIMARY KEY,
+    value_encrypted TEXT,                                -- NULL only for unset rows
+    is_secret       BOOLEAN     NOT NULL DEFAULT false,
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by      UUID        REFERENCES accounts(id) ON DELETE SET NULL
+);
+
+-- ── Modelfile registry (Phase 2 — AI BaaS) ────────────────────────────────────
+-- CAS (Content-Addressable Storage) for GGUF binaries. sha256 is the SSOT key.
+-- Multiple veronex_models rows can reference the same gguf_blobs row (dedup).
+-- ref_count is the model count holding this blob; orphan_since tracks
+-- "ref_count became 0 at this time" for admin manual GC (no auto-delete).
+
+CREATE TABLE gguf_blobs (
+    sha256             TEXT        PRIMARY KEY,
+    size_bytes         BIGINT      NOT NULL,
+    s3_key             TEXT        NOT NULL,                    -- "gguf-blobs/{sha256}.gguf"
+    source_history     JSONB       NOT NULL DEFAULT '[]',
+    ref_count          INT         NOT NULL DEFAULT 0,
+    orphan_since       TIMESTAMPTZ,                             -- set when ref_count 1->0, NULL when 0->1+
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_accessed_at   TIMESTAMPTZ
+);
+-- Partial index for orphan listing (admin GC view).
+CREATE INDEX idx_gguf_blobs_orphan
+    ON gguf_blobs(orphan_since DESC NULLS LAST)
+    WHERE ref_count = 0;
+
+-- Modelfile spec — lightweight metadata referencing a GGUF blob by sha256.
+-- model_id format: "{family}:{quantization}" (e.g. "qwen3-coder:q4_K_M").
+-- install_status is a finite state machine driven by install_orchestrator.
+CREATE TABLE veronex_models (
+    model_id           TEXT        PRIMARY KEY,
+    family             TEXT        NOT NULL,
+    quantization       TEXT        NOT NULL,
+    blob_sha256        TEXT        NOT NULL REFERENCES gguf_blobs(sha256),
+    display_name       TEXT,
+    source_spec        JSONB       NOT NULL,                    -- {type: hf|upload|url|s3_pointer, ...}
+    runtime            JSONB       NOT NULL,                    -- {n_ctx, n_gpu_layers, flash_attn, ...}
+    defaults           JSONB       NOT NULL,                    -- {temperature, top_p, top_k, ...}
+    chat_template      JSONB       NOT NULL,                    -- {type: preset|jinja_inline|jinja_file, value}
+    stop_tokens        JSONB,
+    system_prompt      TEXT,
+    is_default         BOOLEAN     NOT NULL DEFAULT false,
+    install_status     TEXT        NOT NULL,                    -- pending|downloading|uploading|verifying|ready|failed
+    last_error_kind    TEXT,
+    last_error_message TEXT,
+    last_attempt_at    TIMESTAMPTZ,
+    tags               TEXT[],
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (family, quantization),
+    CHECK (install_status IN ('pending','downloading','uploading','verifying','ready','failed'))
+);
+CREATE INDEX idx_veronex_models_family          ON veronex_models(family);
+CREATE INDEX idx_veronex_models_install_status  ON veronex_models(install_status);
+-- Only one default per family (partial unique).
+CREATE UNIQUE INDEX uq_veronex_models_family_default
+    ON veronex_models(family) WHERE is_default = true;
+
+-- Install attempt history. Append-only; no FK so rows survive model deletion.
+-- Admin manually deletes via API (no automatic GC).
+CREATE TABLE veronex_model_install_attempts (
+    id                 BIGSERIAL   PRIMARY KEY,
+    model_id           TEXT        NOT NULL,                    -- no FK, history retained
+    attempt_no         INT         NOT NULL,
+    started_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at        TIMESTAMPTZ,
+    status             TEXT        NOT NULL,                    -- in_progress|succeeded|failed|cancelled
+    stage              TEXT,                                    -- download|upload|verify
+    error_kind         TEXT,
+    error_message      TEXT,
+    bytes_downloaded   BIGINT,
+    total_bytes        BIGINT,
+    duration_ms        BIGINT,
+    retryable          BOOLEAN,                                 -- admin UI hint, no auto-retry
+    triggered_by       TEXT,                                    -- register|admin_retry|patch_source
+    UNIQUE (model_id, attempt_no),
+    CHECK (status IN ('in_progress','succeeded','failed','cancelled'))
+);
+CREATE INDEX idx_install_attempts_model_started
+    ON veronex_model_install_attempts(model_id, started_at DESC);
 
 -- ── Conversations ─────────────────────────────────────────────────────────────
 -- source column included (migration 000002)
@@ -264,27 +412,6 @@ CREATE TABLE gemini_sync_config (
 CREATE TABLE gemini_models (
     model_name TEXT        PRIMARY KEY,
     synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
--- ── Ollama Models ─────────────────────────────────────────────────────────────
-
-CREATE TABLE ollama_models (
-    model_name  TEXT NOT NULL,
-    provider_id UUID NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
-    synced_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (model_name, provider_id)
-);
-
--- ── Ollama Sync Jobs ──────────────────────────────────────────────────────────
-
-CREATE TABLE ollama_sync_jobs (
-    id              UUID        PRIMARY KEY DEFAULT uuidv7(),
-    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at    TIMESTAMPTZ,
-    status          TEXT        NOT NULL DEFAULT 'running',
-    total_providers INT         NOT NULL DEFAULT 0,
-    done_providers  INT         NOT NULL DEFAULT 0,
-    results         JSONB       NOT NULL DEFAULT '[]'::jsonb
 );
 
 -- ── Model VRAM Profiles ───────────────────────────────────────────────────────
@@ -499,7 +626,6 @@ CREATE INDEX idx_mcp_key_access_key ON mcp_key_access(api_key_id) WHERE is_allow
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE INDEX idx_ollama_models_name_trgm        ON ollama_models USING GIN (model_name gin_trgm_ops);
 CREATE INDEX idx_llm_providers_name_trgm        ON llm_providers USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_llm_providers_url_trgm         ON llm_providers USING GIN (url gin_trgm_ops);
 CREATE INDEX idx_accounts_name_trgm             ON accounts USING GIN (name gin_trgm_ops);

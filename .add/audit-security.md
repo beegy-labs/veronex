@@ -45,7 +45,7 @@ grep -rn "format!.*namespaced\|format!.*tool_name\|format!.*args" crates/veronex
 # system message override — check if client system messages can overwrite tenant prompts
 grep -rn '"system"\|role.*system' crates/veronex/src/infrastructure/inbound/http/openai_handlers.rs
 
-# Internal error exposure — check if upstream Ollama/Gemini errors are forwarded verbatim to clients
+# Internal error exposure — check if upstream llama-server/Gemini errors are forwarded verbatim to clients
 grep -rn "e\.to_string()\|err\.to_string()\|error.*format!" crates/veronex/src/infrastructure/inbound/http/ | grep -v "//\|tracing\|warn\|debug"
 
 # JSON injection — format!() for JSON assembly (must use serde_json::json! instead)

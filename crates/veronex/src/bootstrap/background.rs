@@ -8,7 +8,6 @@ use tokio_util::sync::CancellationToken;
 use veronex::application::ports::inbound::inference_use_case::InferenceUseCase;
 use veronex::application::use_cases::InferenceUseCaseImpl;
 use veronex::domain::value_objects::{FlowStats, JobStatusEvent};
-use veronex::infrastructure::outbound::capacity::analyzer::run_sync_loop;
 use veronex::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use veronex::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use veronex::infrastructure::outbound::health_checker::{run_health_checker_loop, run_server_metrics_loop};
@@ -93,24 +92,12 @@ pub async fn spawn_background_tasks(
         shutdown.child_token(),
     ));
 
-    // ── Sync loop (unified: health + models + VRAM) ────────────────
-    tasks.spawn(run_sync_loop(
-        repos.provider_registry.clone(),
-        repos.capacity_repo.clone(),
-        repos.capacity_settings_repo.clone(),
-        repos.vram_pool.clone(),
-        infra.valkey_pool.clone(),
-        sync_trigger.clone(),
-        sync_lock.clone(),
-        veronex::domain::constants::SYNC_LOOP_BASE_TICK,
-        shutdown.child_token(),
-        infra.http_client.clone(),
-        repos.ollama_model_repo.clone(),
-        repos.model_selection_repo.clone(),
-        repos.vram_budget_repo.clone(),
-        Some(repos.job_repo.clone() as Arc<dyn veronex::application::ports::outbound::job_repository::JobRepository>),
-    ));
-    tracing::info!("sync loop started (analyzer: {})", config.analyzer_url);
+    // The legacy capacity-analyzer sync loop was removed
+    // with the migration to llama-server — Phase 4 AIMD now drives capacity
+    // decisions from llama-server `/health` slot counts. The sync_lock /
+    // sync_trigger handles are kept so admin endpoints (POST /v1/sync)
+    // and the model_store flow that depends on them continue to work.
+    let _ = (sync_trigger.clone(), sync_lock.clone());
 
     // ── Session grouping loop ──────────────────────────────────────
     let session_grouping_lock = Arc::new(tokio::sync::Semaphore::new(1));
@@ -182,7 +169,6 @@ pub async fn spawn_background_tasks(
         repos.provider_registry.clone(),
         Some(repos.gemini_policy_repo.clone()),
         Some(repos.model_selection_repo.clone()),
-        Some(repos.ollama_model_repo.clone()),
         infra.valkey_pool.clone(),
         Some(repos.vram_pool.clone()),
     ));
@@ -192,7 +178,6 @@ pub async fn spawn_background_tasks(
         repos.job_repo.clone(),
         repos.valkey_port.clone(),
         repos.observability.clone(),
-        repos.model_manager.clone(),
         repos.vram_pool.clone(),
         thermal.clone(),
         circuit_breaker.clone(),
@@ -202,7 +187,6 @@ pub async fn spawn_background_tasks(
         (*job_event_tx).clone(),
         repos.message_store.clone(),
         repos.image_store.clone(),
-        Some(repos.ollama_model_repo.clone()),
         Some(repos.model_selection_repo.clone()),
         Some(repos.global_model_settings_repo.clone()),
         infra.instance_id.clone(),
@@ -519,23 +503,6 @@ pub async fn spawn_background_tasks(
         }
 
         tracing::info!("queue maintenance loops started (promote_overdue=30s, demand_resync=60s, queue_wait_cancel=30s, processing_reaper=30s)");
-
-        // ── Placement Planner (Phase 5) ──────────────────────────────────
-        if let Some(ref vk_port) = repos.valkey_port {
-            tasks.spawn(veronex::application::use_cases::placement_planner::run_placement_planner_loop(
-                repos.provider_registry.clone(),
-                repos.vram_pool.clone(),
-                thermal.clone(),
-                circuit_breaker.clone(),
-                vk_port.clone(),
-                infra.http_client.clone(),
-                infra.instance_id.clone(),
-                use_case_impl.as_thermal_drain(),
-                Some(repos.ollama_model_repo.clone()),
-                shutdown.child_token(),
-            ));
-            tracing::info!("placement planner started (interval=5s)");
-        }
     }
 
     let use_case: Arc<dyn InferenceUseCase> = use_case_impl;
@@ -588,7 +555,7 @@ mod tests {
             id: "test".to_string(),
             status: status.to_string(),
             model_name: "test-model".to_string(),
-            provider_type: "ollama".to_string(),
+            provider_type: "llama_server".to_string(),
             latency_ms: None,
         };
         (ev, ts)

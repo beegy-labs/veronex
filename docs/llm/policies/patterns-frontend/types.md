@@ -14,7 +14,7 @@ import { z } from 'zod'
 export const ProviderSchema = z.object({
   id: z.string().uuid(),
   name: z.string(),
-  provider_type: z.enum(['ollama', 'gemini']),
+  provider_type: z.enum(['llama-server', 'gemini']),
   status: z.enum(['online', 'offline', 'degraded']),
   is_active: z.boolean(),
 })

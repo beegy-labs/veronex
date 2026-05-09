@@ -48,7 +48,7 @@ Both are `useState` values that re-key the TanStack Query (new fetch on change).
 
 ### Resource Type filter
 
-| Values | `account`, `api_key`, `ollama_provider`, `gemini_provider`, `gpu_server` |
+| Values | `account`, `api_key`, `llm_provider`, `gemini_provider`, `gpu_server` |
 |--------|-------------------------------------------------------------------------|
 
 ## Action Badge Colors
@@ -77,7 +77,7 @@ Response: `AuditEvent[]`. Current page requests `limit=200`, `offset=0`. Filters
 | `account_id` | `string` | |
 | `account_name` | `string` | Display name |
 | `action` | `string` | create/update/delete/login/logout/reset_password |
-| `resource_type` | `string` | account/api_key/ollama_provider/gemini_provider/gpu_server |
+| `resource_type` | `string` | account/api_key/llm_provider/gemini_provider/gpu_server |
 | `resource_id` | `string` | |
 | `resource_name` | `string` | Falls back to `resource_id` when empty |
 | `ip_address` | `string` | Shown as `'--'` when empty |

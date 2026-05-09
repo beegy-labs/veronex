@@ -23,7 +23,7 @@ Stop at the first Yes — do not double-cover.
 | 1 | Caught by types / `clippy -D warnings`? | Static | `cargo clippy --workspace -- -D warnings` |
 | 2 | Pure function / domain / validator / parser? | Unit | `cargo nextest run -p <crate> --lib` |
 | 3 | Real Postgres / Valkey / Kafka / MCP needed? | Integration | `cargo nextest run -p <crate> --test '*'` (testcontainers) |
-| 4 | Outbound HTTP (Ollama / Gemini / MCP)? | Integration | `wiremock` in `#[tokio::test]` |
+| 4 | Outbound HTTP (llama-server / Gemini / MCP)? | Integration | `wiremock` in `#[tokio::test]` |
 | 5 | Axum handler request → response contract? | Handler | `tower::ServiceExt::oneshot` in `#[tokio::test]` |
 | 6 | Cross-service flow through docker-compose? | E2E | `bash test/scripts/e2e/NN-<name>.sh` |
 | 7 | Already verified at another layer? | — | Don't write it |

@@ -57,7 +57,7 @@ Related files:
 | `usage.*` | Usage page, breakdown sections |
 | `performance.*` | Performance page |
 | `providers.servers.*` | Servers page |
-| `providers.ollama.*` | Ollama tab |
+| `providers.llama-server.*` | llama-server tab |
 | `providers.gemini.*` | Gemini tab |
 | `providers.capacity.*` | Concurrency control section |
 
@@ -134,7 +134,7 @@ All PostgreSQL columns use `TIMESTAMPTZ` -- stored and returned as UTC. sqlx des
 
 ## i18n Keys Reference (nav.*)
 
-`overview`, `monitor`, `dashboard`, `flow`, `jobs`, `keys`, `usage`, `performance`, `servers`, `providers`, `ollama`, `gemini`, `accounts`, `audit`, `apiDocs`
+`overview`, `monitor`, `dashboard`, `flow`, `jobs`, `keys`, `usage`, `performance`, `servers`, `providers`, `llama-server`, `gemini`, `accounts`, `audit`, `apiDocs`
 
 ## Translation Workflow
 

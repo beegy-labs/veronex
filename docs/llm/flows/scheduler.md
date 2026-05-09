@@ -54,7 +54,7 @@ spawn_job_direct(job_id, provider_id)  → runner::run_job()
   │
   ▼
 on completion: vram_pool.release(provider_id, model)
-  └── KV cache released; weight stays in VRAM (OLLAMA_KEEP_ALIVE=-1)
+  └── KV cache released; weight stays in VRAM (LLAMA_SERVER_KEEP_ALIVE=-1)
 ```
 
 ---
@@ -71,7 +71,7 @@ Provider VRAM state machine:
     │  strict reservation enforced from this point
 
 UNKNOWN mode: available_vram_mb = (max_concurrent - active) × 1024 MB
-              routing still works — delegates OOM enforcement to Ollama
+              routing still works — delegates OOM enforcement to llama-server
 ```
 
 ---
@@ -84,7 +84,7 @@ Model already loaded (in /api/ps)?
   NO  → reserve weight + KV cache  = weight_mb + KV
 
 On request completion:
-  release KV only (weight stays — OLLAMA_KEEP_ALIVE=-1)
+  release KV only (weight stays — LLAMA_SERVER_KEEP_ALIVE=-1)
 ```
 
 ---
@@ -95,7 +95,7 @@ On request completion:
 placement_planner::planner_tick()
   │
   ├── Pass 0 (read-only):
-  │     ├── list active Ollama providers
+  │     ├── list active llama-server providers
   │     ├── compute scale_out_candidates (healthy, VRAM > 0)
   │     ├── fetch model demand from Valkey (demand keys per model)
   │     ├── compute eligible_capacity per model
@@ -111,13 +111,13 @@ placement_planner::planner_tick()
   │     for each scale_out_needed model:
   │       find candidate provider with free VRAM
   │       provisional_free[provider] -= needed_mb
-  │       POST /api/pull to Ollama (async)
+  │       POST /api/pull to llama-server (async)
   │       set scale_out_holddown[provider] = now + holddown_ms
   │
   └── Pass 2 — Scale-In (idle eviction):
         for each loaded model on each provider:
           idle_secs >= threshold && not in scale_out_servers → evict
-          POST {ollama}/api/generate keep_alive=0  (unloads model)
+          POST {llama-server}/api/generate keep_alive=0  (unloads model)
 ```
 
 ---

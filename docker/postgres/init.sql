@@ -155,7 +155,7 @@ CREATE TABLE llm_providers (
     is_free_tier      BOOLEAN     NOT NULL DEFAULT false,
     num_parallel      SMALLINT    NOT NULL DEFAULT 4,
     -- Phase 3: lifecycle ownership.
-    --   * external — operator runs llama.cpp/Ollama; Veronex only routes.
+    --   * external — operator runs llama.cpp; Veronex only routes.
     --   * managed  — ProcessManager owns the process on `node_id`.
     mode              VARCHAR(16) NOT NULL DEFAULT 'external'
                                         CHECK (mode IN ('external', 'managed')),
@@ -168,7 +168,6 @@ CREATE TABLE llm_providers (
 CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE INDEX idx_llm_providers_mode      ON llm_providers(mode);
 CREATE INDEX idx_llm_providers_node_id   ON llm_providers(node_id) WHERE node_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 CREATE UNIQUE INDEX uq_llm_providers_llama_server_url ON llm_providers(url) WHERE provider_type = 'llama_server';
 
 -- ── System settings (Phase 3 — operator-tunable singletons) ───────────────────
@@ -415,27 +414,6 @@ CREATE TABLE gemini_models (
     synced_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
--- ── Ollama Models ─────────────────────────────────────────────────────────────
-
-CREATE TABLE ollama_models (
-    model_name  TEXT NOT NULL,
-    provider_id UUID NOT NULL REFERENCES llm_providers(id) ON DELETE CASCADE,
-    synced_at   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (model_name, provider_id)
-);
-
--- ── Ollama Sync Jobs ──────────────────────────────────────────────────────────
-
-CREATE TABLE ollama_sync_jobs (
-    id              UUID        PRIMARY KEY DEFAULT uuidv7(),
-    started_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    completed_at    TIMESTAMPTZ,
-    status          TEXT        NOT NULL DEFAULT 'running',
-    total_providers INT         NOT NULL DEFAULT 0,
-    done_providers  INT         NOT NULL DEFAULT 0,
-    results         JSONB       NOT NULL DEFAULT '[]'::jsonb
-);
-
 -- ── Model VRAM Profiles ───────────────────────────────────────────────────────
 -- max_ctx column included (migration 000005)
 
@@ -648,7 +626,6 @@ CREATE INDEX idx_mcp_key_access_key ON mcp_key_access(api_key_id) WHERE is_allow
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 
-CREATE INDEX idx_ollama_models_name_trgm        ON ollama_models USING GIN (model_name gin_trgm_ops);
 CREATE INDEX idx_llm_providers_name_trgm        ON llm_providers USING GIN (name gin_trgm_ops);
 CREATE INDEX idx_llm_providers_url_trgm         ON llm_providers USING GIN (url gin_trgm_ops);
 CREATE INDEX idx_accounts_name_trgm             ON accounts USING GIN (name gin_trgm_ops);

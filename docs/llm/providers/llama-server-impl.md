@@ -1,26 +1,26 @@
-# Providers -- Ollama: Streaming Protocol & Implementation
+# Providers -- llama-server: Streaming Protocol & Implementation
 
-> SSOT | **Last Updated**: 2026-03-04 (rev: split from ollama.md)
+> SSOT | **Last Updated**: 2026-03-04 (rev: split from llama-server.md)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
-| Change streaming dispatch logic | `ollama/adapter.rs` -- `stream_tokens()` |
-| Change context length per model | `ollama/adapter.rs` -- `model_effective_num_ctx()` |
-| Change generate request shape | `ollama/adapter.rs` -- `stream_generate()` |
-| Change chat request shape | `ollama/adapter.rs` -- `stream_chat()` |
-| Change format conversion (OpenAI) | `openai_handlers.rs` -- `ChatMessage::into_ollama_value()` |
-| Change format conversion (Gemini) | `gemini_model_handlers.rs` -- `contents_to_ollama()` |
-| Change done_reason handling | `ollama/adapter.rs` -- chunk filter in both stream functions |
+| Change streaming dispatch logic | `llama_server/adapter.rs` -- `stream_tokens()` |
+| Change context length per model | `llama_server/adapter.rs` -- `model_effective_num_ctx()` |
+| Change generate request shape | `llama_server/adapter.rs` -- `stream_generate()` |
+| Change chat request shape | `llama_server/adapter.rs` -- `stream_chat()` |
+| Change format conversion (OpenAI) | `openai_handlers.rs` -- `ChatMessage::into_chat_value()` |
+| Change format conversion (Gemini) | `gemini_model_handlers.rs` -- `contents_to_messages()` |
+| Change done_reason handling | `llama_server/adapter.rs` -- chunk filter in both stream functions |
 
 ## Key File
 
-`crates/veronex/src/infrastructure/outbound/ollama/adapter.rs` -- `OllamaAdapter`
+`crates/veronex/src/infrastructure/outbound/llama_server/adapter.rs` -- `LlamaServerAdapter`
 
 ---
 
-## OllamaAdapter -- Streaming Protocol
+## LlamaServerAdapter -- Streaming Protocol
 
 `stream_tokens()` dispatches based on `job.messages`:
 
@@ -36,7 +36,7 @@ fn stream_tokens(&self, job: &InferenceJob) -> Pin<Box<dyn Stream<...>>> {
 | Condition | Endpoint | Used by |
 |-----------|----------|---------|
 | `job.messages = None` | `POST /api/generate` | `POST /v1/inference` (VeronexNative) |
-| `job.messages = Some(...)` | `POST /api/chat` | All compat handlers (OpenAI, Ollama, Gemini) |
+| `job.messages = Some(...)` | `POST /api/chat` | All compat handlers (OpenAI, llama-server, Gemini) |
 
 ---
 
@@ -45,9 +45,9 @@ fn stream_tokens(&self, job: &InferenceJob) -> Pin<Box<dyn Stream<...>>> {
 **Sync is the SSOT**. `capacity::analyzer` parses each model's Modelfile via `/api/show` and stores the `PARAMETER num_ctx` value in:
 
 - Postgres `model_capacity.configured_ctx`
-- Valkey `ollama_model_ctx(provider_id, model)` (TTL 600 s, hot-path cache)
+- Valkey `model_ctx(provider_id, model)` (TTL 600 s, hot-path cache)
 
-**Every request to ollama (Phase 1 lifecycle probe AND Phase 2 inference) MUST send the same `options.num_ctx`** resolved through the same lookup chain:
+**Every request to llama-server (Phase 1 lifecycle probe AND Phase 2 inference) MUST send the same `options.num_ctx`** resolved through the same lookup chain:
 
 ```rust
 pub async fn resolve_num_ctx(pool, provider_id, model) -> u32 {
@@ -69,7 +69,7 @@ fn model_effective_num_ctx(model: &str) -> u32 {
 
 **Why one-source matters — single runner per model**:
 
-ollama's scheduler (`OLLAMA_NUM_PARALLEL=1`) treats the **same model with different `KvSize`** as separate runner subprocesses. If Phase 1 probe sends a different `num_ctx` than Phase 2 chat, ollama spawns a **second cold-load** for the second `KvSize`. This breaks the "model loaded once, AIMD-tuned concurrent jobs" invariant of the queue+dispatcher design (`docs/llm/inference/capacity.md`, `docs/llm/providers/ollama-allocation.md`). Verified 2026-04-30 on dev: 220 + 232 s instead of 220 s.
+llama-server's scheduler (`LLAMA_SERVER_NUM_PARALLEL=1`) treats the **same model with different `KvSize`** as separate runner subprocesses. If Phase 1 probe sends a different `num_ctx` than Phase 2 chat, llama-server spawns a **second cold-load** for the second `KvSize`. This breaks the "model loaded once, AIMD-tuned concurrent jobs" invariant of the queue+dispatcher design (`docs/llm/inference/capacity.md`, `docs/llm/providers/llama-server-allocation.md`). Verified 2026-04-30 on dev: 220 + 232 s instead of 220 s.
 
 The fabricate fallback exists for the cold-start window before the analyzer's first sync. Its values MUST equal what sync would return — drift between fabricate (e.g. `204_800`) and Modelfile (`200_000`) reproduces the double-runner problem within a single request when one path hits Valkey and the other misses.
 
@@ -77,8 +77,8 @@ The fabricate fallback exists for the cold-start window before the analyzer's fi
 
 | Layer | Mechanism | Role |
 |-------|-----------|------|
-| GitOps | `OLLAMA_CONTEXT_LENGTH: 204800` on Ollama StatefulSet | Server-wide floor (used only when client sends no `num_ctx`) |
-| Veronex sync (SSOT) | `capacity::analyzer` → Valkey `ollama_model_ctx` | Canonical per-model value from `/api/show` Modelfile |
+| GitOps | `LLAMA_SERVER_CONTEXT_LENGTH: 204800` on llama-server StatefulSet | Server-wide floor (used only when client sends no `num_ctx`) |
+| Veronex sync (SSOT) | `capacity::analyzer` → Valkey `model_ctx` | Canonical per-model value from `/api/show` Modelfile |
 | Veronex fabricate (fallback) | `model_effective_num_ctx` name-pattern | Cold-start guess; values aligned to Modelfile conventions |
 
 SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md`.
@@ -137,15 +137,15 @@ struct ChatChunk {
 
 ## `done_reason: "load"` Handling
 
-When Ollama first loads a model into VRAM it emits an intermediate chunk with `done_reason: "load"`. Both `stream_generate()` and `stream_chat()` skip these chunks and keep reading. Without this fix, the stream terminates prematurely with empty output.
+When llama-server first loads a model into VRAM it emits an intermediate chunk with `done_reason: "load"`. Both `stream_generate()` and `stream_chat()` skip these chunks and keep reading. Without this fix, the stream terminates prematurely with empty output.
 
 ---
 
 ## Think Parameter — Not Used
 
-The adapter does NOT set Ollama's `think` field on any request. Reasoning /
-thinking behavior is a property of the Ollama model's own template — letting
-Ollama decide per model keeps veronex's MCP loop provider-agnostic and
+The adapter does NOT set llama-server's `think` field on any request. Reasoning /
+thinking behavior is a property of the llama-server model's own template — letting
+llama-server decide per model keeps veronex's MCP loop provider-agnostic and
 avoids forcing a global policy that mis-fits some models
 (e.g. `qwen3-coder` rejects `think:true` with HTTP 400; `qwen3` produces
 empty output with `think:false` + large tool context).
@@ -156,19 +156,19 @@ never leaks internal reasoning to the client.
 
 ---
 
-## Format Conversion (Compat Handlers to Ollama Messages)
+## Format Conversion (Compat Handlers to llama-server Messages)
 
 | Entry route | Converter | Notes |
 |-------------|-----------|-------|
-| `POST /v1/chat/completions` | `ChatMessage::into_ollama_value()` | OpenAI `tool_calls[].arguments` (JSON string) to Ollama (JSON object) |
-| `POST /api/chat` | Passthrough (already Ollama format) | -- |
-| `POST /v1beta/models/*` | `contents_to_ollama()` | Gemini `role: "model"` to `"assistant"`, `functionCall`/`functionResponse` mapped |
+| `POST /v1/chat/completions` | `ChatMessage::into_chat_value()` | OpenAI `tool_calls[].arguments` (JSON string) to llama-server (JSON object) |
+| `POST /api/chat` | Passthrough (already chat-completion format) | -- |
+| `POST /v1beta/models/*` | `contents_to_messages()` | Gemini `role: "model"` to `"assistant"`, `functionCall`/`functionResponse` mapped |
 | `POST /v1/test/*` | Passthrough or extract prompt | Test Run handlers pass simple messages or None |
 
 ---
 
 ## Related Documents
 
-- **Provider registration, routing, health**: `docs/llm/providers/ollama.md`
-- **Ollama model sync**: `docs/llm/providers/ollama-models.md`
+- **Provider registration, routing, health**: `docs/llm/providers/llama-server.md`
+- **llama-server model sync**: `docs/llm/providers/llama-server-models.md`
 - **Capacity / concurrency**: `docs/llm/inference/capacity.md`

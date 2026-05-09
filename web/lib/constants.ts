@@ -5,18 +5,18 @@ export const BASE_API_URL =
   process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 
 /** Provider type identifiers — single source of truth. */
-export const PROVIDER_OLLAMA = 'ollama' as const
+export const PROVIDER_LLAMA_SERVER = 'llama_server' as const
 export const PROVIDER_GEMINI = 'gemini' as const
 
 /** Provider type → Tailwind badge class. */
 export const PROVIDER_BADGE: Record<string, string> = {
-  ollama: 'vds-bg-primary/10 vds-text-primary vds-border-primary/30',
+  llama_server: 'vds-bg-primary/10 vds-text-primary vds-border-primary/30',
   gemini: 'vds-bg-info/10 vds-text-info vds-border-info/30',
 }
 
 /** Provider type → CSS custom-property chart colour. */
 export const PROVIDER_COLORS: Record<string, string> = {
-  ollama: tokens.brand.primary,
+  llama_server: tokens.brand.primary,
   gemini: tokens.status.info,
 }
 

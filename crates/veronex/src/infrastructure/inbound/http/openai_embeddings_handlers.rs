@@ -1,5 +1,5 @@
 //! POST /v1/embeddings — OpenAI-compatible embeddings endpoint.
-//! Proxies to the best available Ollama provider's /api/embed.
+//! Proxies to the best available llama-server provider's chat-completion endpoint.
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
@@ -62,7 +62,7 @@ struct EmbeddingUsage {
 }
 
 /// `POST /v1/embeddings` — generate embeddings in OpenAI-compatible format.
-/// Proxies to the best available Ollama provider's `/api/embed`.
+/// Proxies to the best available llama-server provider's chat-completion endpoint.
 #[instrument(skip(state, req), fields(model = %req.model))]
 pub async fn create_embeddings(
     State(state): State<AppState>,
@@ -78,9 +78,9 @@ pub async fn create_embeddings(
     validate_content_length(total_input_bytes)
         .map_err(|e| AppError::BadRequest(e.into()))?;
 
-    // Pick an Ollama provider.
+    // Pick a llama-server provider.
     // Note: embeddings bypass the VRAM-aware ProviderDispatchPort because /api/embed does
-    // not consume VRAM in the same way as inference. We pick the first active Ollama provider.
+    // not consume VRAM in the same way as inference. We pick the first active llama-server provider.
     // Future: consider routing through pick_and_build once InferenceProviderPort exposes an embed method.
     let providers = state.provider_registry.list_active().await
         .map_err(|e| {
@@ -89,44 +89,44 @@ pub async fn create_embeddings(
         })?;
 
     let provider = providers.into_iter()
-        .find(|p| p.is_ollama())
-        .ok_or_else(|| AppError::ServiceUnavailable("no Ollama provider available for embeddings".into()))?;
+        .find(|p| p.is_llama_server())
+        .ok_or_else(|| AppError::ServiceUnavailable("no llama-server provider available for embeddings".into()))?;
 
     // SSRF prevention: validate the provider URL before making an outbound request.
     validate_provider_url(&provider.url)?;
 
     let model = req.model.clone();
 
-    // Call Ollama /api/embed
-    let ollama_url = format!("{}/api/embed", provider.url);
+    // Call upstream /api/embed
+    let llama_url = format!("{}/api/embed", provider.url);
     let body = serde_json::json!({
         "model": model,
         "input": inputs,
     });
 
-    let resp = state.http_client.post(&ollama_url).json(&body).send().await
+    let resp = state.http_client.post(&llama_url).json(&body).send().await
         .map_err(|e| {
-            tracing::error!("embeddings: Ollama request failed: {e}");
+            tracing::error!("embeddings: upstream request failed: {e}");
             AppError::BadGateway("provider request failed".into())
         })?;
 
     if !resp.status().is_success() {
         let status = resp.status();
         let msg = resp.text().await.unwrap_or_default();
-        tracing::error!("embeddings: Ollama returned {status}: {msg}");
+        tracing::error!("embeddings: upstream returned {status}: {msg}");
         return Err(AppError::BadGateway(format!("provider returned {status}")));
     }
 
-    let ollama_resp: serde_json::Value = resp.json().await
+    let llama_resp: serde_json::Value = resp.json().await
         .map_err(|e| AppError::BadGateway(format!("failed to parse provider response: {e}")))?;
 
-    // Ollama /api/embed returns { "embeddings": [[...], [...]], "prompt_eval_count": N }
-    let embeddings = ollama_resp.get("embeddings")
+    // Upstream /api/embed returns { "embeddings": [[...], [...]], "prompt_eval_count": N }
+    let embeddings = llama_resp.get("embeddings")
         .and_then(|e| e.as_array())
         .cloned()
         .unwrap_or_default();
 
-    let prompt_tokens = ollama_resp.get("prompt_eval_count")
+    let prompt_tokens = llama_resp.get("prompt_eval_count")
         .and_then(|v| v.as_u64())
         .unwrap_or(0) as u32;
 

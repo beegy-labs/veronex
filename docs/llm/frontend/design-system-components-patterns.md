@@ -8,10 +8,10 @@ Providers are grouped into two generic categories (future-proof):
 
 | Category | i18n key | Icon | `provider_type` values |
 |----------|----------|------|----------------------|
-| Local | `overview.localProviders` | `Server` | `['ollama']` |
+| Local | `overview.localProviders` | `Server` | `['llama-server']` |
 | API Services | `overview.apiProviders` | `Globe` | `['gemini']` |
 
-Never hard-code "Ollama" or "Gemini" labels in Overview. Use `localProviders`/`apiProviders` i18n keys.
+Never hard-code "llama-server" or "Gemini" labels in Overview. Use `localProviders`/`apiProviders` i18n keys.
 
 ---
 
@@ -51,7 +51,7 @@ Engine: CSS Motion Path (`offset-path`) + `@keyframes bee-fly` in `globals.css`.
 
 ### SVG Topology (540x264)
 
-3-column ArgoCD-style layout, max-width 680px: Veronex API (Rect, cx=72) -> Queue/Valkey (Cylinder, cx=244) -> Ollama (Octagon, cx=460 cy=72) / Gemini (Octagon, cx=460 cy=192). Response arcs bypass Queue. See [pages/jobs.md](pages/jobs.md) for full path coordinates and phase details.
+3-column ArgoCD-style layout, max-width 680px: Veronex API (Rect, cx=72) -> Queue/Valkey (Cylinder, cx=244) -> llama-server (Octagon, cx=460 cy=72) / Gemini (Octagon, cx=460 cy=192). Response arcs bypass Queue. See [pages/jobs.md](pages/jobs.md) for full path coordinates and phase details.
 
 ---
 
@@ -157,7 +157,7 @@ return (
 
 ## 2-Step Verify Flow (Registration Modals)
 
-Pattern for modals that register external services (GPU servers, Ollama providers). Requires connection verification before the register button becomes active.
+Pattern for modals that register external services (GPU servers, llama-server providers). Requires connection verification before the register button becomes active.
 
 **Shared type**: `VerifyState = 'idle' | 'checking' | 'ok' | 'error'` — exported from `web/lib/types.ts`.
 

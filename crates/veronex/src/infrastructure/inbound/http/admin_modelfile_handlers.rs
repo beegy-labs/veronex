@@ -35,7 +35,6 @@ use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::IntoResponse;
 use axum::Json;
 use chrono::Utc;
-use futures::stream::Stream;
 use futures::stream::StreamExt as _;
 use serde::Deserialize;
 use serde_json::json;
@@ -539,7 +538,7 @@ pub async fn install_stream(
         return not_wired().into_response();
     };
 
-    let mut rx = orch.subscribe(&id).await;
+    let rx = orch.subscribe(&id).await;
     let stream: futures::stream::BoxStream<'static, Result<Event, Infallible>> = futures::stream::unfold((), move |_| {
         let mut rx = rx.resubscribe();
         async move {

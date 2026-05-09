@@ -65,8 +65,8 @@ const fixtures = {
 
   provider: {
     id: '660e8400-e29b-41d4-a716-446655440001',
-    name: 'local-ollama',
-    provider_type: 'ollama' as const,
+    name: 'local-llama_server',
+    provider_type: 'llama_server' as const,
     url: 'http://192.168.1.10:11434',
     is_active: true,
     total_vram_mb: 24576,
@@ -130,7 +130,7 @@ const fixtures = {
   job: {
     id: '990e8400-e29b-41d4-a716-446655440004',
     model_name: 'llama3.2:3b',
-    provider_type: 'ollama',
+    provider_type: 'llama_server',
     status: 'completed' as const,
     source: 'api' as const,
     created_at: '2026-01-15T10:00:00Z',
@@ -151,7 +151,7 @@ const fixtures = {
   jobDetail: {
     id: '990e8400-e29b-41d4-a716-446655440004',
     model_name: 'llama3.2:3b',
-    provider_type: 'ollama',
+    provider_type: 'llama_server',
     status: 'completed' as const,
     source: 'api' as const,
     created_at: '2026-01-15T10:00:00Z',
@@ -348,7 +348,7 @@ describe('API Schema: Jobs', () => {
   })
 
   it('validates job with provider_name', () => {
-    expect(JobSchema.safeParse({ ...fixtures.job, provider_name: 'local-ollama' }).success).toBe(true)
+    expect(JobSchema.safeParse({ ...fixtures.job, provider_name: 'local-llama_server' }).success).toBe(true)
   })
 
   it('validates job with null provider_name', () => {
@@ -362,7 +362,7 @@ describe('API Schema: Jobs', () => {
   it('validates job detail with image_keys and image_urls', () => {
     const detail = {
       ...fixtures.jobDetail,
-      provider_name: 'local-ollama',
+      provider_name: 'local-llama_server',
       image_keys: ['images/abc/0.webp', 'images/abc/0_thumb.webp'],
       image_urls: ['http://localhost:9010/veronex-images/images/abc/0.webp', 'http://localhost:9010/veronex-images/images/abc/0_thumb.webp'],
     }
@@ -407,7 +407,7 @@ describe('API Schema: Lab Settings', () => {
 
 describe('API Schema: Error', () => {
   it('validates error response', () => {
-    expect(ApiErrorSchema.safeParse({ error: 'url is required for ollama provider' }).success).toBe(true)
+    expect(ApiErrorSchema.safeParse({ error: 'url is required for llama_server provider' }).success).toBe(true)
   })
 })
 
@@ -417,7 +417,7 @@ describe('API Schema: SSE Events', () => {
       id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
       status: 'completed',
       model_name: 'qwen3:8b',
-      provider_type: 'ollama',
+      provider_type: 'llama_server',
       latency_ms: 1200,
       ts: 1710600000000,
     }).success).toBe(true)
@@ -428,7 +428,7 @@ describe('API Schema: SSE Events', () => {
       id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
       status: 'pending',
       model_name: 'qwen3:8b',
-      provider_type: 'ollama',
+      provider_type: 'llama_server',
       latency_ms: null,
     }).success).toBe(true)
   })
@@ -458,7 +458,7 @@ describe('API Schema: SSE Events', () => {
       id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
       status: 'pending',
       model_name: 'qwen3:8b',
-      provider_type: 'ollama',
+      provider_type: 'llama_server',
       latency_ms: null,
       ts: 0,
     }).success).toBe(true)
@@ -469,7 +469,7 @@ describe('API Schema: SSE Events', () => {
       id: '019cf3a0-ce23-71f2-9cdc-f97fcf4e1855',
       status: 'running',
       model_name: 'qwen3:8b',
-      provider_type: 'ollama',
+      provider_type: 'llama_server',
       latency_ms: null,
       ts: Number.MAX_SAFE_INTEGER,
     }).success).toBe(true)

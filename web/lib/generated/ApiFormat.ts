@@ -6,4 +6,4 @@
  * The discriminator is the matched route path — no header convention is used.
  * This is recorded on every queued job for per-API analytics.
  */
-export type ApiFormat = "openai_compat" | "ollama_native" | "gemini_native" | "veronex_native";
+export type ApiFormat = "openai_compat" | "gemini_native" | "veronex_native";

@@ -13,7 +13,7 @@ crates/veronex/src/
 │   └── use_cases/inference/  # mod, use_case, dispatcher, runner, helpers
 ├── infrastructure/  # Adapters (implements ports)
 │   ├── inbound/http/  # Axum handlers, middleware, router
-│   └── outbound/      # Postgres, Valkey, Ollama, Gemini, OTel
+│   └── outbound/      # Postgres, Valkey, llama-server, Gemini, OTel
 └── main.rs          # Composition root (wires everything)
 ```
 
@@ -29,7 +29,7 @@ infrastructure → application → domain
 | Port | Direction | Adapter |
 | ---- | --------- | ------- |
 | `InferenceUseCase` | Inbound | HTTP handlers |
-| `InferenceProviderPort` | Outbound | OllamaAdapter, GeminiAdapter |
+| `InferenceProviderPort` | Outbound | LlamaServerAdapter, GeminiAdapter |
 | `ProviderDispatchPort` | Outbound | ConcreteProviderDispatch |
 | `LlmProviderRegistry` | Outbound | CachingProviderRegistry (5s TTL) |
 | `JobRepository` | Outbound | PostgresJobRepository |

@@ -1,7 +1,7 @@
 //! `analyze_image` tool — vision analysis via a Veronex-hosted vision model.
 //!
 //! Accepts a base64-encoded image and returns a text description.
-//! Calls `/api/generate` on the Veronex API (not Ollama directly) so requests
+//! Calls the Veronex inference API (not the model server directly) so requests
 //! go through the scheduler, AIMD, and routing layers.
 //!
 //! Env:

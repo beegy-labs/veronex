@@ -17,9 +17,7 @@ use crate::application::ports::outbound::lab_settings_repository::LabSettingsRep
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::image_store::ImageStore;
 use crate::application::ports::outbound::message_store::MessageStore;
-use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use crate::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
@@ -50,7 +48,6 @@ pub struct InferenceUseCaseImpl {
     job_repo: Arc<dyn JobRepository>,
     valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
-    model_manager: Option<Arc<dyn ModelManagerPort>>,
     jobs: Arc<DashMap<Uuid, JobEntry>>,
     vram_pool: Arc<dyn VramPoolPort>,
     thermal: Arc<dyn ThermalPort>,
@@ -63,7 +60,6 @@ pub struct InferenceUseCaseImpl {
     event_tx: broadcast::Sender<JobStatusEvent>,
     message_store: Option<Arc<dyn MessageStore>>,
     image_store: Option<Arc<dyn ImageStore>>,
-    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
     global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
     instance_id: Arc<str>,
@@ -85,7 +81,6 @@ impl InferenceUseCaseImpl {
         job_repo: Arc<dyn JobRepository>,
         valkey: Option<Arc<dyn ValkeyPort>>,
         observability: Option<Arc<dyn ObservabilityPort>>,
-        model_manager: Option<Arc<dyn ModelManagerPort>>,
         vram_pool: Arc<dyn VramPoolPort>,
         thermal: Arc<dyn ThermalPort>,
         circuit_breaker: Arc<dyn CircuitBreakerPort>,
@@ -95,7 +90,6 @@ impl InferenceUseCaseImpl {
         event_tx: broadcast::Sender<JobStatusEvent>,
         message_store: Option<Arc<dyn MessageStore>>,
         image_store: Option<Arc<dyn ImageStore>>,
-        ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
         global_model_settings_repo: Option<Arc<dyn GlobalModelSettingsRepository>>,
         instance_id: Arc<str>,
@@ -109,11 +103,11 @@ impl InferenceUseCaseImpl {
             })
         });
         Self {
-            registry, job_repo, valkey, observability, model_manager,
+            registry, job_repo, valkey, observability,
             jobs: Arc::new(DashMap::new()),
             vram_pool, thermal, circuit_breaker, provider_dispatch,
             aimd_admission, activity_tracker,
-            event_tx, message_store, image_store, ollama_model_repo, model_selection_repo,
+            event_tx, message_store, image_store, model_selection_repo,
             global_model_settings_repo,
             instance_id, cancel_notifiers: Arc::new(DashMap::new()),
             compression_handle,
@@ -195,14 +189,14 @@ impl InferenceUseCaseImpl {
             self.jobs.clone(), self.registry.clone(),
             self.job_repo.clone(), valkey.clone(),
         );
-        let (obs, mm, vram, thermal, cb, pd) = (
-            self.observability.clone(), self.model_manager.clone(),
+        let (obs, vram, thermal, cb, pd) = (
+            self.observability.clone(),
             self.vram_pool.clone(), self.thermal.clone(),
             self.circuit_breaker.clone(), self.provider_dispatch.clone(),
         );
-        let (ev, iid, cn, omr, msr, gmsr) = (
+        let (ev, iid, cn, msr, gmsr) = (
             self.event_tx.clone(), self.instance_id.clone(),
-            self.cancel_notifiers.clone(), self.ollama_model_repo.clone(),
+            self.cancel_notifiers.clone(),
             self.model_selection_repo.clone(), self.global_model_settings_repo.clone(),
         );
         let msg_store = self.message_store.clone();
@@ -218,10 +212,10 @@ impl InferenceUseCaseImpl {
                 if shutdown.is_cancelled() { break; }
                 let inner = queue_dispatcher_loop(
                     jobs.clone(), registry.clone(), job_repo.clone(),
-                    msg_store.clone(), valkey.clone(), obs.clone(), mm.clone(),
+                    msg_store.clone(), valkey.clone(), obs.clone(),
                     vram.clone(), thermal.clone(), cb.clone(), pd.clone(),
                     ev.clone(), iid.clone(), cn.clone(),
-                    omr.clone(), msr.clone(), gmsr.clone(),
+                    msr.clone(), gmsr.clone(),
                     shutdown.clone(), lifecycle_flag,
                 );
                 match AssertUnwindSafe(inner).catch_unwind().await {
@@ -463,7 +457,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
                     tracing::warn!(%uuid, "Valkey ZSET enqueue failed, direct spawn: {e}");
                     spawn_job_direct(
                         self.jobs.clone(), self.job_repo.clone(), self.message_store.clone(),
-                        self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
+                        self.valkey.clone(), self.observability.clone(),
                         self.vram_pool.clone(), self.thermal.clone(),
                         self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                         self.aimd_admission.clone(), self.activity_tracker.clone(),
@@ -476,7 +470,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
         } else {
             spawn_job_direct(
                 self.jobs.clone(), self.job_repo.clone(), self.message_store.clone(),
-                None, self.observability.clone(), self.model_manager.clone(),
+                None, self.observability.clone(),
                 self.vram_pool.clone(), self.thermal.clone(),
                 self.circuit_breaker.clone(), self.provider_dispatch.clone(),
                 self.aimd_admission.clone(), self.activity_tracker.clone(),
@@ -512,7 +506,7 @@ impl InferenceUseCase for InferenceUseCaseImpl {
 
         super::runner::run_job(
             self.jobs.clone(), adapter, self.job_repo.clone(), self.message_store.clone(),
-            self.valkey.clone(), self.observability.clone(), self.model_manager.clone(),
+            self.valkey.clone(), self.observability.clone(),
             self.provider_dispatch.clone(), uuid, job, Some(pid), is_free,
             self.event_tx.clone(), self.instance_id.clone(), self.cancel_notifiers.clone(),
             self.mcp_lifecycle_phase_enabled,

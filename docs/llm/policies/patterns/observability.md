@@ -24,7 +24,7 @@ Upgrade rule: bump all four on the same PR, verify exporters still connect, and 
 | Span kind | Name format | Example |
 |-----------|-------------|---------|
 | HTTP server | `{METHOD} {route_template}` | `POST /v1/providers` |
-| HTTP client | `{METHOD}` + attribute `http.url` | `POST` with `http.url="http://ollama/api/chat"` |
+| HTTP client | `{METHOD}` + attribute `http.url` | `POST` with `http.url="http://llama-server/api/chat"` |
 | DB query | `{operation} {table}` | `SELECT llm_providers` |
 | Message queue | `{op} {destination}` | `publish otel-metrics` |
 
@@ -113,7 +113,7 @@ emit_audit(
 Location: `infrastructure/inbound/http/super::emit_audit` (imported as `super::emit_audit`).
 Call after the DB mutation succeeds, before returning the response. Non-blocking — fire-and-forget via `.await` is fine.
 
-**Common omission:** `emit_audit` is frequently missing from handlers added without consulting this doc. A 2026-04-07 audit found it absent in 9 handlers (across `key_mcp_access_handlers`, `key_provider_access_handlers`, `ollama_model_handlers`, `mcp_handlers`, `gemini_model_handlers`, `dashboard_handlers`). Run the quarterly audit grep after adding any mutating handler.
+**Common omission:** `emit_audit` is frequently missing from handlers added without consulting this doc. A 2026-04-07 audit found it absent in 9 handlers (across `key_mcp_access_handlers`, `key_provider_access_handlers`, `(removed)`, `mcp_handlers`, `gemini_model_handlers`, `dashboard_handlers`). Run the quarterly audit grep after adding any mutating handler.
 
 **Prerequisite:** the handler must capture `RequireXxx(claims)` — not `RequireXxx(_)` — to have `claims` available for `emit_audit`. If no `RequireXxx` extractor exists at all, the handler has a missing auth guard (P1 security issue).
 

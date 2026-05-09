@@ -1,6 +1,6 @@
 //! `McpCircuitBreaker` — per-MCP-server state machine.
 //!
-//! Separate from `veronex`'s existing `CircuitBreakerMap` (which handles Ollama).
+//! Separate from `veronex`'s existing `CircuitBreakerMap` (which handles upstream LLM providers).
 //!
 //! States: Closed → Open (5 consecutive failures) → HalfOpen (60 s) → Closed.
 

@@ -78,7 +78,7 @@ Every major production LLM serving system has converged on this stack:
   - Proactive preload trigger
     ↓
 [Per-Server Inference Pool]
-  - Each server: Ollama instance with VRAM-aware model set
+  - Each server: llama-server instance with VRAM-aware model set
   - Model eviction: LRU + demand-weighted
   - Health monitoring: latency P95, queue depth
 ```
@@ -100,9 +100,9 @@ Every major production LLM serving system has converged on this stack:
 | 2026 | DualMap | arXiv Feb 2026 | Dual-hash-ring: cache affinity + load balance |
 | 2026 | GORGO | arXiv Feb 2026 | Cross-region KV cache routing |
 
-### What Matters for Ollama-Based Systems
+### What Matters for llama-server-Based Systems
 
-Since Ollama is a black-box inference engine (no vLLM internals, no KV cache API):
+Since llama-server is a black-box inference engine (no vLLM internals, no KV cache API):
 
 | Capability | Approach | Complexity |
 |-----------|----------|-----------|
@@ -112,7 +112,7 @@ Since Ollama is a black-box inference engine (no vLLM internals, no KV cache API
 | Model placement | Demand-weighted VRAM bin packing | Medium |
 | Proactive preloading | Preload top-K demand models when idle | Medium |
 | Eviction | LRU + demand-weighted score | Medium |
-| P/D disaggregation | **Not applicable** (Ollama black-box) | — |
+| P/D disaggregation | **Not applicable** (llama-server black-box) | — |
 | KV cache migration | **Not applicable** (no API) | — |
 
 ---

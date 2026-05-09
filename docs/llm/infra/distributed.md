@@ -54,8 +54,8 @@ The reaper deducts reserved HASH on lease expiry, preventing zombie reservations
 | Crash after pop = lost job | Processing list + `veronex:job:owner:{job_id}` tracks ownership |
 | No crash recovery | Reaper + `recover_pending_jobs()` on startup |
 
-**Model filter**: Four-stage filtering for Ollama jobs in the queue dispatcher:
-1. `providers_for_model()` — active + provider_type match + tier check + **standby exclusion** (`!vram_pool.is_standby()`). Also filters providers that have the requested model installed (OllamaModelRepository).
+**Model filter**: Four-stage filtering for llama-server jobs in the queue dispatcher:
+1. `providers_for_model()` — active + provider_type match + tier check + **standby exclusion** (`!vram_pool.is_standby()`). Also filters providers that have the requested model installed (LlamaServerModelRepository).
 2. `list_enabled()` — filters providers where the model is disabled in selection config (ProviderModelSelectionRepository).
 3. Thermal + Circuit Breaker + Concurrency gates.
 4. Preload exclusion — `is_preload_excluded()` filters providers where the model had 3 consecutive preload failures within 300s.

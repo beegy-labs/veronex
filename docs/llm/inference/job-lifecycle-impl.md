@@ -66,7 +66,7 @@ API key (`X-API-Key`) is **not** accepted for cancel — dashboard-only operatio
 
 `cancel()` is a **no-op** for terminal states (Completed, Failed, Cancelled). For active jobs:
 1. In-memory: `entry.status = Cancelled`, `entry.done = true`, both `notify`s fired
-2. `run_job` select! `biased` cancel branch fires — drops stream (broken-pipe stops Ollama)
+2. `run_job` select! `biased` cancel branch fires — drops stream (broken-pipe stops llama-server)
 3. DB: `UPDATE inference_jobs SET status = 'cancelled', cancelled_at = $2 WHERE id = $1 AND status NOT IN ('completed', 'failed')`
 
 ### CancelOnDrop — Client Disconnect

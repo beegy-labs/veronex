@@ -4,7 +4,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
+import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama_server-models'
 
 interface CompressionModelSelectorProps {
   value: string | null
@@ -14,7 +14,7 @@ interface CompressionModelSelectorProps {
 
 export function CompressionModelSelector({ value, onChange, disabled }: CompressionModelSelectorProps) {
   const { t } = useTranslation()
-  const { models } = useEnabledOllamaModels()
+  const { models } = useEnabledLlamaServerModels()
 
   return (
     <Select

@@ -80,7 +80,7 @@ export function TopModelsSection({ modelBarData, geminiEnabled }: {
           <div className="vds-flex vds-items-center vds-gap-3 vds-text-xs vds-text-dim">
             <span className="vds-flex vds-items-center vds-gap-1.5">
               <span className="vds-h-2.5 vds-w-2.5 vds-rounded-sm vds-inline-block" style={{ background: tokens.brand.primary }} />
-              {t('nav.ollama')}
+              {t('nav.llama_server')}
             </span>
             {geminiEnabled && (
               <span className="vds-flex vds-items-center vds-gap-1.5">

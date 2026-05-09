@@ -1,7 +1,6 @@
 pub mod admission;
 pub mod aimd_controller;
 pub mod aimd_registry;
-pub mod analyzer;
 pub mod distributed_vram_pool;
 pub mod pressure;
 pub mod slo;

@@ -10,7 +10,7 @@ use serde::Deserialize;
 use tracing::{instrument, Instrument};
 use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, FinishReason, ProviderType};
-use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, PROVIDER_OLLAMA, PROVIDER_GEMINI, GEMINI_TIER_FREE};
+use super::constants::{ERR_MODEL_INVALID, ERR_PROMPT_TOO_LARGE, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, PROVIDER_LLAMA_SERVER, PROVIDER_GEMINI, GEMINI_TIER_FREE};
 use super::handlers::{sanitize_sse_error, sse_response, with_conversation_id, SseStream};
 use super::inference_helpers::{build_sse_response, validate_model_name, validate_content_length, extract_last_user_prompt, validate_tool_call, extract_conversation_id};
 use super::openai_sse_types::{
@@ -61,7 +61,7 @@ impl MessageContent {
     /// Extract base64 image data from `image_url` content parts.
     ///
     /// Strips the `data:image/...;base64,` prefix so the result is raw base64
-    /// compatible with Ollama's `images` field.
+    /// carries base64 images.
     fn extract_images(&self) -> Vec<String> {
         match self {
             MessageContent::Parts(parts) => parts
@@ -99,7 +99,7 @@ pub struct ChatMessage {
     /// Tool result message name (some clients send this).
     #[serde(default)]
     name: Option<String>,
-    /// Ollama-compatible image list (base64). Present when clients send per-message images
+    /// Image list (base64). Present when clients send per-message images
     /// (e.g. multi-turn conversation mode in the test panel).
     #[serde(default)]
     images: Option<Vec<String>>,
@@ -131,12 +131,12 @@ impl ChatMessage {
         &self.role
     }
 
-    /// Convert to Ollama `/api/chat` message JSON.
+    /// Convert to chat-completion `messages` JSON.
     ///
     /// Key difference: OpenAI `tool_calls[].function.arguments` is a **JSON-encoded string**;
-    /// Ollama expects it as a **JSON object**. We parse the string back to an object.
+    /// llama-server expects it as a **JSON object**. We parse the string back to an object.
     /// The inverse applies for incoming tool result messages — no conversion needed there.
-    fn into_ollama_value(self) -> serde_json::Value {
+    fn into_chat_value(self) -> serde_json::Value {
         let content = match self.content {
             Some(c) => c.into_string(),
             None => String::new(),
@@ -147,14 +147,14 @@ impl ChatMessage {
             "content": content,
         });
 
-        // Pass tool name for tool-result messages (some Ollama versions use it).
+        // Pass tool name for tool-result messages.
         if let Some(name) = self.name {
             msg["name"] = serde_json::Value::String(name);
         }
 
-        // Convert OpenAI tool_calls → Ollama tool_calls
+        // Convert OpenAI tool_calls → upstream tool_calls
         if let Some(serde_json::Value::Array(calls)) = self.tool_calls {
-            let ollama_calls: Vec<serde_json::Value> = calls
+            let chat_calls: Vec<serde_json::Value> = calls
                 .into_iter()
                 .map(|c| {
                     let name = c
@@ -162,7 +162,7 @@ impl ChatMessage {
                         .and_then(|f| f.get("name"))
                         .and_then(|n| n.as_str())
                         .unwrap_or("");
-                    // OpenAI arguments is a JSON-encoded string; Ollama wants the object.
+                    // OpenAI arguments is a JSON-encoded string; llama-server wants the object.
                     let arguments: serde_json::Value = c
                         .get("function")
                         .and_then(|f| f.get("arguments"))
@@ -172,7 +172,7 @@ impl ChatMessage {
                     serde_json::json!({"function": {"name": name, "arguments": arguments}})
                 })
                 .collect();
-            msg["tool_calls"] = serde_json::Value::Array(ollama_calls);
+            msg["tool_calls"] = serde_json::Value::Array(chat_calls);
         }
 
         // Pass through tool_call_id for tool-result messages
@@ -195,19 +195,19 @@ impl ChatMessage {
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    /// Selects the veronex provider type ("ollama" | "gemini"). Optional.
+    /// Selects the veronex provider type ("llama_server" | "gemini"). Optional.
     pub provider_type: Option<String>,
-    /// Tool/function definitions — passed through to Ollama as-is.
+    /// Tool/function definitions — passed through as-is.
     #[serde(default)]
     pub tools: Option<Vec<serde_json::Value>>,
-    /// Tool choice override (passed through to Ollama).
+    /// Tool choice override (passed through).
     #[serde(default)]
     pub tool_choice: Option<serde_json::Value>,
     #[serde(default)]
     pub temperature: Option<f64>,
     #[serde(default)]
     pub top_p: Option<f64>,
-    /// Maps to Ollama `options.num_predict`.
+    /// Maps to upstream `options.num_predict`.
     #[serde(default)]
     pub max_tokens: Option<u32>,
     /// OpenAI renamed `max_tokens` to `max_completion_tokens`. Both are accepted.
@@ -216,7 +216,7 @@ pub struct ChatCompletionRequest {
     /// Whether to stream the response (SSE). Defaults to `false` per OpenAI spec.
     #[serde(default)]
     pub stream: Option<bool>,
-    /// Base64-encoded images for vision models (Ollama extension).
+    /// Base64-encoded images for vision models.
     #[serde(default)]
     pub images: Option<Vec<String>>,
     /// Stop sequences.
@@ -261,7 +261,7 @@ pub struct ChatCompletionRequest {
     /// Reasoning effort for o-series models ("low", "medium", "high") — ignored.
     #[serde(default)]
     pub reasoning_effort: Option<String>,
-    /// Token bias map (token_id → -100..100) — ignored (not supported by Ollama via this path).
+    /// Token bias map (token_id → -100..100) — ignored (not supported via this path).
     #[serde(default)]
     pub logit_bias: Option<serde_json::Value>,
     /// Predicted output for latency reduction — ignored.
@@ -291,8 +291,8 @@ pub struct ChatCompletionRequest {
 
 /// `POST /v1/chat/completions` — OpenAI-compatible chat endpoint.
 ///
-/// For Ollama providers: proxies the full request (messages, tools, temperature, …)
-/// directly to Ollama's `/api/chat` and streams the response in OpenAI SSE format,
+/// For llama_server providers: proxies the full request (messages, tools, temperature, …)
+/// directly to the chat-completion endpoint and streams the response in OpenAI SSE format,
 /// including `tool_calls` deltas for function-calling agents.
 ///
 /// For other providers: falls back to the legacy queue-based single-prompt path.
@@ -357,11 +357,11 @@ pub async fn chat_completions(
         .and_then(super::inference_helpers::decode_conversation_id)
         .or_else(|| extract_conversation_id(&headers));
     let stream = req.stream.unwrap_or(false);
-    let provider_str = req.provider_type.as_deref().unwrap_or(PROVIDER_OLLAMA);
+    let provider_str = req.provider_type.as_deref().unwrap_or(PROVIDER_LLAMA_SERVER);
     match provider_str {
-        PROVIDER_OLLAMA => {
+        PROVIDER_LLAMA_SERVER => {
             // If an MCP bridge is configured and has active server sessions,
-            // run the agentic MCP loop instead of the plain Ollama proxy.
+            // run the agentic MCP loop instead of the plain proxy.
             // API key callers must have at least one MCP grant — if not, bypass to plain proxy.
             // Skip MCP only when the current request contains images — image analysis is
             // inline passthrough. Vision models WITHOUT images still go through MCP normally
@@ -383,12 +383,12 @@ pub async fn chat_completions(
                             ).await.is_empty(),
                         };
                         if has_access {
-                            return mcp_ollama_chat(state, caller, req, conversation_id, stream).await;
+                            return mcp_llama_chat(state, caller, req, conversation_id, stream).await;
                         }
                     }
                 }
             }
-            ollama_chat_proxy(state, caller, req, conversation_id, stream).await
+            llama_chat_proxy(state, caller, req, conversation_id, stream).await
         }
         _ => {
             // Parse "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None)
@@ -398,14 +398,14 @@ pub async fn chat_completions(
     }
 }
 
-// ── Ollama queue-based path ─────────────────────────────────────────────────────
+// ── llama-server queue-based path ─────────────────────────────────────────────────────
 
-/// Routes an OpenAI chat request to an Ollama provider via the Veronex queue.
+/// Routes an OpenAI chat request to a llama_server provider via the Veronex queue.
 ///
-/// Messages are converted to Ollama `/api/chat` format and stored in the job
-/// so the OllamaAdapter can forward the full conversation history.
+/// Messages are converted to chat-completion `messages` format and stored in the job
+/// so the LlamaServerAdapter can forward the full conversation history.
 /// VRAM availability and thermal throttle are checked before dispatch.
-async fn ollama_chat_proxy(
+async fn llama_chat_proxy(
     state: AppState,
     caller: InferCaller,
     mut req: ChatCompletionRequest,
@@ -426,15 +426,15 @@ async fn ollama_chat_proxy(
         .flat_map(|c| c.extract_images())
         .collect();
 
-    // Convert messages to Ollama format (normalise content, convert tool_calls).
-    let mut ollama_messages: Vec<serde_json::Value> =
-        req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
+    // Convert messages to chat-completion format (normalise content, convert tool_calls).
+    let mut chat_messages: Vec<serde_json::Value> =
+        req.messages.into_iter().map(|m| m.into_chat_value()).collect();
 
     // Extract last user content as display prompt (required by InferenceJob).
     // When the user sends image(s) with no text, auto-fill a default prompt so the
     // domain Prompt value object doesn't reject an empty string.
     let prompt = {
-        let raw = extract_last_user_prompt(&ollama_messages);
+        let raw = extract_last_user_prompt(&chat_messages);
         if raw.is_empty() { "Describe this image in detail.".to_string() } else { raw.to_string() }
     };
 
@@ -453,7 +453,7 @@ async fn ollama_chat_proxy(
                 if let Some(compressed) = context_compressor::compress_input_inline(
                     &prompt, input_budget, &params.model, &params.provider_url, params.timeout_secs,
                 ).await {
-                    if let Some(last_user) = ollama_messages.iter_mut().rev()
+                    if let Some(last_user) = chat_messages.iter_mut().rev()
                         .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
                     {
                         last_user["content"] = serde_json::json!(compressed);
@@ -465,21 +465,21 @@ async fn ollama_chat_proxy(
 
     let model_str = req.model.clone();
     // Collect images: top-level field + OpenAI image_url content parts from the LAST user message only.
-    // Per-message images from conversation history are already embedded in the ollama_messages JSON
-    // via into_ollama_value(); re-collecting them would cause the Ollama adapter to re-inject all
+    // Per-message images from conversation history are already embedded in the chat_messages JSON
+    // via into_chat_value(); re-collecting them would cause the adapter to re-inject all
     // historical images into the final message on every turn, confusing the model.
-    let mut ollama_messages = ollama_messages;
+    let mut chat_messages = chat_messages;
     let images = {
         let mut imgs = req.images.unwrap_or_default();
         imgs.append(&mut content_images);
         // Pick up per-message images from the LATEST user message in this turn —
         // this is what the frontend actually sends (images attached to the message
         // currently being submitted). Older turns' images are ignored: the frontend
-        // strips them from history, and Ollama does not retain images across turns
+        // strips them from history, and the upstream model does not retain images across turns
         // anyway (the assistant's prior analysis already captures image context
         // as text). Runs for every turn including multi-turn conversations so that
         // non-vision models always get a chance at vision fallback.
-        if let Some(last_user) = ollama_messages.iter().rev()
+        if let Some(last_user) = chat_messages.iter().rev()
             .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
         {
             if let Some(arr) = last_user.get("images").and_then(|v| v.as_array()) {
@@ -488,7 +488,7 @@ async fn ollama_chat_proxy(
         }
         if imgs.is_empty() { None } else { Some(imgs) }
     };
-    // Forward tools in Ollama format (OpenAI tools array is already compatible with Ollama).
+    // Forward tools as-is (OpenAI tools array is already compatible with the upstream chat-completion API).
     let tools = req.tools.map(serde_json::Value::Array);
 
     // Prefer max_completion_tokens (new name), fall back to max_tokens. Already capped above.
@@ -512,7 +512,7 @@ async fn ollama_chat_proxy(
             &state.vision_fallback_model,
         ).await;
         if let Some(ref va) = va {
-            if let Some(last_user) = ollama_messages.iter_mut().rev()
+            if let Some(last_user) = chat_messages.iter_mut().rev()
                 .find(|m| m.get("role").and_then(|r| r.as_str()) == Some("user"))
             {
                 let existing = last_user["content"].as_str().unwrap_or("").to_string();
@@ -526,14 +526,14 @@ async fn ollama_chat_proxy(
         None
     };
 
-    let messages = serde_json::Value::Array(ollama_messages);
+    let messages = serde_json::Value::Array(chat_messages);
 
     let job_id = match state
         .use_case
         .submit(SubmitJobRequest {
             prompt,
             model_name: model_str.clone(),
-            provider_type: ProviderType::Ollama,
+            provider_type: ProviderType::LlamaServer,
             gemini_tier: None,
             api_key_id: caller.api_key_id(),
             account_id: caller.account_id(),
@@ -558,7 +558,7 @@ async fn ollama_chat_proxy(
     {
         Ok(id) => id,
         Err(e) => {
-            tracing::error!("chat_completions(ollama): submit failed: {e}");
+            tracing::error!("chat_completions(llama_server): submit failed: {e}");
             return super::error::AppError::from(e).into_response();
         }
     };
@@ -579,13 +579,13 @@ async fn ollama_chat_proxy(
         match result {
             Ok(token) if token.tool_calls.is_some() => {
                 saw_tool_calls = true;
-                let ollama_calls = token.tool_calls.as_ref()
+                let chat_calls = token.tool_calls.as_ref()
                     .and_then(|v| v.as_array())
                     .cloned()
                     // Safety: serde_json::Value::Array is always serialisable.
                     .unwrap_or_default();
 
-                let openai_calls: Vec<serde_json::Value> = ollama_calls
+                let openai_calls: Vec<serde_json::Value> = chat_calls
                     .iter()
                     .enumerate()
                     .filter(|(_, c)| validate_tool_call(c))
@@ -639,7 +639,7 @@ async fn ollama_chat_proxy(
     with_conversation_id(sse, conversation_id.as_ref())
 }
 
-/// Convert an Ollama tool call JSON value to OpenAI format.
+/// Convert an upstream tool call JSON value to OpenAI format.
 fn convert_tool_call(i: usize, c: &serde_json::Value) -> serde_json::Value {
     let name = c.get("function")
         .and_then(|f| f.get("name"))
@@ -745,12 +745,12 @@ async fn collect_completion(
 
 // ── MCP agentic loop path ─────────────────────────────────────────────────────
 
-/// Handles Ollama chat requests when an MCP bridge is active.
+/// Handles llama-server chat requests when an MCP bridge is active.
 ///
 /// Runs the agentic loop: injects MCP tool definitions, executes tool calls
 /// server-side, and re-submits until the model produces a final text response.
 ///
-/// The final response is streamed (or collected) identically to `ollama_chat_proxy`.
+/// The final response is streamed (or collected) identically to `llama_chat_proxy`.
 /// MCP-routed chat completions handler — **streaming-first by contract**.
 ///
 /// SDD: `.specs/veronex/history/inference-mcp-streaming-first.md` §5.
@@ -782,7 +782,7 @@ async fn collect_completion(
 /// `tokio::sync::oneshot` send error or by the `state.use_case.stream(fid)`
 /// `CancelOnDrop` wrapper inside `build_sse_response`. Tier B (PR #100) then
 /// persists whatever was accumulated to S3.
-async fn mcp_ollama_chat(
+async fn mcp_llama_chat(
     state: AppState,
     caller: InferCaller,
     req: ChatCompletionRequest,
@@ -798,8 +798,8 @@ async fn mcp_ollama_chat(
         Err(resp) => return resp,
     };
 
-    let ollama_messages: Vec<serde_json::Value> =
-        req.messages.into_iter().map(|m| m.into_ollama_value()).collect();
+    let chat_messages: Vec<serde_json::Value> =
+        req.messages.into_iter().map(|m| m.into_chat_value()).collect();
 
     let model = req.model.clone();
     let orchestrator_model = req.model.clone();
@@ -840,7 +840,7 @@ async fn mcp_ollama_chat(
             // SAFETY: mcp_bridge presence checked just above this spawn.
             let bridge = state.mcp_bridge.as_ref().expect("mcp_bridge checked above");
             let result = bridge.run_loop(
-                &state, &caller, orchestrator_model, ollama_messages, tools,
+                &state, &caller, orchestrator_model, chat_messages, tools,
                 conversation_id, stop, seed,
                 response_format, frequency_penalty, presence_penalty,
                 Some(tap_tx),
@@ -1027,8 +1027,8 @@ async fn load_conversation_context(
                 // ── Session handoff check ─────────────────────────────────────
                 if session_handoff::should_handoff(&record, configured_ctx, &lab) {
                     let providers = state.provider_registry.list_active().await.unwrap_or_default();
-                    let ollama = providers.iter().find(|p| p.is_ollama());
-                    if let Some(provider) = ollama {
+                    let llama = providers.iter().find(|p| p.is_llama_server());
+                    if let Some(provider) = llama {
                         let summary_model = lab.compression_model.clone()
                             .unwrap_or_else(|| model_name.to_string());
                         let timeout = lab.compression_timeout_secs as u64;
@@ -1126,12 +1126,12 @@ async fn load_conversation_context(
 
 /// Parse a provider type string from the HTTP request into `(ProviderType, Option<String>)`.
 ///
-/// "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None), anything else → (Ollama, None).
+/// "gemini-free" → (Gemini, Some("free")), "gemini" → (Gemini, None), anything else → (LlamaServer, None).
 fn parse_provider_str(s: &str) -> (ProviderType, Option<String>) {
     match s {
         "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
         PROVIDER_GEMINI => (ProviderType::Gemini, None),
-        _ => (ProviderType::Ollama, None),
+        _ => (ProviderType::LlamaServer, None),
     }
 }
 
@@ -1165,7 +1165,7 @@ async fn legacy_queue_chat(
 
     let model_str = req.model.clone();
     let images = req.images;
-    // Cap max_tokens on the legacy path (same ceiling as the Ollama-optimized path).
+    // Cap max_tokens on the legacy path (same ceiling as the queue path).
     let effective_max_tokens = req.max_completion_tokens.or(req.max_tokens)
         .map(|mt| mt.min(MAX_TOKENS_CEILING));
 
@@ -1181,7 +1181,7 @@ async fn legacy_queue_chat(
             source: caller.source(),
             api_format: ApiFormat::OpenaiCompat,
             // Intentionally None: legacy path uses single-prompt inference.
-            // The GeminiAdapter and non-Ollama providers use job.prompt, not messages.
+            // The GeminiAdapter and non-llama_server providers use job.prompt, not messages.
             // Tools are not supported on this path.
             messages: None,
             tools: None,
@@ -1318,9 +1318,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_provider_str_unknown_defaults_ollama() {
+    fn parse_provider_str_unknown_defaults_llama_server() {
         let (pt, tier) = parse_provider_str("something-else");
-        assert_eq!(pt, ProviderType::Ollama);
+        assert_eq!(pt, ProviderType::LlamaServer);
         assert!(tier.is_none());
     }
 
@@ -1328,10 +1328,10 @@ mod tests {
 
     #[test]
     fn convert_tool_call_format() {
-        let ollama = serde_json::json!({
+        let upstream = serde_json::json!({
             "function": {"name": "get_weather", "arguments": {"city": "Seoul"}}
         });
-        let openai = convert_tool_call(0, &ollama);
+        let openai = convert_tool_call(0, &upstream);
         assert_eq!(openai["index"], 0);
         assert_eq!(openai["id"], "call_0");
         assert_eq!(openai["type"], "function");

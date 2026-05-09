@@ -107,8 +107,6 @@ pub enum ApiFormat {
     /// POST /v1/chat/completions (OpenAI SDK, qwen-code, etc.)
     #[default]
     OpenaiCompat,
-    /// POST /api/chat or /api/generate (OLLAMA_HOST=veronex clients)
-    OllamaNative,
     /// POST /v1beta/models/{model}:generateContent (Gemini CLI, google-generativeai SDK)
     GeminiNative,
     /// POST /v1/inference (Veronex native SDK)
@@ -119,7 +117,6 @@ impl ApiFormat {
     pub fn as_str(&self) -> &'static str {
         match self {
             Self::OpenaiCompat => "openai_compat",
-            Self::OllamaNative => "ollama_native",
             Self::GeminiNative => "gemini_native",
             Self::VeronexNative => "veronex_native",
         }
@@ -131,7 +128,6 @@ impl std::str::FromStr for ApiFormat {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "openai_compat" => Ok(Self::OpenaiCompat),
-            "ollama_native" => Ok(Self::OllamaNative),
             "gemini_native" => Ok(Self::GeminiNative),
             "veronex_native" => Ok(Self::VeronexNative),
             _ => Err(format!("unknown ApiFormat: {s}")),
@@ -167,7 +163,6 @@ impl std::str::FromStr for JobSource {
 #[ts(export, export_to = "../../../web/lib/generated/")]
 #[serde(rename_all = "snake_case")]
 pub enum ProviderType {
-    Ollama,
     Gemini,
     LlamaServer,
 }
@@ -175,7 +170,6 @@ pub enum ProviderType {
 impl ProviderType {
     pub fn as_str(&self) -> &'static str {
         match self {
-            Self::Ollama => "ollama",
             Self::Gemini => "gemini",
             Self::LlamaServer => "llama_server",
         }
@@ -184,7 +178,6 @@ impl ProviderType {
     /// Audit trail resource type string for this provider type.
     pub fn resource_type(&self) -> &'static str {
         match self {
-            Self::Ollama => "ollama_provider",
             Self::Gemini => "gemini_provider",
             Self::LlamaServer => "llama_server_provider",
         }
@@ -195,7 +188,6 @@ impl std::str::FromStr for ProviderType {
     type Err = String;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ollama" => Ok(Self::Ollama),
             "gemini" => Ok(Self::Gemini),
             "llama_server" => Ok(Self::LlamaServer),
             other => Err(format!("unknown provider type: {other}")),
@@ -405,7 +397,7 @@ mod tests {
 
     #[test]
     fn provider_type_roundtrip() {
-        for pt in &[ProviderType::Ollama, ProviderType::Gemini, ProviderType::LlamaServer] {
+        for pt in &[ProviderType::Gemini, ProviderType::LlamaServer] {
             let s = pt.as_str();
             let parsed: ProviderType = s.parse().unwrap();
             assert_eq!(*pt, parsed);
@@ -440,7 +432,7 @@ mod tests {
 
     #[test]
     fn api_format_roundtrip() {
-        for fmt in &[ApiFormat::OpenaiCompat, ApiFormat::OllamaNative, ApiFormat::GeminiNative, ApiFormat::VeronexNative] {
+        for fmt in &[ApiFormat::OpenaiCompat, ApiFormat::GeminiNative, ApiFormat::VeronexNative] {
             let s = fmt.as_str();
             let parsed: ApiFormat = s.parse().unwrap();
             assert_eq!(*fmt, parsed);
@@ -473,7 +465,6 @@ mod tests {
 
     #[test]
     fn provider_type_resource_type() {
-        assert_eq!(ProviderType::Ollama.resource_type(), "ollama_provider");
         assert_eq!(ProviderType::Gemini.resource_type(), "gemini_provider");
         assert_eq!(ProviderType::LlamaServer.resource_type(), "llama_server_provider");
     }

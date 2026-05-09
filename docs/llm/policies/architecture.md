@@ -5,7 +5,7 @@
 
 ## Vision
 
-Veronex is an **autonomous intelligence scheduler/gateway** for N Ollama servers:
+Veronex is an **autonomous intelligence scheduler/gateway** for N llama-server nodes:
 
 - **Cluster-wide optimization**: maximize total throughput across all servers, not individual server performance
 - **Dynamic model allocation**: compute optimal "model combination + concurrent request count" per server in real-time
@@ -41,11 +41,11 @@ crates/veronex/src/
 │   ├── inbound/http/    # Axum handlers, middleware, router, AppState, error.rs
 │   └── outbound/
 │       ├── persistence/ # Postgres adapters (one per port)
-│       ├── ollama/      # OllamaAdapter
+│       ├── llama-server/      # LlamaServerAdapter
 │       ├── gemini/      # GeminiAdapter
 │       ├── provider_router.rs  # DynamicProviderRouter (VRAM-aware)
 │       ├── health_checker.rs   # 30s background health checker (+ thermal throttle update)
-│       ├── model_manager/      # OllamaModelManager (disabled — VramPool manages lifecycle)
+│       ├── model_manager/      # LlamaServerModelManager (disabled — VramPool manages lifecycle)
 │       ├── observability/      # HttpObservabilityAdapter + HttpAuditAdapter (fail-open → veronex-analytics)
 │       ├── analytics/          # HttpAnalyticsClient (GET from veronex-analytics)
 │       ├── pubsub/             # Cross-instance relay (Valkey Streams + Pub/Sub) + reaper (crash recovery)
@@ -107,7 +107,7 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:z
                   See flows/model-lifecycle.md.
               ─ Phase 2 inference:
                 provider.stream_tokens(&job)
-           → OllamaAdapter | GeminiAdapter → SSE tokens
+           → LlamaServerAdapter | GeminiAdapter → SSE tokens
            → permit dropped (auto) → KV cache returned, weight stays
            → ObservabilityPort → veronex-analytics → ClickHouse
 
@@ -125,12 +125,12 @@ Reconnect:
 
 Background loops:
   health_checker (30s):
-    → provider health (Ollama/Gemini)
+    → provider health (llama-server/Gemini)
     → hw_metrics fetch (node-exporter direct) → Valkey cache (HwMetrics with gpu_vendor)
     → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
     → infra service probes (postgresql/valkey/clickhouse/s3/vespa/embed) → veronex:svc:health:{instance_id} HASH
   run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
-    → per Ollama provider: /api/version + /api/tags + /api/ps + /api/show
+    → per llama-server provider: /api/version + /api/tags + /api/ps + /api/show
     → model sync + VRAM probe + KV compute
     → AIMD: TPS ratio + p95 spike → max_concurrent adjustment
     → LLM Batch: all-model combination analysis → ±2 clamp auto-applied
@@ -154,7 +154,7 @@ Background loops:
 |----------|-----------|
 | Queue-based LB | Veronex is the load balancer — no external LB needed |
 | VRAM-aware routing | Minimizes model load cost (APU loads are slow) |
-| GpuServer split | Multiple Ollama providers per host → single node-exporter scrape |
+| GpuServer split | Multiple llama-server providers per host → single node-exporter scrape |
 | SSE over WebSocket | Unidirectional stream is sufficient; simpler implementation |
 | Arc<dyn Trait> | Runtime polymorphism; adapters freely swappable at composition root |
 | async-trait kept | `Arc<dyn Port>` requires it; native async fn in trait is not dyn-safe |
@@ -171,8 +171,8 @@ Background loops:
 
 | Port | Adapter | Notes |
 |------|---------|-------|
-| `InferenceProviderPort` | `OllamaAdapter`, `GeminiAdapter` | Phase 2 — SSE streaming inference |
-| `ModelLifecyclePort` | `OllamaAdapter`, `GeminiAdapter` (no-op) | Phase 1 — `ensure_ready` / `instance_state` / `evict` (Tier B) |
+| `InferenceProviderPort` | `LlamaServerAdapter`, `GeminiAdapter` | Phase 2 — SSE streaming inference |
+| `ModelLifecyclePort` | `LlamaServerAdapter`, `GeminiAdapter` (no-op) | Phase 1 — `ensure_ready` / `instance_state` / `evict` (Tier B) |
 | `LlmProviderPort` (super-trait) | blanket impl over `InferenceProviderPort + ModelLifecyclePort` | Single trait object drives both phases (`make_adapter` returns `Arc<dyn LlmProviderPort>`) |
 | `ProviderDispatchPort` | `ConcreteProviderDispatch` (carries `vram_pool`) | Provider selection, adapter build with `with_vram_pool`, Gemini rate-limit counters |
 | `LlmProviderRegistry` | `CachingProviderRegistry` → `PostgresProviderRegistry` | 5s TTL decorator |
@@ -186,8 +186,8 @@ Background loops:
 | `SessionRepository` | `PostgresSessionRepository` | jti + BLAKE2b refresh hash |
 | `ModelCapacityRepository` | `PostgresModelCapacityRepository` | VRAM profiles (weight, KV, arch params) |
 | `CapacitySettingsRepository` | `PostgresCapacitySettingsRepository` | Singleton (id=1) |
-| `OllamaModelRepository` | `PostgresOllamaModelRepository` | Model-aware routing |
-| `OllamaSyncJobRepository` | `PostgresOllamaSyncJobRepository` | Async sync (JSONB) |
+| `LlamaServerModelRepository` | `PostgresLlamaServerModelRepository` | Model-aware routing |
+| `LlamaServerSyncJobRepository` | `PostgresLlamaServerSyncJobRepository` | Async sync (JSONB) |
 | `GeminiPolicyRepository` | `PostgresGeminiPolicyRepository` | UPSERT + `*` fallback |
 | `GeminiSyncConfigRepository` | `PostgresGeminiSyncConfigRepository` | Singleton admin key |
 | `GeminiModelRepository` | `PostgresGeminiModelRepository` | Global model pool |

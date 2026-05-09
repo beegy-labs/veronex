@@ -26,7 +26,7 @@ import { fmtDateOnly } from '@/lib/date'
 import { getGeminiProviders, countByStatus } from '@/lib/utils'
 import { StatusBadge, StatusPill } from './shared'
 import { ApiKeyCell, ModelSelectionModal } from './modals'
-import { PAGE_SIZE } from './ollama-sections'
+import { PAGE_SIZE } from './llama-server-sections'
 import { GeminiStatusSyncSection, GeminiSyncSection } from './gemini-sections'
 
 // ── Tab: Gemini providers + policies ───────────────────────────────────────────

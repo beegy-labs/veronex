@@ -14,7 +14,6 @@ use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
 use crate::infrastructure::outbound::valkey_keys;
 
 use crate::domain::constants::{
-    OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
     SERVICE_PROBE_TIMEOUT,
     SERVICE_HEALTH_TTL_SECS,
@@ -26,28 +25,10 @@ use crate::domain::constants::{
 
 /// Check whether a single provider is reachable.
 ///
-/// - Ollama: `GET {url}/api/version` → 200
 /// - Gemini: lightweight models list with the stored API key → 200
+/// - LlamaServer: `GET {url}/health` → 200 (handled in the LlamaServer arm)
 pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) -> LlmProviderStatus {
     match provider.provider_type {
-        ProviderType::Ollama => {
-            let url = format!("{}/api/version", provider.url.trim_end_matches('/'));
-            match client.get(&url).timeout(OLLAMA_HEALTH_TIMEOUT).send().await {
-                Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
-                Ok(r) => {
-                    tracing::warn!(
-                        provider_id = %provider.id,
-                        status = %r.status(),
-                        "Ollama health check returned non-2xx"
-                    );
-                    LlmProviderStatus::Offline
-                }
-                Err(e) => {
-                    tracing::warn!(provider_id = %provider.id, error = %e, "Ollama health check failed");
-                    LlmProviderStatus::Offline
-                }
-            }
-        }
         ProviderType::Gemini => {
             let Some(ref key) = provider.api_key_encrypted else {
                 tracing::warn!(provider_id = %provider.id, "Gemini provider has no API key");
@@ -421,11 +402,11 @@ pub async fn run_health_checker_loop(
             }
         };
 
-        // Only auto-check Ollama providers. Gemini status is updated manually
-        // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
+        // Only auto-check llama-server providers. Gemini status is updated
+        // manually via POST /v1/gemini/sync-status to avoid quota use.
         let active: Vec<_> = providers
             .into_iter()
-            .filter(|b| matches!(b.provider_type, ProviderType::Ollama))
+            .filter(|b| matches!(b.provider_type, ProviderType::LlamaServer))
             .collect();
 
         // ── Determine liveness ────────────────────────────────────────────────

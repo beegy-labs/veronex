@@ -68,7 +68,7 @@ Applies to `.ai/`, `docs/llm/`, `.add/`. Full spec: [docs/llm/policies/token-opt
 
 | System | Protocol | Doc |
 | ------ | -------- | --- |
-| Ollama | HTTP + SSE streaming | `providers/ollama.md` |
+| llama-server | HTTP + SSE streaming | `providers/llama-server.md` |
 | Gemini | REST + SSE | `providers/gemini.md` |
 | OTel Collector | gRPC OTLP | `infra/otel-pipeline.md` |
 | Redpanda | Kafka protocol | `infra/otel-pipeline-ops.md` |

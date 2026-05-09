@@ -194,7 +194,7 @@ All mappings in `PROVIDER_STATUS_DOT` / `PROVIDER_STATUS_BADGE` / `PROVIDER_STAT
 import { tokens } from '@/lib/design-tokens'
 
 // From web/lib/constants.ts — already use tokens internally
-const PROVIDER_COLORS = { ollama: tokens.brand.primary, gemini: tokens.status.info }
+const PROVIDER_COLORS = { llama-server: tokens.brand.primary, gemini: tokens.status.info }
 const FINISH_COLORS   = {
   stop: tokens.status.success, length: tokens.status.warning,
   error: tokens.status.error,  cancelled: tokens.text.secondary,

@@ -7,7 +7,7 @@
 
 ## POST /v1/completions
 
-Legacy text completion. Maps a single prompt to the Veronex inference queue via Ollama.
+Legacy text completion. Maps a single prompt to the Veronex inference queue via llama-server.
 
 **Request fields**: `model`, `prompt` (string or array), `max_tokens`, `temperature`, `top_p`, `stream`, `stop`, `seed`, `frequency_penalty`, `presence_penalty`, `provider_type`.
 
@@ -30,7 +30,7 @@ Legacy text completion. Maps a single prompt to the Veronex inference queue via 
 
 ## POST /v1/embeddings
 
-Generates embeddings using the first available Ollama provider's `/api/embed`.
+Generates embeddings using the first available llama-server provider's `/api/embed`.
 
 **Security**: Provider URL SSRF-validated before each outbound request.
 
@@ -46,20 +46,20 @@ Generates embeddings using the first available Ollama provider's `/api/embed`.
 }
 ```
 
-**Known limitation**: Picks first available Ollama provider — not VRAM-aware. Does not route through Gemini.
+**Known limitation**: Picks first available llama-server provider — not VRAM-aware. Does not route through Gemini.
 
 ---
 
 ## GET /v1/models
 
-Lists all available models (Ollama from DB + Gemini).
+Lists all available models (llama-server from DB + Gemini).
 
 **Response**:
 ```json
-{"object": "list", "data": [{"id": "llama3.2", "object": "model", "created": 1712345678, "owned_by": "ollama"}]}
+{"object": "list", "data": [{"id": "llama3.2", "object": "model", "created": 1712345678, "owned_by": "llama-server"}]}
 ```
 
-`owned_by`: `"ollama"` for Ollama models, `"google"` for Gemini models.
+`owned_by`: `"llama-server"` for llama-server models, `"google"` for Gemini models.
 
 ## GET /v1/models/{model_id}
 

@@ -76,30 +76,30 @@ pub struct InferenceJob {
     #[serde(default)]
     pub completion_tokens: Option<i32>,
     /// Tokens served from cache (Gemini `cachedContentTokenCount`).
-    /// Always `None` for Ollama (not exposed by API).
+    /// Always `None` for llama_server (not exposed by API).
     #[serde(default)]
     pub cached_tokens: Option<i32>,
     /// Whether this job came from the test panel or a real API client.
     #[serde(default)]
     pub source: JobSource,
-    /// The specific provider instance (Ollama server) that processed this job.
+    /// The specific provider instance (llama-server) that processed this job.
     /// `None` until dispatched. Set by the queue dispatcher before running.
     #[serde(default)]
     pub provider_id: Option<Uuid>,
     /// Which API format the inbound request arrived via (route-based discriminator).
     #[serde(default)]
     pub api_format: ApiFormat,
-    /// Full LLM input context — complete messages array in Ollama `/api/chat` format.
+    /// Full LLM input context — complete messages array in chat-completion `messages` format.
     ///
     /// Contains: system prompt + prior turns (user/assistant/tool) + current user message.
-    /// When Some, the OllamaAdapter routes to `/api/chat`; when None, to `/api/generate`.
+    /// When Some, the LlamaServerAdapter routes to chat-completions; when None, to text-completion.
     ///
     /// Stored in S3 `ConversationRecord.messages` (not persisted to Postgres).
     /// Serves as ground-truth training input: input=messages, output=result+tool_calls.
     /// Can reach 100–500 KB for agentic sessions with large file contents.
     #[serde(default)]
     pub messages: Option<serde_json::Value>,
-    /// Tool/function definitions forwarded from the client (OpenAI or Ollama format).
+    /// Tool/function definitions forwarded from the client (OpenAI/chat format).
     /// Passed to the provider so it can produce proper `tool_calls` responses.
     /// Not persisted to DB — in-memory only during dispatch.
     #[serde(default)]
@@ -125,7 +125,7 @@ pub struct InferenceJob {
     #[serde(default)]
     pub conversation_id: Option<Uuid>,
     /// Structured tool calls returned by the model (JSONB in DB).
-    /// Ollama format: `[{function: {name, arguments}}]`
+    /// Wire format: `[{function: {name, arguments}}]`
     /// Populated when the model made at least one tool call; None for text-only responses.
     #[serde(default)]
     pub tool_calls_json: Option<serde_json::Value>,
@@ -176,7 +176,7 @@ pub struct InferenceJob {
     #[serde(default)]
     pub mcp_loop_id: Option<Uuid>,
     /// Max tokens (output limit) capped at the HTTP handler boundary.
-    /// Passed to Ollama as `options.num_predict`. Not persisted to DB.
+    /// Passed upstream as `options.num_predict`. Not persisted to DB.
     #[serde(default)]
     #[ts(skip)]
     pub max_tokens: Option<u32>,
@@ -196,7 +196,7 @@ pub struct InferenceResult {
     pub completion_tokens: u32,
     /// Tokens served from cache (e.g. Gemini `cachedContentTokenCount`).
     /// Billed at a lower rate than regular prompt tokens.
-    /// `None` if the provider does not expose this metric (Ollama).
+    /// `None` if the provider does not expose this metric (llama_server).
     pub cached_tokens: Option<u32>,
     pub latency_ms: u32,
     pub ttft_ms: Option<u32>,
@@ -239,7 +239,7 @@ pub struct LlmProvider {
     /// RPM/RPD limits are read from `gemini_rate_limit_policies` (per model, shared).
     #[serde(default)]
     pub is_free_tier: bool,
-    /// Maximum parallel requests per Ollama num_parallel setting.
+    /// Maximum parallel requests per num_parallel setting.
     /// Used as AIMD upper bound. Default 4.
     #[serde(default = "default_num_parallel")]
     pub num_parallel: i16,
@@ -259,18 +259,12 @@ pub struct LlmProvider {
 }
 
 impl LlmProvider {
-    /// True for Ollama-typed providers. Used by handlers and helpers that
-    /// filter the registry list to local GPU hosts (vs. Gemini cloud).
-    pub fn is_ollama(&self) -> bool {
-        self.provider_type == ProviderType::Ollama
-    }
-
     /// True for Gemini-typed providers (cloud).
     pub fn is_gemini(&self) -> bool {
         self.provider_type == ProviderType::Gemini
     }
 
-    /// True for llama-server-typed providers (Phase 1 external mode).
+    /// True for llama-server-typed providers (local GPU host).
     pub fn is_llama_server(&self) -> bool {
         self.provider_type == ProviderType::LlamaServer
     }
@@ -316,7 +310,7 @@ mod tests {
             prompt_preview: None,
             model_name: ModelName::new("llama3.2").unwrap(),
             status: JobStatus::Pending,
-            provider_type: ProviderType::Ollama,
+            provider_type: ProviderType::LlamaServer,
             created_at: Utc::now(),
             started_at: None,
             completed_at: None,
@@ -358,8 +352,8 @@ mod tests {
     fn make_llm_provider() -> LlmProvider {
         LlmProvider {
             id: Uuid::now_v7(),
-            name: "local-ollama".to_string(),
-            provider_type: ProviderType::Ollama,
+            name: "local-llama".to_string(),
+            provider_type: ProviderType::LlamaServer,
             url: "http://localhost:11434".to_string(),
             api_key_encrypted: None,
             total_vram_mb: 24576,

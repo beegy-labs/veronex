@@ -9,15 +9,15 @@ import {
 } from '../constants'
 
 describe('PROVIDER_BADGE', () => {
-  it('has entries for ollama and gemini', () => {
-    expect(PROVIDER_BADGE).toHaveProperty('ollama')
+  it('has entries for llama_server and gemini', () => {
+    expect(PROVIDER_BADGE).toHaveProperty('llama_server')
     expect(PROVIDER_BADGE).toHaveProperty('gemini')
   })
 })
 
 describe('PROVIDER_COLORS', () => {
-  it('has CSS variable values for ollama and gemini', () => {
-    expect(PROVIDER_COLORS.ollama).toContain('--vds-theme-')
+  it('has CSS variable values for llama_server and gemini', () => {
+    expect(PROVIDER_COLORS.llama_server).toContain('--vds-theme-')
     expect(PROVIDER_COLORS.gemini).toContain('--vds-theme-')
   })
 })

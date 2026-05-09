@@ -144,7 +144,7 @@ const ProviderRow = memo(function ProviderRow({
   )
 })
 
-export function OllamaCapacitySection() {
+export function LlamaServerCapacitySection() {
   const { t } = useTranslation()
   const queryClient = useQueryClient()
   const { labSettings } = useLabSettings()
@@ -200,7 +200,7 @@ export function OllamaCapacitySection() {
         queryClient.invalidateQueries({ queryKey: ['capacity-cluster'] })
         queryClient.invalidateQueries({ queryKey: ['sync-settings'] })
         queryClient.invalidateQueries({ queryKey: ['providers'] })
-        queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
+        queryClient.invalidateQueries({ queryKey: ['llama_server-models'] })
       }, SYNC_INVALIDATE_DELAY_MS)
     },
   })

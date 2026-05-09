@@ -60,7 +60,7 @@ scrape_cycle()
         │     └── Prometheus text → Vec<Gauge>
         │           → OTLP push to otel-collector → ClickHouse metrics
         │
-        └── type=ollama → scrape_ollama_raw(url + /api/ps)
+        └── type=llama-server → (removed)(url + /api/ps)
               ├── Vec<Gauge> → OTLP push
               ├── heartbeat: set_online(Valkey, provider_id, TTL=180s)
               │     key: veronex:heartbeat:{provider_id}
@@ -144,7 +144,7 @@ On expiry: provider/server/agent marked offline
 | File | Purpose |
 |------|---------|
 | `crates/veronex-agent/src/main.rs` | Main loop, scrape_cycle, MCP health + discover |
-| `crates/veronex-agent/src/scraper.rs` | node-exporter scrape, Ollama scrape, ping_mcp |
+| `crates/veronex-agent/src/scraper.rs` | node-exporter scrape, llama-server scrape, ping_mcp |
 | `crates/veronex-agent/src/mcp_discover.rs` | MCP tool discovery + embedding pipeline |
 | `crates/veronex-agent/src/heartbeat.rs` | Valkey heartbeat SET EX |
 | `crates/veronex-agent/src/capacity_push.rs` | VRAM state push to veronex |

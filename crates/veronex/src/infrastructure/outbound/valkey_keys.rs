@@ -134,10 +134,10 @@ pub fn conversation_record(conversation_id: uuid::Uuid) -> String {
 }
 pub fn conv_s3_cache(conv_id: uuid::Uuid) -> String { pk(&d::conv_s3_cache_key(conv_id)) }
 
-// ── Ollama model context cache ───────────────────────────────────────────────
+// ── Per-provider model context-window cache ──────────────────────────────────
 
-pub fn ollama_model_ctx(provider_id: Uuid, model_name: &str) -> String {
-    pk(&d::ollama_model_ctx_key(provider_id, model_name))
+pub fn model_ctx(provider_id: Uuid, model_name: &str) -> String {
+    pk(&d::model_ctx_key(provider_id, model_name))
 }
 
 // ── MCP tool cache ───────────────────────────────────────────────────────────

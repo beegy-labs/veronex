@@ -4,8 +4,8 @@
 
 ## 2026 — AI BaaS 전환
 
-Veronex를 "Ollama 게이트웨이"에서 "AI BaaS (AI Backend as a Service)"로 전환.
-핵심 문제: Ollama cold start (163s+) →
+Veronex를 "llama-server 게이트웨이"에서 "AI BaaS (AI Backend as a Service)"로 전환.
+핵심 문제: llama-server cold start (163s+) →
   llama-server **lazy 라이프사이클**(요청 시 시작 → 유휴 1분 후 종료, 어드민에서 TTL 조정)로 근본 해결.
   CAS blob store (sha256 dedup) + 노드별 Local PV 캐시로 cold start 단축, 명시적 unload API 도 동일 경로로 처리.
 모델 관리 직접 소유: **Modelfile registry** — 압축버전(quantization)별 row + family default,
@@ -24,16 +24,16 @@ LLM 노드 지원 매트릭스 (좁힘, 2026-05-09):
 | Phase 3 | P1 | ProcessManager (lazy 라이프사이클 + 다중 노드) | Add | → scopes/2026-Phase3.md |
 | Phase 4 | P1 | AIMD composite + Snapshot/Lease/Forecast/TieredKV/Criticality 본격 구현 | Change | → scopes/2026-Phase4.md |
 
-## 제거 대상 (Ollama 의존성)
+## 제거 대상 (llama-server 의존성)
 
 | 제거 항목 | 교체 |
 | --------- | ---- |
-| `OllamaAdapter` (probe·stall·coalescing) | `LlamaServerAdapter` (health check) |
+| `LlamaServerAdapter` (probe·stall·coalescing) | `LlamaServerAdapter` (health check) |
 | `lifecycle.rs` 600줄 | `process.rs` ~50줄 |
 | `preloader.rs` | 불필요 (프로세스 시작 = 모델 로드) |
 | `/api/ps`, `/api/tags`, `/api/show` | GET `/health` (slots_idle) |
-| Ollama num_ctx SSOT 정렬 복잡성 | `--ctx-size` 고정 (프로세스 기동 시) |
-| Ollama 모델 레지스트리 의존 | HuggingFace API + S3 캐시 |
+| llama-server num_ctx SSOT 정렬 복잡성 | `--ctx-size` 고정 (프로세스 기동 시) |
+| llama-server 모델 레지스트리 의존 | HuggingFace API + S3 캐시 |
 
 ## 유지 대상
 
@@ -44,4 +44,4 @@ Frontend, DB 스키마(대부분), 기존 테스트.
 ## Dependencies
 
 Phase 1 → Phase 2 → Phase 3 → Phase 4 (순차)
-Phase 1은 독립 배포 가능 (Ollama 레거시 병렬 운영)
+Phase 1은 독립 배포 가능 (llama-server 레거시 병렬 운영)

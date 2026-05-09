@@ -26,7 +26,7 @@ import { fmtHourLabel } from '@/lib/date'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_GEMINI, GPU_TEMP_CRITICAL, GPU_TEMP_WARNING } from '@/lib/constants'
 import { tokens } from '@/lib/design-tokens'
-import { getOllamaProviders, getGeminiProviders, successRateCls } from '@/lib/utils'
+import { getLlamaServerProviders, getGeminiProviders, successRateCls } from '@/lib/utils'
 import {
   RequestTrendSection, TopModelsSection, RecentJobsSection, TokenSummarySection,
 } from './dashboard-lower-sections'
@@ -78,7 +78,7 @@ export function DashboardTab({
 
   /* ── derived: providers ─────────────────────────────────── */
   const { localBs, apiBs, onlineAll, totalProv } = useMemo(() => {
-    const localBs = getOllamaProviders(providers)
+    const localBs = getLlamaServerProviders(providers)
     const apiBs   = geminiEnabled ? getGeminiProviders(providers) : []
     const visibleBs = [...localBs, ...apiBs]
     return {

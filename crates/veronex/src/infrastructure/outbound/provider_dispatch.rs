@@ -10,11 +10,10 @@ use crate::application::ports::outbound::gemini_repository::GeminiPolicyReposito
 use crate::application::ports::outbound::inference_provider::LlmProviderPort;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::LlmProvider;
 use crate::domain::enums::ProviderType;
 use crate::infrastructure::outbound::provider_router::{
-    get_ollama_available_vram_mb, increment_gemini_counters, make_adapter, pick_best_provider,
+    get_provider_available_vram_mb, increment_gemini_counters, make_adapter, pick_best_provider,
 };
 
 /// Concrete implementation of [`ProviderDispatchPort`].
@@ -25,7 +24,6 @@ pub struct ConcreteProviderDispatch {
     registry: Arc<dyn LlmProviderRegistry>,
     gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
     model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
-    ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
     valkey_pool: Option<fred::clients::Pool>,
     vram_pool: Option<Arc<dyn VramPoolPort>>,
 }
@@ -35,7 +33,6 @@ impl ConcreteProviderDispatch {
         registry: Arc<dyn LlmProviderRegistry>,
         gemini_policy_repo: Option<Arc<dyn GeminiPolicyRepository>>,
         model_selection_repo: Option<Arc<dyn ProviderModelSelectionRepository>>,
-        ollama_model_repo: Option<Arc<dyn OllamaModelRepository>>,
         valkey_pool: Option<fred::clients::Pool>,
         vram_pool: Option<Arc<dyn VramPoolPort>>,
     ) -> Self {
@@ -43,7 +40,6 @@ impl ConcreteProviderDispatch {
             registry,
             gemini_policy_repo,
             model_selection_repo,
-            ollama_model_repo,
             valkey_pool,
             vram_pool,
         }
@@ -53,7 +49,7 @@ impl ConcreteProviderDispatch {
 #[async_trait]
 impl ProviderDispatchPort for ConcreteProviderDispatch {
     async fn available_vram_mb(&self, provider: &LlmProvider) -> i64 {
-        get_ollama_available_vram_mb(provider, self.valkey_pool.as_ref()).await
+        get_provider_available_vram_mb(provider, self.valkey_pool.as_ref()).await
     }
 
     fn build_adapter(&self, provider: &LlmProvider) -> Arc<dyn LlmProviderPort> {
@@ -71,7 +67,6 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
             &*self.registry,
             self.gemini_policy_repo.as_deref(),
             self.model_selection_repo.as_deref(),
-            self.ollama_model_repo.as_deref(),
             provider_type,
             model_name,
             self.valkey_pool.as_ref(),

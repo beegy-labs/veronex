@@ -13,9 +13,6 @@ veronex:
   jwt:
     secret: ""  # REQUIRED — override via --set or values override file
 
-  ollama:
-    url: "http://ollama:11434"
-
   analytics:
     secret: ""  # REQUIRED — shared secret between veronex and veronex-analytics
 
@@ -25,9 +22,6 @@ veronex:
 
   encryption:
     key: ""  # REQUIRED — AES-256-GCM key for provider API keys. Generate: openssl rand -hex 32
-
-  # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset
-  capacityAnalyzerOllamaUrl: ""
 
   # Session grouping interval (seconds). Default: 86400 (24h)
   sessionGroupingIntervalSecs: ""

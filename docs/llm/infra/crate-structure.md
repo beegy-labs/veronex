@@ -7,7 +7,7 @@
 | Crate | Role | Port | Key Dependencies |
 |-------|------|------|-----------------|
 | veronex | Main API server + scheduler | 3000 | axum, sqlx, fred, tokio |
-| veronex-agent | Metrics collector (node-exporter + Ollama scraper) | 9091 | reqwest, OTLP proto |
+| veronex-agent | Metrics collector (node-exporter + llama-server scraper) | 9091 | reqwest, OTLP proto |
 | veronex-analytics | ClickHouse analytics service | 3003 | axum, clickhouse-rs |
 | veronex-consumer | Kafka consumer — Redpanda → ClickHouse (replaces Redpanda Connect) | -- | rdkafka, reqwest, tokio |
 | veronex-mcp | MCP tool server (multi-tool, single deployment) | 3100 (docker-compose) / 8080 (Helm) | axum, moka, fred, reqwest |

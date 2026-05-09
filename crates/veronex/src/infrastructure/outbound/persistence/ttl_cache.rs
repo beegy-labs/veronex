@@ -8,7 +8,7 @@ use tokio::sync::RwLock;
 ///
 /// Provides O(1) read-lock fast path and write-lock slow path with re-check
 /// to avoid thundering-herd on cache miss.  Used by all caching persistence
-/// wrappers (`CachingOllamaModelRepo`, `CachingModelSelection`,
+/// wrappers (`CachingModelSelection`,
 /// `CachingProviderRegistry`).
 pub struct TtlCache<K: Eq + Hash, V: Clone> {
     inner: RwLock<HashMap<K, (V, Instant)>>,

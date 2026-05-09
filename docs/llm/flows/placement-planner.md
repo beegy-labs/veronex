@@ -18,7 +18,7 @@ planner_tick():
   clean expired hold-downs
 
   ── Pass 0: Read-only snapshot ──
-  list all active Ollama providers
+  list all active llama-server providers
   scale_out_candidates = providers where:
     thermal ∉ {Soft, Hard, Cooldown}
     circuit_breaker.is_allowed
@@ -144,6 +144,6 @@ for provider:
 | File | Role |
 |------|------|
 | `crates/veronex/src/application/use_cases/placement_planner.rs` | Planner loop + all steps |
-| `crates/veronex/src/infrastructure/outbound/ollama/preloader.rs` | `preload_model()` |
+| `crates/veronex/src/infrastructure/outbound/llama_server/preloader.rs` | `preload_model()` |
 | `crates/veronex/src/domain/constants.rs` | Key name helpers |
 | `crates/veronex/src/bootstrap/background.rs` | Task spawn wiring |

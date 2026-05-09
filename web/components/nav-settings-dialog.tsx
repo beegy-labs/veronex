@@ -157,7 +157,7 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
             </div>
             <p className="vds-text-xs vds-text-dim vds-mb-3 vds-pl-6">{t('common.labFeaturesDesc')}</p>
 
-            {/* Gemini function calling (only truly global flag — Ollama-scoped features moved to /providers → Ollama tab → Lab) */}
+            {/* Gemini function calling (only truly global flag — llama-server-scoped features moved to /providers → llama-server tab → Lab) */}
             <div className="vds-pl-6 vds-space-y-3">
               <div className="vds-flex vds-items-center vds-justify-between vds-gap-2">
                 <div className="vds-flex-1 vds-min-w-0">

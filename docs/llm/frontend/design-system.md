@@ -44,7 +44,7 @@ Related files:
 | `web/app/layout.tsx` | All providers: Theme, I18n, Timezone, QueryClient, LabSettings |
 | `web/components/lab-settings-provider.tsx` | `useLabSettings()` -- experimental feature flags |
 | `web/components/nav.tsx` | Collapsible sidebar (imports `HexLogo` from `nav-icons.tsx`) |
-| `web/components/nav-icons.tsx` | `HexLogo` + `OllamaIcon` SVGs |
+| `web/components/nav-icons.tsx` | `HexLogo` + `LlamaServerIcon` SVGs |
 | `web/components/nav-settings-dialog.tsx` | Settings dialog: language, timezone, lab features |
 | `web/components/theme-provider.tsx` | `data-theme` switcher, `localStorage('hg-theme')` |
 | `web/components/data-table.tsx` | `DataTable` + `DataTableEmpty` -- SSOT for all tables |
@@ -188,7 +188,7 @@ Jobs                -> /jobs             <- standalone link; 3 tabs
 API Keys            -> /keys
 Servers             -> /servers
 [Providers]         <- collapsible group
-  Ollama            -> /providers?s=ollama
+  llama-server            -> /providers?s=llama-server
   Gemini            -> /providers?s=gemini
 
 Footer:

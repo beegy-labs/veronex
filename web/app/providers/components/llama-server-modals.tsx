@@ -3,8 +3,8 @@
 import { useState, useOptimistic, startTransition } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Provider, ProviderSelectedModel, OllamaProviderForModel } from '@/lib/types'
-import { selectedModelsQuery, ollamaModelProvidersQuery } from '@/lib/queries'
+import type { Provider, ProviderSelectedModel, LlamaServerProviderForModel } from '@/lib/types'
+import { selectedModelsQuery, llamaServerModelProvidersQuery } from '@/lib/queries'
 import { Search, Cpu, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -24,17 +24,17 @@ import {
 } from '@/lib/constants'
 import { extractHost } from './shared'
 
-// ── OllamaModelProvidersModal ───────────────────────────────────────────────────
+// ── LlamaServerModelProvidersModal ───────────────────────────────────────────────────
 
 const PROVIDERS_LIMIT = 10
 
 // Optimistic toggle for a single provider-model pair
-function OllamaProviderModelToggle({
+function LlamaServerProviderModelToggle({
   modelName,
   provider,
 }: {
   modelName: string
-  provider: OllamaProviderForModel
+  provider: LlamaServerProviderForModel
 }) {
   const queryClient = useQueryClient()
   const [optimistic, setOptimistic] = useOptimistic(provider.is_enabled, (_, v: boolean) => v)
@@ -43,7 +43,7 @@ function OllamaProviderModelToggle({
     onError: () => setOptimistic(provider.is_enabled),
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['selected-models'] })
-      queryClient.invalidateQueries({ queryKey: ['ollama-model-providers', modelName] })
+      queryClient.invalidateQueries({ queryKey: ['llama_server-model-providers', modelName] })
     },
   })
   return (
@@ -56,7 +56,7 @@ function OllamaProviderModelToggle({
   )
 }
 
-export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: string; onClose: () => void }) {
+export function LlamaServerModelProvidersModal({ modelName, onClose }: { modelName: string; onClose: () => void }) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -64,7 +64,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
   const canManage = hasPermission('model_manage')
 
   const { data, isLoading } = useQuery(
-    ollamaModelProvidersQuery(modelName, { search: debouncedSearch, page, limit: PROVIDERS_LIMIT }),
+    llamaServerModelProvidersQuery(modelName, { search: debouncedSearch, page, limit: PROVIDERS_LIMIT }),
   )
 
   const providers = data?.providers ?? []
@@ -103,7 +103,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
           <Search className="vds-absolute vds-left-2.5 vds-top-2.5 vds-h-3.5 vds-w-3.5 vds-text-dim/60 vds-pointer-events-none" />
           <Input
             className="vds-pl-8 vds-h-8 vds-text-sm"
-            placeholder={t('providers.ollama.searchServers')}
+            placeholder={t('providers.llama_server.searchServers')}
             value={search}
             onChange={(e) => handleSearch(e.target.value)}
           />
@@ -111,7 +111,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
 
         {!isLoading && total > 0 && (
           <p className="vds-text-xs vds-text-dim vds--mt-1">
-            {total} {t('providers.ollama.serversWithModel')}
+            {total} {t('providers.llama_server.serversWithModel')}
             {debouncedSearch ? ` — "${debouncedSearch}"` : ''}
           </p>
         )}
@@ -122,13 +122,13 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
 
         {!isLoading && total === 0 && !debouncedSearch && (
           <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center vds-italic">
-            {t('providers.ollama.noProvidersSynced')}
+            {t('providers.llama_server.noProvidersSynced')}
           </p>
         )}
 
         {!isLoading && total === 0 && debouncedSearch && (
           <p className="vds-text-sm vds-text-dim vds-py-3 vds-text-center vds-italic">
-            {t('providers.ollama.noServersMatch')} &ldquo;{debouncedSearch}&rdquo;
+            {t('providers.llama_server.noServersMatch')} &ldquo;{debouncedSearch}&rdquo;
           </p>
         )}
 
@@ -145,7 +145,7 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
                   {statusLabel(b.status)}
                 </Badge>
                 {canManage && (
-                  <OllamaProviderModelToggle modelName={modelName} provider={b} />
+                  <LlamaServerProviderModelToggle modelName={modelName} provider={b} />
                 )}
               </div>
             ))}
@@ -185,10 +185,10 @@ export function OllamaModelProvidersModal({ modelName, onClose }: { modelName: s
   )
 }
 
-// ── OllamaProviderModelsModal ───────────────────────────────────────────────────
+// ── LlamaServerProviderModelsModal ───────────────────────────────────────────────────
 
 // Optimistic toggle for a single model within a provider
-function OllamaProviderModelItemToggle({
+function LlamaServerProviderModelItemToggle({
   providerId,
   model,
 }: {
@@ -214,7 +214,7 @@ function OllamaProviderModelItemToggle({
   )
 }
 
-export function OllamaProviderModelsModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
+export function LlamaServerProviderModelsModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
   const { t } = useTranslation()
 
   const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
@@ -228,13 +228,13 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
         <DialogHeader>
           <DialogTitle className="vds-flex vds-items-center vds-gap-2">
             <ListFilter className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
-            {t('providers.ollama.modelSelection')}
+            {t('providers.llama_server.modelSelection')}
             <span className="vds-text-dim vds-font-400 vds-text-sm">— {provider.name}</span>
           </DialogTitle>
         </DialogHeader>
 
         <p className="vds-text-xs vds-text-dim vds--mt-1">
-          {t('providers.ollama.modelSelectionDesc')}
+          {t('providers.llama_server.modelSelectionDesc')}
         </p>
 
         {isLoading && (
@@ -245,7 +245,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
 
         {!isLoading && models.length === 0 && (
           <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center">
-            {t('providers.ollama.noProviderModels')}
+            {t('providers.llama_server.noProviderModels')}
           </p>
         )}
 
@@ -255,7 +255,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
               <div key={m.model_name}
                 className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-3 vds-py-2">
                 <span className="vds-font-mono vds-text-sm vds-text-bright">{m.model_name}</span>
-                <OllamaProviderModelItemToggle providerId={provider.id} model={m} />
+                <LlamaServerProviderModelItemToggle providerId={provider.id} model={m} />
               </div>
             ))}
           </div>
@@ -263,7 +263,7 @@ export function OllamaProviderModelsModal({ provider, onClose }: { provider: Pro
 
         {models.length > 0 && (
           <p className="vds-text-xs vds-text-dim vds-text-right">
-            {t('providers.ollama.enabledCount', { enabled: enabledCount, total: models.length })}
+            {t('providers.llama_server.enabledCount', { enabled: enabledCount, total: models.length })}
           </p>
         )}
 

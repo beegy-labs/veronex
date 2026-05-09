@@ -8,7 +8,7 @@ use crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort;
 use crate::domain::entities::{InferenceJob, InferenceResult};
 use crate::domain::value_objects::StreamToken;
 
-/// Outbound port for a single LLM inference provider (Ollama, Gemini, …).
+/// Outbound port for a single LLM inference provider (llama-server, Gemini, …).
 ///
 /// **Precondition (Phase 1)**: callers SHOULD invoke
 /// [`crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort::ensure_ready`]

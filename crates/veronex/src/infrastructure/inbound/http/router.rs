@@ -39,8 +39,6 @@ use super::metrics_handlers;
 use super::middleware::infer_auth::infer_auth;
 use super::middleware::jwt_auth::jwt_auth;
 use super::middleware::rate_limiter::rate_limiter;
-use super::ollama_compat_handlers;
-use super::ollama_model_handlers;
 use super::openai_handlers;
 use super::openai_models_handlers;
 use super::openai_embeddings_handlers;
@@ -78,25 +76,7 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/images/generations",    post(openai_completions_handlers::image_generations))
         .route("/v1/moderations",           post(openai_completions_handlers::moderations))
 
-        // ── Ollama native API (OLLAMA_HOST=http://veronex:3001) ─────────
-        // /api/tags uses Veronex-synchronized models; everything else proxies to provider.
-        .route("/api/tags",        get(ollama_compat_handlers::list_local_models))
-        .route("/api/version",     get(ollama_compat_handlers::version))
-        .route("/api/ps",          get(ollama_compat_handlers::ps))
-        .route("/api/generate",    post(ollama_compat_handlers::generate)
-            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
-        .route("/api/chat",        post(ollama_compat_handlers::chat))
-        .route("/api/show",        post(ollama_compat_handlers::show))
-        .route("/api/embed",       post(ollama_compat_handlers::embed))
-        .route("/api/embeddings",  post(ollama_compat_handlers::embeddings))
-        .route("/api/pull",        post(ollama_compat_handlers::pull))
-        .route("/api/push",        post(ollama_compat_handlers::push))
-        .route("/api/delete",      delete(ollama_compat_handlers::delete))
-        .route("/api/copy",        post(ollama_compat_handlers::copy))
-        .route("/api/create",      post(ollama_compat_handlers::create))
-
         // ── Gemini API-compatible (GOOGLE_GEMINI_BASE_URL=http://veronex:3001) ──
-        // Model listing uses enabled Ollama models; generation proxies to Ollama.
         // {*path} catch-all is used for both GET (get_model) and POST (handle_request)
         // to avoid a conflict between {model} and {*path} segments.
         .route("/v1beta/models",         get(gemini_compat_handlers::list_models))
@@ -264,13 +244,6 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/gemini/models/sync", post(gemini_model_handlers::sync_models))
         .route("/v1/gemini/models", get(gemini_model_handlers::list_models))
         .route("/v1/gemini/sync-status", post(gemini_model_handlers::sync_status))
-        // Ollama
-        .route("/v1/ollama/models", get(ollama_model_handlers::list_models))
-        .route("/v1/ollama/models/pull", post(ollama_model_handlers::pull_model))
-        .route("/v1/ollama/models/sync", post(ollama_model_handlers::sync_all_providers))
-        .route("/v1/ollama/sync/status", get(ollama_model_handlers::get_sync_status))
-        .route("/v1/ollama/models/{model_name}/providers", get(ollama_model_handlers::list_model_providers))
-        .route("/v1/ollama/providers/{provider_id}/models", get(provider_handlers::list_provider_models))
         // Capacity / VRAM pool
         .route("/v1/dashboard/capacity", get(dashboard_handlers::get_capacity))
         .route("/v1/dashboard/capacity/cluster", get(dashboard_handlers::get_capacity_cluster))

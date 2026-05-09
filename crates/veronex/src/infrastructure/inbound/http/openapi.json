@@ -28,7 +28,7 @@
       },
       "ProviderType": {
         "type": "string",
-        "enum": ["ollama", "gemini"]
+        "enum": ["llama_server", "gemini"]
       },
       "SubmitInferenceRequest": {
         "type": "object",

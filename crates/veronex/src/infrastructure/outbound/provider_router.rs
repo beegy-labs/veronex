@@ -11,13 +11,11 @@ use crate::application::ports::outbound::gemini_repository::GeminiPolicyReposito
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::inference_provider::{InferenceProviderPort, LlmProviderPort};
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmProvider};
 use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::StreamToken;
 use crate::infrastructure::outbound::gemini::GeminiAdapter;
 use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
-use crate::infrastructure::outbound::ollama::OllamaAdapter;
 use crate::infrastructure::outbound::valkey_keys;
 
 use crate::domain::constants::{GEMINI_RPM_TTL_SECS, GEMINI_RPD_TTL_SECS};
@@ -149,7 +147,7 @@ pub async fn increment_gemini_counters(
 ///   - Paid providers: if model_selection_repo has rows for the provider and the
 ///     requested model is NOT enabled, that paid provider is skipped.
 ///
-/// Ollama: picks the server with the most available VRAM.
+/// llama_server: picks the server with the most available VRAM.
 ///
 /// `prefix_hint` is an optional caller-supplied affinity key (typically the
 /// `conversation_id` as a string). When set, the LlamaServer branch biases
@@ -162,7 +160,6 @@ pub async fn pick_best_provider(
     registry: &dyn LlmProviderRegistry,
     policy_repo: Option<&dyn GeminiPolicyRepository>,
     model_selection_repo: Option<&dyn ProviderModelSelectionRepository>,
-    ollama_model_repo: Option<&dyn OllamaModelRepository>,
     pt: &ProviderType,
     model_name: &str,
     valkey: Option<&fred::clients::Pool>,
@@ -185,65 +182,6 @@ pub async fn pick_best_provider(
     match pt {
         ProviderType::Gemini => {
             pick_gemini_provider(candidates, policy_repo, model_selection_repo, model_name, valkey, tier_filter).await
-        }
-
-        ProviderType::Ollama => {
-            // Filter to providers that have the requested model synced (if DB is populated).
-            let filtered_candidates = if let Some(repo) = ollama_model_repo {
-                if !model_name.is_empty() {
-                    match repo.providers_for_model(model_name).await {
-                        Ok(ids) if !ids.is_empty() => {
-                            let id_set: std::collections::HashSet<uuid::Uuid> =
-                                ids.into_iter().collect();
-                            let filtered: Vec<_> = candidates
-                                .iter()
-                                .filter(|b| id_set.contains(&b.id))
-                                .cloned()
-                                .collect();
-                            if filtered.is_empty() {
-                                // Model not found in DB — fall back to all candidates.
-                                candidates
-                            } else {
-                                filtered
-                            }
-                        }
-                        // DB empty or error → no filter, use all candidates.
-                        _ => candidates,
-                    }
-                } else {
-                    candidates
-                }
-            } else {
-                candidates
-            };
-
-            // Filter by model selection: if a provider has selection rows for this model
-            // and the model is disabled, skip that provider.
-            let selection_filtered = if let Some(repo) = model_selection_repo {
-                if !model_name.is_empty() {
-                    filter_by_model_selection(filtered_candidates, repo, model_name, "ollama").await
-                } else {
-                    filtered_candidates
-                }
-            } else {
-                filtered_candidates
-            };
-
-            // Score every candidate concurrently. At 10k-provider scale this turns
-            // a 10k-deep `.await` chain into one wall-clock round-trip.
-            use futures::future::join_all;
-            let scored: Vec<(LlmProvider, i64)> = join_all(
-                selection_filtered.into_iter().map(|b| async move {
-                    let avail = get_ollama_available_vram_mb(&b, valkey).await;
-                    (b, avail)
-                }),
-            )
-            .await;
-            scored
-                .into_iter()
-                .max_by_key(|(_, v)| *v)
-                .map(|(b, _)| b)
-                .ok_or_else(|| anyhow::anyhow!("no Ollama provider with available VRAM"))
         }
 
         ProviderType::LlamaServer => {
@@ -447,16 +385,15 @@ async fn pick_gemini_provider(
     ))
 }
 
-/// Return available VRAM in MiB for an Ollama provider.
+/// Return available VRAM in MiB for a llama-server provider.
 ///
 /// Priority:
 /// 1. Valkey hardware metrics cache (set by health_checker when linked to a GpuServer).
 ///    Also enforces a temperature guard: providers at or above 85 °C are treated as
 ///    unavailable (returns `i64::MIN`).
-/// 2. Live Ollama `/api/ps` poll (fallback when no agent data is cached).
-/// 3. `i64::MAX` when `total_vram_mb == 0` (VRAM unknown → treat as unlimited).
-/// 4. `0` on any network / parse error (treats provider as full).
-pub async fn get_ollama_available_vram_mb(
+/// 2. `i64::MAX` when `total_vram_mb == 0` (VRAM unknown → treat as unlimited).
+/// 3. The provider's registered `total_vram_mb` otherwise.
+pub async fn get_provider_available_vram_mb(
     provider: &LlmProvider,
     valkey: Option<&fred::clients::Pool>,
 ) -> i64 {
@@ -490,7 +427,7 @@ pub async fn get_ollama_available_vram_mb(
 ///
 /// Blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal),
 /// Kubernetes internal services (.svc.cluster.local), and link-local IP addresses.
-/// Localhost/private IPs are intentionally allowed since Ollama commonly runs there.
+/// Localhost/private IPs are intentionally allowed since llama-server commonly runs there.
 fn validate_provider_url(url_str: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(url_str)
         .map_err(|_| anyhow::anyhow!("invalid provider URL"))?;
@@ -539,32 +476,13 @@ pub fn make_adapter(
     vram_pool: Option<Arc<dyn VramPoolPort>>,
 ) -> Arc<dyn LlmProviderPort> {
     match cfg.provider_type {
-        ProviderType::Ollama => {
-            if let Err(e) = validate_provider_url(&cfg.url) {
-                tracing::warn!(
-                    provider_id = %cfg.id,
-                    name = %cfg.name,
-                    url = %cfg.url,
-                    "SSRF: skipping provider — {e}"
-                );
-                return Arc::new(BlockedAdapter(e.to_string()));
-            }
-            let mut adapter = match valkey {
-                Some(pool) => OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id),
-                None => OllamaAdapter::new(&cfg.url),
-            };
-            if let Some(pool) = vram_pool {
-                adapter = adapter.with_vram_pool(pool);
-            }
-            Arc::new(adapter)
-        }
         ProviderType::Gemini => {
             // Gemini uses a fixed Google API host; URL validation is N/A.
             let key = cfg.api_key_encrypted.as_deref().unwrap_or("");
             Arc::new(GeminiAdapter::new(key))
         }
         ProviderType::LlamaServer => {
-            // External-mode adapter: same SSRF validation as Ollama since
+            // External-mode adapter: same SSRF validation as the upstream provider since
             // operators register an arbitrary HTTP base URL.
             if let Err(e) = validate_provider_url(&cfg.url) {
                 tracing::warn!(
@@ -646,7 +564,7 @@ mod tests {
         LlmProvider {
             id: Uuid::now_v7(),
             name: "test".into(),
-            provider_type: crate::domain::enums::ProviderType::Ollama,
+            provider_type: crate::domain::enums::ProviderType::LlamaServer,
             url: "http://localhost:11434".into(),
             api_key_encrypted: None,
             total_vram_mb,
@@ -667,7 +585,7 @@ mod tests {
     async fn vram_fallback_on_cache_miss() {
         let provider = make_provider(24576);
         // No Valkey connection → should return total_vram_mb as fallback
-        let vram = get_ollama_available_vram_mb(&provider, None).await;
+        let vram = get_provider_available_vram_mb(&provider, None).await;
         assert_eq!(vram, 24576);
     }
 
@@ -675,7 +593,7 @@ mod tests {
     #[tokio::test]
     async fn vram_unknown_returns_unlimited() {
         let provider = make_provider(0);
-        let vram = get_ollama_available_vram_mb(&provider, None).await;
+        let vram = get_provider_available_vram_mb(&provider, None).await;
         assert_eq!(vram, i64::MAX);
     }
 

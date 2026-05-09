@@ -158,7 +158,7 @@ export const ApiTestForm = memo(function ApiTestForm({
             <SelectTrigger id="test-model" aria-label={t('test.model')}>
               <SelectValue placeholder={
                 availableModels.length === 0
-                  ? (isGeminiProvider ? t('test.geminiModelEmpty') : t('test.ollamaTestNoModels'))
+                  ? (isGeminiProvider ? t('test.geminiModelEmpty') : t('test.llamaServerTestNoModels'))
                   : t('test.modelSelect')
               } />
             </SelectTrigger>

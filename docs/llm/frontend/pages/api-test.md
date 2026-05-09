@@ -23,7 +23,7 @@
 | `web/app/jobs/components/api-test-conversation.tsx` | Multi-turn conversation tab (history-aware run mode) |
 | `web/app/jobs/components/api-test-types.ts` | Types (`Run`, `OpenAIChunk`, `Endpoint`, `RunAction`) + `runsReducer` |
 | `web/app/jobs/page.tsx` | Embeds `<ApiTestPanel>` above job sections |
-| `web/lib/api.ts` | `providers()`, `ollamaModels()`, `geminiModels()`, `geminiPolicies()` |
+| `web/lib/api.ts` | `providers()`, `(removed)`, `geminiModels()`, `geminiPolicies()` |
 | `web/messages/en.json` | i18n keys under `test.*`, `apiDocs.*` |
 
 ## Routing
@@ -49,8 +49,8 @@ Running as: admin
 | Endpoint | Format | Streaming |
 |----------|--------|-----------|
 | `/v1/chat/completions` | OpenAI (SSE) | Yes |
-| `/api/chat` | Ollama chat (JSON) | No |
-| `/api/generate` | Ollama generate (JSON) | No |
+| `/api/chat` | llama-server chat (JSON) | No |
+| `/api/generate` | llama-server generate (JSON) | No |
 
 Non-streaming: `/api/generate` reads `json.response`, `/api/chat` reads `json.message.content`.
 
@@ -59,9 +59,9 @@ Non-streaming: `/api/generate` reads `json.response`, `/api/chat` reads `json.me
 | Mode | Auth | Endpoints used |
 |------|------|---------------|
 | OFF (default) | JWT session cookie | `/v1/test/completions`, `/v1/test/api/chat`, `/v1/test/api/generate` |
-| ON | `Bearer` (OpenAI) or `X-API-Key` (Ollama) | `/v1/chat/completions`, `/api/chat`, `/api/generate` |
+| ON | `Bearer` (OpenAI) or `X-API-Key` (llama-server) | `/v1/chat/completions`, `/api/chat`, `/api/generate` |
 
-When ON, OpenAI endpoint uses `Authorization: Bearer {key}`, Ollama uses `X-API-Key: {key}`.
+When ON, OpenAI endpoint uses `Authorization: Bearer {key}`, llama-server uses `X-API-Key: {key}`.
 
 ### Run State
 
@@ -102,7 +102,7 @@ Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'te
 
 | Option | `provider_type` sent | Model source |
 |--------|---------------|-------------|
-| Ollama | `"ollama"` | `GET /v1/ollama/models` (global pool) |
+| llama-server | `"llama-server"` | `GET /v1/llama-server/models` (global pool) |
 | Gemini Free | `"gemini-free"` | Filtered by `available_on_free_tier=true` |
 | Gemini | `"gemini"` | Full global pool |
 
@@ -129,7 +129,7 @@ Mode toggle: `single` | `conversation`. In conversation mode:
 | `model_not_allowed` | Model not in `multiturn_allowed_models` |
 | `context_too_large` | Estimated tokens > 85% of model's `max_ctx` |
 
-Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from `GET /v1/ollama/models`.
+Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from `GET /v1/llama-server/models`.
 
 ### TurnInternals Panel
 
@@ -144,8 +144,8 @@ Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from `GET /v1/o
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | POST | `/v1/test/completions` | JWT | OpenAI format, `source='test'`, no rate limiting |
-| POST | `/v1/test/api/chat` | JWT | Ollama chat format, `source='test'` |
-| POST | `/v1/test/api/generate` | JWT | Ollama generate format, `source='test'` |
+| POST | `/v1/test/api/chat` | JWT | llama-server chat format, `source='test'` |
+| POST | `/v1/test/api/generate` | JWT | llama-server generate format, `source='test'` |
 | GET | `/v1/test/jobs/{id}/stream` | JWT | SSE reconnect for in-progress streams |
 
 ## SSE Parsing (`consumeStream()`)
@@ -154,4 +154,4 @@ Strip one leading space after `data:`. `[DONE]` = stream complete. Parse `chunk.
 
 ## i18n Keys
 
-`test.*`: title, provider, model, prompt, send, run, stop, reset, runAgain, streaming, done, error, output, complete, errorTitle, selectProvider, selectModel, noModels, ollamaTestNoModels, runningAs, endpoint, apiKeyToggle, noApiKey, apiKeyPlaceholder, imageAttach, imageRemove, imageCompressing
+`test.*`: title, provider, model, prompt, send, run, stop, reset, runAgain, streaming, done, error, output, complete, errorTitle, selectProvider, selectModel, noModels, llamaServerTestNoModels, runningAs, endpoint, apiKeyToggle, noApiKey, apiKeyPlaceholder, imageAttach, imageRemove, imageCompressing
