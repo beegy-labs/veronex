@@ -44,6 +44,9 @@ pub mod ollama_sync_job_repository;
 pub mod session_repository;
 pub mod ttl_cache;
 pub mod provider_vram_budget_repository;
+pub mod blob_registry;
+pub mod install_attempts_log;
+pub mod modelfile_registry;
 
 #[cfg(test)]
 mod tests {

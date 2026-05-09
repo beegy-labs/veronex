@@ -28,3 +28,6 @@ pub mod session_repository;
 pub mod valkey_port;
 pub mod provider_vram_budget_repository;
 pub mod image_store;
+pub mod modelfile_registry;
+pub mod blob_registry;
+pub mod install_attempts_log;

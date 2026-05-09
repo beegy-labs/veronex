@@ -135,6 +135,82 @@ CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 CREATE UNIQUE INDEX uq_llm_providers_llama_server_url ON llm_providers(url) WHERE provider_type = 'llama_server';
 
+-- ── Modelfile registry (Phase 2 — AI BaaS) ────────────────────────────────────
+-- CAS (Content-Addressable Storage) for GGUF binaries. sha256 is the SSOT key.
+-- Multiple veronex_models rows can reference the same gguf_blobs row (dedup).
+-- ref_count is the model count holding this blob; orphan_since tracks
+-- "ref_count became 0 at this time" for admin manual GC (no auto-delete).
+
+CREATE TABLE gguf_blobs (
+    sha256             TEXT        PRIMARY KEY,
+    size_bytes         BIGINT      NOT NULL,
+    s3_key             TEXT        NOT NULL,                    -- "gguf-blobs/{sha256}.gguf"
+    source_history     JSONB       NOT NULL DEFAULT '[]',
+    ref_count          INT         NOT NULL DEFAULT 0,
+    orphan_since       TIMESTAMPTZ,                             -- set when ref_count 1->0, NULL when 0->1+
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_accessed_at   TIMESTAMPTZ
+);
+-- Partial index for orphan listing (admin GC view).
+CREATE INDEX idx_gguf_blobs_orphan
+    ON gguf_blobs(orphan_since DESC NULLS LAST)
+    WHERE ref_count = 0;
+
+-- Modelfile spec — lightweight metadata referencing a GGUF blob by sha256.
+-- model_id format: "{family}:{quantization}" (e.g. "qwen3-coder:q4_K_M").
+-- install_status is a finite state machine driven by install_orchestrator.
+CREATE TABLE veronex_models (
+    model_id           TEXT        PRIMARY KEY,
+    family             TEXT        NOT NULL,
+    quantization       TEXT        NOT NULL,
+    blob_sha256        TEXT        NOT NULL REFERENCES gguf_blobs(sha256),
+    display_name       TEXT,
+    source_spec        JSONB       NOT NULL,                    -- {type: hf|upload|url|s3_pointer, ...}
+    runtime            JSONB       NOT NULL,                    -- {n_ctx, n_gpu_layers, flash_attn, ...}
+    defaults           JSONB       NOT NULL,                    -- {temperature, top_p, top_k, ...}
+    chat_template      JSONB       NOT NULL,                    -- {type: preset|jinja_inline|jinja_file, value}
+    stop_tokens        JSONB,
+    system_prompt      TEXT,
+    is_default         BOOLEAN     NOT NULL DEFAULT false,
+    install_status     TEXT        NOT NULL,                    -- pending|downloading|uploading|verifying|ready|failed
+    last_error_kind    TEXT,
+    last_error_message TEXT,
+    last_attempt_at    TIMESTAMPTZ,
+    tags               TEXT[],
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (family, quantization),
+    CHECK (install_status IN ('pending','downloading','uploading','verifying','ready','failed'))
+);
+CREATE INDEX idx_veronex_models_family          ON veronex_models(family);
+CREATE INDEX idx_veronex_models_install_status  ON veronex_models(install_status);
+-- Only one default per family (partial unique).
+CREATE UNIQUE INDEX uq_veronex_models_family_default
+    ON veronex_models(family) WHERE is_default = true;
+
+-- Install attempt history. Append-only; no FK so rows survive model deletion.
+-- Admin manually deletes via API (no automatic GC).
+CREATE TABLE veronex_model_install_attempts (
+    id                 BIGSERIAL   PRIMARY KEY,
+    model_id           TEXT        NOT NULL,                    -- no FK, history retained
+    attempt_no         INT         NOT NULL,
+    started_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    finished_at        TIMESTAMPTZ,
+    status             TEXT        NOT NULL,                    -- in_progress|succeeded|failed|cancelled
+    stage              TEXT,                                    -- download|upload|verify
+    error_kind         TEXT,
+    error_message      TEXT,
+    bytes_downloaded   BIGINT,
+    total_bytes        BIGINT,
+    duration_ms        BIGINT,
+    retryable          BOOLEAN,                                 -- admin UI hint, no auto-retry
+    triggered_by       TEXT,                                    -- register|admin_retry|patch_source
+    UNIQUE (model_id, attempt_no),
+    CHECK (status IN ('in_progress','succeeded','failed','cancelled'))
+);
+CREATE INDEX idx_install_attempts_model_started
+    ON veronex_model_install_attempts(model_id, started_at DESC);
+
 -- ── Conversations ─────────────────────────────────────────────────────────────
 -- source column included (migration 000002)
 

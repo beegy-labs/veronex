@@ -10,6 +10,12 @@ pub use api_key::*;
 pub mod role;
 pub use role::Role;
 
+pub mod modelfile;
+pub use modelfile::{
+    AttemptStage, AttemptStatus, ErrorKind, GgufBlob, InstallAttempt, InstallStatus,
+    TriggeredBy, VeronexModel,
+};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
