@@ -111,13 +111,13 @@ jobs:
   deploy:
     name: Update GitOps
     needs: build
-    if: needs.build.outputs.skipped != 'true' && github.ref_name == 'develop'
+    if: needs.build.outputs.skipped != 'true' && (github.ref_name == 'develop' || github.ref_name == 'main')
     runs-on: arc-runner-set
     steps:
       - uses: actions/checkout@v4
         with:
           repository: beegy-labs/platform-gitops
-          ref: develop
+          ref: ${{ github.ref_name == 'main' && 'main' || 'develop' }}
           token: ${{ secrets.GH_PAT }}
 
       - name: Update image tag
