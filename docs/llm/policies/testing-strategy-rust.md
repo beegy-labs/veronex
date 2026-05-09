@@ -119,8 +119,10 @@ use wiremock::matchers::{method, path};
 #[tokio::test]
 async fn llama_server_chat_parses_response() {
     let mock = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/api/chat"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("{\"message\":{\"content\":\"hi\"}}"))
+    Mock::given(method("POST")).and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}",
+        ))
         .mount(&mock).await;
     let client = LlamaServerClient::new(mock.uri());
     let out = client.chat(&ChatRequest::test_default()).await.unwrap();

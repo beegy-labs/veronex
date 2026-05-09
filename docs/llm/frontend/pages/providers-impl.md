@@ -16,7 +16,7 @@ Opened by Model Selection on a provider row. Switch toggle UI per synced model.
 
 | Aspect | Detail |
 |--------|--------|
-| Data | `GET /v1/providers/{id}/selected-models` -- `llama_server_models` merged with `provider_selected_models`, default `is_enabled = true` |
+| Data | `GET /v1/providers/{id}/selected-models` -- Modelfile registry rows merged with `provider_selected_models`, default `is_enabled = true` |
 | Toggle | `PATCH /v1/providers/{id}/selected-models/{model_name}` `{ is_enabled: bool }` |
 | Query key | `['selected-models', providerId]` |
 | Update | Optimistic: switch flips immediately, reverts on error |
@@ -25,27 +25,20 @@ Opened by Model Selection on a provider row. Switch toggle UI per synced model.
 
 ---
 
-## LlamaServerSyncSection -- Global Model Sync
+## LlamaServerSyncSection / LlamaServerModelProvidersModal (legacy)
 
-| Query | Key | Options |
-|-------|-----|---------|
-| Sync job | `['llama-server-sync-status']` via `api.llamaServerSyncStatus` | `refetchInterval`: 2000 when running, else false; `retry: false` |
-| Models | `['llama-server-models']` via `(removed)` | `staleTime: 30_000` |
+The Ollama-era global model-sync UI (single "Sync All" button that scraped
+every provider's `/api/tags` and persisted into `ollama_models`) was
+removed. With llama-server's one-process-per-model design there is no
+fleet-wide model list to scrape — models are catalogued centrally via the
+**Modelfile Registry** (`POST /v1/admin/models`) and providers opt in via
+`provider_selected_models`.
 
-- **Sync All**: `POST /v1/llama-server/models/sync` -- invalidates `['llama-server-sync-status']` + `['llama-server-models']`
-- Button disabled while running
-- Model list: searchable, filtered client-side, shows filtered/total count
-- Each row clickable -- opens `LlamaServerModelProvidersModal`
-
-## LlamaServerModelProvidersModal
-
-| Aspect | Detail |
-|--------|--------|
-| Query key | `['llama-server-model-providers', modelName]`, `staleTime: 30_000` |
-| Endpoint | `GET /v1/llama-server/models/{model_name}/providers` |
-| Pagination | `PAGE_SIZE = 8`; Prev/Next; page resets when search changes |
-| Search | Filters by name OR url (host portion) |
-| Status | Dot + badge: green=online, amber=degraded, red=offline |
+UI surfaces that survived:
+- Per-provider model-toggle dialog (`PATCH /v1/providers/{id}/selected-models/{model}`)
+- Setup wizard's first-run model registration (`frontend/pages/setup.md`)
+- Admin modelfile install flow (`/v1/admin/models/{id}/install/*`,
+  surfaced via `frontend/pages/setup.md` + future modelfile admin page)
 
 ---
 
@@ -65,7 +58,7 @@ No props. Placed after `<LlamaServerSyncSection />` in LlamaServerTab.
 | Field | Detail |
 |-------|--------|
 | `providerFilter` | `<select>` filters analyzer model list by provider type (all/llama-server/gemini); Gemini hidden when `gemini_function_calling` lab feature disabled |
-| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (llama-server/Gemini). Backend: llama-server via `/api/tags`, Gemini via `gemini_models` DB with Gemini API fallback when DB empty |
+| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (llama-server/Gemini). Backend: llama-server pulled from the Modelfile registry (`modelfiles` table), Gemini via `gemini_models` DB with Gemini API fallback when DB empty |
 | `syncEnabled` | Switch; off = auto-sync paused (manual sync still works) |
 | `syncIntervalSecs` | Number input (min: 60, step: 30) |
 | `probePermits` | Number input; AIMD probe: +N (probe up), -N (probe down), 0=disabled |

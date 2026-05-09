@@ -392,7 +392,7 @@ Even with sufficient VRAM, high concurrent requests on CPU-bound servers cause s
 
 When thermal state transitions Hard → Cooldown → RampUp → Normal:
 - **Hard entry**: `ThermalThrottleMap` snapshots `pre_hard_total = Σ max_concurrent` for all models on the provider. Preserved through Cooldown and RampUp.
-- **Hard forced drain** (placement_planner): after 60s of Hard, cancels in-flight jobs. 90s watchdog logs error. Calls `thermal.set_cooldown()` once `active_count == 0`.
+- **Hard forced drain** (legacy placement_planner): after 60s of Hard, cancels in-flight jobs and calls `thermal.set_cooldown()` once `active_count == 0`. **Currently not wired** — the placement_planner module was deleted in the post-Ollama refactor; the watchdog needs to be re-attached to a remaining background tick (`IdleManager` or a dedicated thermal task). Until then, Hard transitions to Cooldown only via the 300s/900s temperature-based fallback.
 - **Hard → Cooldown**: `temp < hard_at` AND (`set_cooldown()` called OR 300s elapsed since Hard entry as fallback).
 - **Cooldown** (300s min, 900s max = `cooldown_secs × 3`): No dispatch. If temp re-surges above `hard_at`, cooldown timer resets (stays in Cooldown). Transitions to RampUp when `cooldown_elapsed (300s)` AND `temp < soft_at`. At max 900s, forced exit regardless: `temp ≥ soft_at → Soft`, `temp < soft_at → RampUp`.
 - **RampUp**: `max_concurrent` forced to **1** for all models. Dispatch resumes (not blocked like Soft/Hard).
@@ -606,62 +606,26 @@ score_and_claim(job, candidates):
 
 ---
 
-## Placement Planner: Standby / Scale-In
+## Process Lifecycle (replaces placement planner)
 
-The placement planner runs every 5s and manages provider lifecycle alongside Scale-Out and preloading.
+The Ollama-era 5s `placement_planner` (eager preload + LRU evict + scale-out
++ standby) was removed. llama-server runs **one model per process**, so
+"scale" and "evict" become process-level operations.
 
-### Constants
+| Old concept | New mechanism | File |
+|-------------|---------------|------|
+| Eager preload (Scale-Out) | Lazy spawn on first request | `process_manager::manager::ensure_running` |
+| LRU evict / Scale-In standby | TTL-based reap (default 60s) | `process_manager::idle_manager::IdleManager.tick` |
+| `keep_alive=0` unload | Full process stop via agent `/process` DELETE | `process_manager::manager::stop` |
+| `set_online()` heartbeat | Per-node `veronex-llm-agent` heartbeat | `veronex-llm-agent` crate |
+| `pre_hard_total` snapshot | Still in `ThermalThrottleMap` (kept) | `capacity::thermal` |
+| `cancel_jobs_for_provider()` | Trait + impl kept; **watchdog not yet wired** | see Hard Gate note above |
 
-| Constant | Value | Purpose |
-|----------|-------|---------|
-| `PLANNER_INTERVAL` | 5s | Main loop cadence |
-| `SCALE_OUT_THRESHOLD` | 0.80 | VRAM utilization fraction that triggers Scale-Out consideration |
-| `EVICT_IDLE_SECS` | 180s | Idle eviction threshold for active providers |
-| `STANDBY_EVICT_IDLE_SECS` | 30s | Idle eviction threshold while in standby |
-| `TRANSITION_GUARD_SECS` | 30s | Hold-down after any state transition (standby↔active) |
-| `SCALE_OUT_HOLDDOWN_SECS` | 60s | Minimum time between consecutive Scale-Out decisions for same model |
-| `PRELOAD_LOCK_TTL` | 180s | Distributed lock TTL for concurrent preload safety |
-| `SCALEOUT_DECISION_TTL` | 30s | Distributed lock TTL for scale-out decisions |
+Constants like `PLANNER_INTERVAL` / `SCALE_OUT_HOLDDOWN_SECS` no longer
+exist. The replacement loop cadence is `IdleManager` interval (default
+30s; configurable via `system_settings.llama_server.idle_check_interval_secs`).
 
-### Hard Gate Watchdog
-
-Polled every `PLANNER_INTERVAL` (5s) during Hard thermal state:
-
-| Elapsed since Hard entry | Action |
-|--------------------------|--------|
-| ≥ 60s | `cancel_jobs_for_provider()` — drain in-flight jobs |
-| ≥ 90s | `error!` log (watchdog alert only, no state change) |
-
-After cancel, `thermal.set_cooldown()` is called once `active_count == 0`.
-
-### Scale-Out Step① Algorithm
-
-On each cycle, for each model with `scale_out_needed`:
-1. Compute `needed_servers = ceil(demand / avg_max_concurrent)` across existing providers
-2. For each candidate server: `provisional_free = vram_total - reserved_kv - loaded_weight - DEFAULT_BUFFER_MB`
-3. Select the server with **maximum provisional_free** (tie-break: `provider_id` ASC)
-4. Deduct `model_weight_mb()` from that server's provisional free (fallback: 2048 MB when weight unknown)
-5. If `provisional_free > 0`: add to `scale_out_servers`, trigger preload on that provider
-
-### Standby State (Scale-In)
-
-The placement planner marks a provider as standby when it is idle and not the last server:
-
-- **Trigger (Step ⑤)**: `server_idle` = no loaded models with demand AND `total_active = 0` AND no model preloading. Provider must not be in `scale_out_servers` for this cycle, not in hold-down, and not already standby/transitioning. **Last-server protection**: Step ⑤ only runs when `llm_providers.len() > 1` — the final provider is never sent to standby.
-- **Effect**: `set_standby(provider_id, true)` + `set_transition_until(provider_id, now + 30s)`. Server remains physically running but is excluded from new request routing (dispatcher skips standby providers).
-- **`transition_until` guard**: 30-second window after state change (both Scale-In and STANDBY recovery) during which the provider is skipped from further state changes.
-
-### STANDBY Recovery (Step ④)
-
-A standby server is reactivated when:
-- **Condition A**: it has a loaded model with `demand > 0`, OR
-- **Condition B**: it is the best provisional-free candidate for a `scale_out_needed` model, selected by the same Step① algorithm (max `provisional_free`, tie-break: `provider_id` ASC). Only triggers if no active provider satisfies the scale-out need.
-
-On recovery: `set_standby(false)` + new `transition_until = now + 30s` + added to `scale_out_servers` to prevent immediate re-Scale-In.
-
-### Standby Eviction
-
-While in standby, the eviction threshold for idle models is shortened to **30s** (vs 180s normally).
+See `flows/process-manager.md` for the full lifecycle walkthrough.
 
 ---
 
@@ -803,8 +767,8 @@ LLAMA_SERVER_LOAD_TIMEOUT=900           # 15 min for large model loading
   │     AIMD: TPS ratio + p95 spike → max_concurrent (capped at num_parallel)
   │     LLM Batch: all-model analysis → increase-only (floor=current, ceil=current+2)
   │     DB persist → restored on restart
-  ├── Placement Planner (5s): Scale-Out + Preload + Evict(idle 180s) + Scale-In
-  │     Evict resets: sample_count=0, learning_epoch_started_at=now
+  ├── IdleManager (30s tick): stop processes whose idle_for >= TTL (default 60s)
+  │     Stop releases VRAM permits + AIMD window — sample_count resets via process restart
   ├── Promote Overdue (30s): EMERGENCY_BONUS for jobs waiting >250s
   └── Demand Resync (60s): ZSET-based ground truth → demand_counter correction
 ```

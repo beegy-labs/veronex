@@ -108,15 +108,19 @@ Rules:
 
 ## Image Inference — 3-Endpoint Support
 
-All three inference formats support image forwarding to llama-server vision models:
+Image forwarding to llama-server vision models flows through the
+OpenAI-compat path:
 
 | Endpoint | Image source | Extraction |
 |----------|-------------|------------|
 | `/v1/chat/completions` | `messages[].content[]` array with `type: "image_url"` | `openai_handlers.rs`: `ContentPart.extract_base64_images()` parses `data:...;base64,{data}` from `image_url.url` |
-| `/api/chat` | `images` field on request body (llama-server native) | `(removed: llama-server-compat dropped).rs`: forwarded from parsed messages |
-| `/api/generate` | `images` field on request body | `(removed: llama-server-compat dropped).rs`: forwarded directly |
 
-`stream_chat()` in `llama_server/adapter.rs` injects images into the last user message (llama-server expects per-message images, not top-level). OpenAI `images` field and content-array images are merged before injection.
+The Ollama-native `/api/chat` and `/api/generate` paths (which carried a
+top-level `images` field) were removed. Clients that previously sent
+`images` use the OpenAI content-array form now.
+
+`stream_chat()` in `llama_server/adapter.rs` injects images into the last
+user message (llama-server expects per-message images, not top-level).
 
 ## Input Validation
 

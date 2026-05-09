@@ -16,10 +16,10 @@ Admins just register the provider and link a server — that's it.
                 → POST /v1/servers {name, node_exporter_url}
                 → PATCH /v1/providers/{id} {server_id, gpu_index}
 
-2. AUTO SYNC    Background sync loop (30s tick, 300s cooldown)
-                → /api/version (health) → /api/tags (models) → /api/ps (loaded)
-                → /api/show (architecture) → throughput stats → KV compute
-                → AIMD update → LLM batch analysis
+2. AUTO LEARN   In-process AIMD controller (per-provider admission window)
+                → live request outcomes feed AimdController + SLO module
+                → no fleet-wide /api/tags scrape; capacity flows from
+                  veronex-llm-agent heartbeats and on-demand /health probes
 
 3. REQUEST      POST /v1/chat/completions {model: "qwen3:8b", ...}
                 → provider selection → VRAM gate → concurrency gate → dispatch
@@ -36,13 +36,14 @@ Admins just register the provider and link a server — that's it.
 ```
 POST /v1/providers {name: "gpu-server", provider_type: "llama-server", url: "https://llama-server.example.com"}
   │
-  ├── health check: GET {url}/api/version
-  │   → online: status = "online", model sync available
-  │   → offline: status = "offline", sync skipped
+  ├── health check: NodeClient.health(port) (llama-server `/health`)
+  │   → 200: status = "online", available for routing
+  │   → fail: status = "offline", admin must investigate
   │
-  ├── model sync: GET {url}/api/tags
-  │   → saved to llama_server_models table (per provider)
-  │   → registered in provider_selected_models with default is_enabled=true
+  ├── model selection: providers opt in to existing Modelfile rows
+  │   POST /v1/admin/models      ← registers a Modelfile (catalog SSOT)
+  │   PATCH /v1/providers/{id}/selected-models/{model_name} { is_enabled: true }
+  │   → upserts provider_selected_models (no per-provider /api/tags scrape)
   │   → Valkey cache: veronex:models:{provider_id} (TTL 30s)
   │
   └── server link (optional):
@@ -67,10 +68,12 @@ POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
   │
   ├── 4. Provider selection (pick_best_provider)
   │     a. List active llama-server providers
-  │     b. Model filter: only providers that have the model in llama_server_models
-  │     c. Selection filter: only enabled entries in provider_selected_models
-  │     d. VRAM sort: highest available VRAM first (most headroom among servers)
-  │     e. Tier sort: paid key → non-free-tier first, free key → free-tier first
+  │     b. Model filter: only providers whose provider_selected_models row
+  │        for this model has is_enabled = true (Modelfile-backed)
+  │     c. VRAM sort: highest available VRAM first (most headroom among servers)
+  │     d. Tier sort: paid key → non-free-tier first, free key → free-tier first
+  │     e. ProcessManager.ensure_running(provider, model) — lazy spawn on first
+  │        request; subsequent callers wait on per-provider Mutex
   │
   ├── 5. Gate checks (in order)
   │     a. Circuit Breaker: skip providers with consecutive failures
@@ -79,8 +82,9 @@ POST /v1/chat/completions {model: "qwen3:8b", messages: [...]}
   │     d. VRAM: vram_pool.try_reserve() → reserve KV cache + (weight if needed)
   │
   ├── 6. Dispatch → llama-server API
-  │     LlamaServerAdapter: POST {url}/api/chat (streaming)
-  │     If model not loaded, llama-server auto-loads (weight stays in VRAM)
+  │     LlamaServerAdapter: POST {url}/v1/chat/completions (SSE)
+  │     The llama-server process is already running with the model loaded
+  │     (one model per process — `ensure_running` guaranteed it pre-dispatch).
   │
   └── 7. Completion → Cleanup
         Drop(VramPermit) → release KV cache, active_count -= 1
@@ -151,27 +155,33 @@ Request: model=qwen3:1.7b
 
 ### Phase 5: Adding a New Model
 
-When a new model is pulled on llama-server, it is auto-detected on the next sync.
+A new model is registered through the Modelfile registry, not by scraping
+the node:
 
 ```
-llama-server pull llama3.3:70b  (directly on the llama-server node)
+admin: POST /v1/admin/models { name, source: { hf | s3 | … }, ... }
   │
-  ├── Next sync (≤300s)
-  │   GET /api/tags → new model discovered
-  │   → auto-added to llama_server_models table
-  │   → registered in provider_selected_models with is_enabled=true
+  ├── install_orchestrator resolves source → CAS blob (sha256-keyed)
+  │   → emits SSE progress on /v1/admin/models/{id}/install/stream
+  │   → on success: modelfiles row promoted to ready
   │
-  ├── First request arrives
-  │   → try_reserve: max_concurrent=1 (cold start, no learned data)
-  │   → llama-server auto-loads the model → weight occupies VRAM
+  ├── per-provider opt-in:
+  │   PATCH /v1/providers/{id}/selected-models/{model} { is_enabled: true }
+  │   → provider_selected_models row inserted/updated
   │
-  ├── First sync with loaded model
-  │   → weight measured from /api/ps → saved to model_vram_profiles
-  │   → architecture parsed from /api/show → KV cache calculated
-  │   → baseline_tps set (first throughput data)
+  ├── First request for that model:
+  │   → ProcessManager.ensure_running spawns llama-server with the
+  │     CAS blob path; AIMD window initialised at cold-start size (=1)
+  │   → permit acquired, dispatch proceeds
+  │
+  ├── Capacity capture
+  │   → veronex-llm-agent reports VRAM/architecture in its probe payload
+  │     (no /api/ps or /api/show — those endpoints don't exist on llama-server)
+  │   → weight + KV size derived from the Modelfile registry row
+  │   → baseline_tps set after the first completed request
   │
   └── Subsequent automatic learning
-      → AIMD: auto-adjusts from sample ≥ 3
+      → AIMD: auto-adjusts from sample ≥ 3 (admission window)
       → LLM Batch: full model combination analysis from total sample ≥ 10
 ```
 

@@ -32,7 +32,7 @@ Jobs carry a `source` field that records their origin:
 
 | Value | Meaning |
 |-------|---------|
-| `api` | Submitted by any API key route (`/v1/chat/completions`, `/api/chat`, `/api/generate`, `/v1beta/models/*`, `/v1/inference`) |
+| `api` | Submitted by any API key route (`/v1/chat/completions`, `/v1beta/models/*`, `/v1/inference`) |
 | `test` | Submitted from the dashboard Test Run panel (`/v1/test/*` routes, Bearer JWT, no rate limit) |
 | `analyzer` | Submitted by the capacity analyzer for VRAM probing and batch analysis (internal LLM inference) |
 
@@ -48,9 +48,12 @@ Jobs carry a `source` field that records their origin:
 | Value | Routes |
 |-------|--------|
 | `OpenaiCompat` | `POST /v1/chat/completions`, `POST /v1/test/completions` |
-| `(removed)` | `POST /api/generate`, `POST /api/chat`, `POST /v1/test/api/generate`, `POST /v1/test/api/chat` |
 | `GeminiNative` | `POST /v1beta/models/*`, `POST /v1/test/v1beta/models/*` |
 | `VeronexNative`| `POST /v1/inference` |
+
+The legacy `OllamaNative` variant (`POST /api/generate` + `POST /api/chat`)
+was removed in the post-Ollama refactor; clients now use the OpenAI-compat
+routes.
 
 - Stored in DB (`api_format` column).
 - Enables per-format analytics and usage tracking.

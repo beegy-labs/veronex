@@ -23,7 +23,7 @@
 | `web/app/jobs/components/api-test-conversation.tsx` | Multi-turn conversation tab (history-aware run mode) |
 | `web/app/jobs/components/api-test-types.ts` | Types (`Run`, `OpenAIChunk`, `Endpoint`, `RunAction`) + `runsReducer` |
 | `web/app/jobs/page.tsx` | Embeds `<ApiTestPanel>` above job sections |
-| `web/lib/api.ts` | `providers()`, `(removed)`, `geminiModels()`, `geminiPolicies()` |
+| `web/lib/api.ts` | `providers()`, `geminiModels()`, `geminiPolicies()` |
 | `web/messages/en.json` | i18n keys under `test.*`, `apiDocs.*` |
 
 ## Routing
@@ -36,7 +36,7 @@ Embedded in `/jobs`. Split into 3 files: `api-test-panel.tsx` (state/logic), `ap
 
 ```
 [Provider v] [Model v]
-[Endpoint v: /v1/chat/completions | /api/chat | /api/generate]
+[Endpoint v: /v1/chat/completions | /v1beta/models]
 [API Key: OFF/ON] [sk-... input when ON]
 [Prompt...                                    [img] [Run]]
 Running as: admin
@@ -48,20 +48,19 @@ Running as: admin
 
 | Endpoint | Format | Streaming |
 |----------|--------|-----------|
-| `/v1/chat/completions` | OpenAI (SSE) | Yes |
-| `/api/chat` | llama-server chat (JSON) | No |
-| `/api/generate` | llama-server generate (JSON) | No |
+| `/v1/chat/completions` | OpenAI chat-completions (SSE) | Yes |
+| `/v1beta/models` | Gemini native `generateContent` (JSON) | No |
 
-Non-streaming: `/api/generate` reads `json.response`, `/api/chat` reads `json.message.content`.
+Gemini option only appears when the selected provider is Gemini. The
+legacy llama-server-native `/api/chat` and `/api/generate` paths were
+removed in the post-Ollama refactor.
 
 ### API Key Toggle
 
 | Mode | Auth | Endpoints used |
 |------|------|---------------|
-| OFF (default) | JWT session cookie | `/v1/test/completions`, `/v1/test/api/chat`, `/v1/test/api/generate` |
-| ON | `Bearer` (OpenAI) or `X-API-Key` (llama-server) | `/v1/chat/completions`, `/api/chat`, `/api/generate` |
-
-When ON, OpenAI endpoint uses `Authorization: Bearer {key}`, llama-server uses `X-API-Key: {key}`.
+| OFF (default) | JWT session cookie | `/v1/test/completions` |
+| ON | `Authorization: Bearer {key}` | `/v1/chat/completions`, `/v1beta/models/{model}:generateContent` |
 
 ### Run State
 
@@ -92,9 +91,7 @@ Dot colors: streaming=info, done=success, error=destructive. Close cancels reade
 | Auth | Endpoint | Source | account_id |
 |------|----------|--------|-----------|
 | JWT session | `POST /v1/test/completions` | `test` | `claims.sub` |
-| JWT session | `POST /v1/test/api/chat` | `test` | `claims.sub` |
-| JWT session | `POST /v1/test/api/generate` | `test` | `claims.sub` |
-| API Key | Real endpoints (3 above) | `api` or `api_paid` | key's tenant |
+| API Key | Real endpoints (`/v1/chat/completions`, `/v1beta/models/{m}:generateContent`) | `api` or `api_paid` | key's tenant |
 
 Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'test'`).
 
@@ -102,7 +99,7 @@ Test jobs: `api_key_id = NULL`, excluded from usage/perf metrics (`source != 'te
 
 | Option | `provider_type` sent | Model source |
 |--------|---------------|-------------|
-| llama-server | `"llama-server"` | `GET /v1/llama-server/models` (global pool) |
+| llama-server | `"llama_server"` | `GET /v1/models` (Modelfile registry) |
 | Gemini Free | `"gemini-free"` | Filtered by `available_on_free_tier=true` |
 | Gemini | `"gemini"` | Full global pool |
 
@@ -129,7 +126,7 @@ Mode toggle: `single` | `conversation`. In conversation mode:
 | `model_not_allowed` | Model not in `multiturn_allowed_models` |
 | `context_too_large` | Estimated tokens > 85% of model's `max_ctx` |
 
-Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from `GET /v1/llama-server/models`.
+Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from the Modelfile registry (`GET /v1/models`).
 
 ### TurnInternals Panel
 
@@ -144,8 +141,6 @@ Token estimation: `sum(message.content.length / 3.5)`. `max_ctx` from `GET /v1/l
 | Method | Path | Auth | Notes |
 |--------|------|------|-------|
 | POST | `/v1/test/completions` | JWT | OpenAI format, `source='test'`, no rate limiting |
-| POST | `/v1/test/api/chat` | JWT | llama-server chat format, `source='test'` |
-| POST | `/v1/test/api/generate` | JWT | llama-server generate format, `source='test'` |
 | GET | `/v1/test/jobs/{id}/stream` | JWT | SSE reconnect for in-progress streams |
 
 ## SSE Parsing (`consumeStream()`)

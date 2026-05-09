@@ -107,7 +107,7 @@ Lower `final_score` = higher priority. Locality bonus gives a ~20s priority boos
 
 ### Demand Counter
 
-Per-model queued job count, used by Placement Planner for scale-out decisions:
+Per-model queued job count (legacy: was used by the deleted Placement Planner for scale-out decisions; now informational / observability only — lazy spawn replaces preload):
 
 - **INCR**: Lua enqueue script (atomic with ZADD)
 - **DECR**: Lua claim script + Lua cancel script (atomic with ZREM)
@@ -172,7 +172,7 @@ Design: ZSET is the sole source of truth. Side hash (`queue:model`) alone is nev
 ① spawn health_checker_loop, sync_loop, session_grouping_loop
 ② use_case_impl.recover_pending_jobs()   ← re-enqueue DB-persisted Pending/Running jobs (explicit, non-fatal)
 ③ spawn queue_worker + job_sweeper
-④ (Valkey only) spawn reaper, pub/sub subscribers, promote_overdue, demand_resync, placement_planner
+④ (Valkey only) spawn reaper, pub/sub subscribers, promote_overdue, demand_resync, IdleManager (replaces placement_planner)
 ```
 
 Notes:

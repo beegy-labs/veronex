@@ -109,9 +109,6 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
   // Conversation mode: force messages-capable endpoint
   useEffect(() => {
-    if (mode === 'conversation' && endpoint === '/api/generate') {
-      setEndpoint('/v1/chat/completions')
-    }
     if (mode === 'conversation' && endpoint === '/v1beta/models') {
       setEndpoint('/v1/chat/completions')
     }
@@ -349,9 +346,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     setPrompt('')
     setImages([])
 
-    const ep = (endpoint === '/api/generate' || endpoint === '/v1beta/models')
-      ? '/v1/chat/completions'
-      : endpoint
+    const ep = endpoint === '/v1beta/models' ? '/v1/chat/completions' : endpoint
 
     // Images are not retained between turns by the upstream model — each message is processed
     // independently. The assistant's analysis from turn 1 already captures image
@@ -556,42 +551,21 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     const jobIdRef = { current: null as string | null }
 
     try {
-      const isStreaming = p.endpoint === '/v1/chat/completions' || p.endpoint === '/api/chat' || p.endpoint === '/api/generate'
+      const isStreaming = p.endpoint === '/v1/chat/completions'
       let url: string
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
       url = `${BASE}${p.endpoint}`
       if (p.useApiKey && apiKeyValue.trim()) {
-        if (p.endpoint === '/v1/chat/completions' || p.endpoint === '/v1beta/models') {
-          headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
-        } else {
-          headers['X-API-Key'] = apiKeyValue.trim()
-        }
+        headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
       }
       // Session auth (JWT cookie) is sent automatically by the browser.
 
       let body: Record<string, unknown>
       if (p.endpoint === '/v1beta/models') {
- // Gemini native: POST /v1beta/models/{model}:generateContent
- url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
- body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
- } else if (p.endpoint ==='/api/generate') {
-        body = {
-          model: p.model,
-          prompt: p.prompt.trim(),
-          stream: isStreaming,
-          ...(p.images && p.images.length > 0 && { images: p.images }),
-        }
-      } else if (p.endpoint === '/api/chat') {
-        body = {
-          model: p.model,
-          messages: [{
-            role: 'user',
-            content: p.prompt.trim(),
-            ...(p.images && p.images.length > 0 && { images: p.images }),
-          }],
-          stream: isStreaming,
-        }
+        // Gemini native: POST /v1beta/models/{model}:generateContent
+        url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
+        body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
       } else {
         body = {
           model: p.model,
@@ -621,9 +595,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         const json = await resp.json()
         const text = p.endpoint === '/v1beta/models'
           ? (json.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(json))
-          : p.endpoint === '/api/generate'
-            ? (json.response ?? '')
-            : (json.message?.content ?? '')
+          : (json.choices?.[0]?.message?.content ?? '')
         dispatch({ type: 'APPEND', id: runId, token: text })
         dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
       }

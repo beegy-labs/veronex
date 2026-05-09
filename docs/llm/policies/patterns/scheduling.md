@@ -21,13 +21,11 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 | Constant | Value | Purpose |
 |----------|-------|---------|
 | `PROVIDER_REQUEST_TIMEOUT` | 300s | Inference request to llama-server/Gemini |
-| `(removed)` | 10s | (removed), `/api/tags`, `/api/ps` |
-| `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` | 5s | llama-server `/api/version` in analyzer |
+| `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` | 5s | llama-server `/health` probe |
 | `LLM_ANALYSIS_TIMEOUT` | 30s | Single-model LLM analysis |
 | `LLM_BATCH_ANALYSIS_TIMEOUT` | 60s | Batch model LLM analysis |
 | `NODE_EXPORTER_TIMEOUT` | 5s | Node-exporter metrics fetch |
 | `CANCEL_TIMEOUT` | 5s | Job cancellation in CancelGuard |
-| `(removed)` | 10s | Provider-for-model lookup cache |
 | `MODEL_SELECTION_CACHE_TTL` | 30s | Provider model-selection enabled list cache |
 | `HEALTH_CHECK_INTERVAL_SECS` | 30s | Health checker loop interval |
 | `STATS_TICK_INTERVAL` | 1s | FlowStats broadcast cadence |
@@ -36,7 +34,7 @@ All timeouts and TTLs are centralized as named constants — never hardcode `Dur
 
 | Constant | Value | Purpose |
 |----------|-------|---------|
-| `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` | 5s | llama-server `/api/version` health check |
+| `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` | 5s | llama-server `/health` probe |
 | `GEMINI_HEALTH_TIMEOUT` | 10s | Gemini API key validation |
 | `NODE_EXPORTER_METRICS_TIMEOUT` | 5s | node-exporter metrics scrape |
 
@@ -48,7 +46,8 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 
 | Component | Responsibility |
 |-----------|---------------|
-| `veronex-agent/src/heartbeat.rs` | `set_online(pool, provider_id, ttl_secs)` after each successful llama-server scrape |
+| `veronex-llm-agent` (per-node) | Pushes per-provider heartbeat after each successful spawn / health probe |
+| `veronex-agent/src/heartbeat.rs` | Agent self-registration only (`veronex:agent:instances` SADD + per-pod heartbeat) — no longer pushes provider heartbeats |
 | `domain::constants::provider_heartbeat_key(id)` | Canonical key: `veronex:provider:hb:{uuid}` (pk-aware shim: `valkey_keys::provider_heartbeat`) |
 | `health_checker.rs` | MGET all known heartbeat keys → one round-trip; missing key = offline |
 | `domain::constants::PROVIDERS_ONLINE_COUNTER_KEY` | `INCR`/`DECR` atomically on status transitions → O(1) dashboard reads |
@@ -61,15 +60,15 @@ Use the push model: veronex-agent sets a TTL heartbeat; veronex reads via MGET.
 | `MAX_CONCURRENT_METRICS = 64` | `health_checker.rs` | Semaphore limits concurrent node-exporter polls |
 | `MAX_CONCURRENT_PROBES = 64` | `health_checker.rs` | Semaphore limits HTTP health probes (no-Valkey fallback) |
 | `pg_class.reltuples` | `dashboard_queries.rs` | O(1) total_jobs estimate instead of COUNT(*) |
-| `join_all` parallelism | `dispatcher.rs`, `placement_planner.rs`, `provider_router.rs`, `infra_health_handlers.rs`, `account_handlers.rs`, `gemini_compat_handlers.rs`, `gemini_model_handlers.rs`, `(removed: legacy llama-server-models handlers)`, `gpu_server_handlers.rs`, `main.rs` (MCP startup) | Concurrent fan-out for fleet-wide reads/writes |
-| `MGET batch` | `analyzer.rs` (demand counters), `inference_helpers::lookup_model_max_ctx` | Single round-trip across N keys |
+| `join_all` parallelism | `dispatcher.rs`, `provider_router.rs`, `infra_health_handlers.rs`, `account_handlers.rs`, `gemini_compat_handlers.rs`, `gemini_model_handlers.rs`, `gpu_server_handlers.rs`, `main.rs` (MCP startup) | Concurrent fan-out for fleet-wide reads/writes |
+| `MGET batch` | `inference_helpers::lookup_model_max_ctx` | Single round-trip across N keys |
 | `EVALSHA` Lua cache | `valkey_adapter.rs` (`warmup()` + 4 pre-loaded `Script`) | Sends SHA1 only, not script body |
 | `concurrent_http_probes()` | `health_checker.rs` | Bounded parallel HTTP for MGET fallback |
 | No-Valkey DB cache | `background.rs` | DB query every 10s (not 1s) when Valkey absent |
 
 ## Best-Effort Locks — `try_acquire_lock`
 
-For coordination-style locks (placement-planner scaleout/preload dedup) where the legitimate worst case is "another replica got there first", a GET + SET probe is acceptable in lieu of a native NX op. Centralised in `placement_planner::try_acquire_lock` so the racy GET-then-SET pattern only exists once.
+For coordination-style locks where the legitimate worst case is "another replica got there first", a GET + SET probe is acceptable in lieu of a native NX op. Centralised in a shared helper so the racy GET-then-SET pattern only exists once. (The original placement-planner caller was deleted in the post-Ollama refactor — pattern is retained for any future best-effort coordination needs.)
 
 ```rust
 async fn try_acquire_lock(

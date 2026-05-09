@@ -27,7 +27,7 @@
 | `web/app/providers/page.tsx` | Tab router + shared queries (LlamaServerTab, GeminiTab) |
 | `web/app/providers/components/llama-server-sections.tsx` | `LlamaServerSyncSection` + re-exports from `llama-server-capacity-section.tsx` |
 | `web/app/providers/components/llama-server-capacity-section.tsx` | `LlamaServerCapacitySection`, `ThermalBadge`, `VramBar` |
-| `web/lib/api.ts` | `api.servers()`, `api.providers()`, `api.(removed)`, `api.syncLlamaServerModels()`, `api.llamaServerSyncStatus()`, `api.geminiModels()`, `api.syncGeminiStatus()`, `api.capacity()`, `api.capacitySettings()`, `api.patchCapacitySettings()`, `api.triggerCapacitySync()` |
+| `web/lib/api.ts` | `api.servers()`, `api.providers()`, `api.geminiModels()`, `api.syncGeminiStatus()`, `api.capacity()`, `api.capacitySettings()`, `api.patchCapacitySettings()`, `api.triggerCapacitySync()` (the legacy global llama-server model-sync helpers were removed alongside the Ollama-era handlers) |
 | `web/lib/types.ts` | `Provider`, `GpuServer`, `LlamaServerSyncJob`, `GeminiRateLimitPolicy`, `GeminiModel`, `ProviderSelectedModel`, `GeminiStatusSyncResponse`, `CapacityResponse`, `ProviderCapacityInfo`, `ModelCapacityInfo`, `CapacitySettings`, `PatchCapacitySettings` |
 | `web/messages/en.json` | i18n keys under `providers.*` |
 
@@ -89,7 +89,7 @@ Header shows pill badges: `N registered` / `N online` / `N offline`.
 
 Actions per row: Healthcheck, Sync Models, Model Selection (`ListFilter`), Edit, Delete.
 
-- **Sync Models**: `POST /v1/providers/{id}/models/sync` -- persists to `llama_server_models` + upserts `provider_selected_models` (`is_enabled=true` for new rows). Invalidates `['llama-server-sync-status']`, `['llama-server-models']`, `['selected-models', providerId]`.
+- **Sync Models**: `POST /v1/providers/{id}/models/sync` -- upserts `provider_selected_models` from the Modelfile registry (`is_enabled=true` for new rows). Invalidates `['selected-models', providerId]`.
 - **Model Selection**: opens `LlamaServerProviderModelsModal` -- Switch toggle per model.
 
 **RegisterLlamaServerModal fields**: name, URL, total_vram_mb, gpu_index, server_id (dropdown).

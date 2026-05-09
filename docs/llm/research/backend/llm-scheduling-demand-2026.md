@@ -139,7 +139,9 @@ Every scheduler tick (5s):
 1. Read `demand[m]` for all models
 2. Identify top-K models by demand not currently loaded anywhere
 3. Find servers with sufficient free VRAM
-4. Send preload request: `POST /api/generate {"model": m, "prompt": "", "keep_alive": -1}`
+4. Trigger spawn via the per-node agent's `POST /spawn` (replaces the
+   legacy llama-server `keep_alive=-1` warm-up dispatched by the deleted
+   placement_planner)
 
 ### Phase 4 — Demand-Weighted Eviction (Medium Effort)
 

@@ -171,8 +171,8 @@ Single consolidated file — no migration framework.
 | `provider_selected_models` | Per-provider model enable/disable (`PK (provider_id, model_name)`) |
 | `gemini_sync_config` | Singleton admin API key for Gemini model sync |
 | `gemini_models` | Global Gemini model pool (synced via admin key) |
-| `llama_server_models` | Per-provider model list (`PK (model_name, provider_id)`) |
-| `llama_server_sync_jobs` | Async global sync tracking |
+| `modelfiles` | Phase 2 central model catalogue (replaces the legacy per-provider `ollama_models` / `llama_server_models` table) |
+| `model_install_attempts` | Append-only log of resolve/download attempts per Modelfile |
 | `accounts` | RBAC accounts (super / admin, Argon2id password_hash) |
 | `account_sessions` | JWT sessions: `jti`, `refresh_token_hash` (BLAKE2b) |
 | `model_vram_profiles` | VRAM profiles per `(provider_id, model_name)` — weight, KV, arch params |

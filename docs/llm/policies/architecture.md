@@ -111,10 +111,12 @@ Client → POST /v1/chat/completions  (X-API-Key, source=Api)   → ZADD queue:z
            → permit dropped (auto) → KV cache returned, weight stays
            → ObservabilityPort → veronex-analytics → ClickHouse
 
-Placement planner (dispatcher filter_candidates):
-  ④ STANDBY recovery: standby providers included in candidate list,
-    woken on demand in score_and_claim when queue_len > 0
-  ⑤ Scale-In: skipped entirely when ZSET queue has pending jobs (queue_len > 0)
+ProcessManager + IdleManager (replaces legacy placement planner):
+  • Lazy spawn: dispatcher calls `ensure_running` before claiming a permit;
+    waits on a per-provider Mutex when a sibling caller is already spawning
+  • TTL reap: `IdleManager.tick` (default 30s) stops processes idle past
+    their TTL (default 60s, override per-provider via system_settings)
+  • See `flows/process-manager.md`
 
 Direct path (dev mode, no Valkey):
   pick_and_build() → gate chain → try_reserve() → None = skip (VRAM unavailable)
@@ -129,12 +131,14 @@ Background loops:
     → hw_metrics fetch (node-exporter direct) → Valkey cache (HwMetrics with gpu_vendor)
     → thermal.set_thresholds(gpu_vendor) + thermal.update(temp_c)
     → infra service probes (postgresql/valkey/clickhouse/s3/vespa/embed) → veronex:svc:health:{instance_id} HASH
-  run_sync_loop (base tick 30s, per-provider sync_interval ~300s):
-    → per llama-server provider: /api/version + /api/tags + /api/ps + /api/show
-    → model sync + VRAM probe + KV compute
-    → AIMD: TPS ratio + p95 spike → max_concurrent adjustment
-    → LLM Batch: all-model combination analysis → ±2 clamp auto-applied
-    → DB persist (model_vram_profiles)
+  idle_manager (default 30s tick):
+    → ProcessManager.list_running() → stop providers idle >= TTL
+    → AIMD per-model max_concurrent adjusted from live request outcomes
+      (AimdController + SLO modules — no fleet-wide /api/tags scrape;
+      llama-server has no /api/version, /api/tags, /api/ps, /api/show)
+  per-node veronex-llm-agent:
+    → reports probe (capacity, ports, drivers) + heartbeat
+    → spawns / stops llama-server processes on ProcessManager request
 ```
 
 ## AppState

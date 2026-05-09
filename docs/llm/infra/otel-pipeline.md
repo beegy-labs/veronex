@@ -80,9 +80,9 @@ veronex --> POST /internal/ingest/audit    --> veronex-analytics (앱레이어 �
                                                                                                                             +- audit_events
 
 [Chain 2: metrics]
-node-exporters (type=server) -+
-                              +-> veronex-agent (allowlist 필터 + 타입분류 + OTLP push) --> OTel Collector --> kafka/metrics --> Redpanda [otel-metrics]
-llama-server /api/ps (type=llama-server) -+                                                                                                    +- veronex-consumer --> otel_metrics_gauge (MergeTree)
+node-exporters (type=server) --> veronex-agent (allowlist 필터 + OTLP push) --> OTel Collector --> kafka/metrics --> Redpanda [otel-metrics]
+                                                                                                                       +- veronex-consumer --> otel_metrics_gauge (MergeTree)
+(veronex-agent의 legacy llama-server /api/ps 스크레이프는 제거됨 — provider 용량은 veronex-llm-agent heartbeat로 보고)
 
 [Chain 3: traces]
 veronex traces --> OTel Collector --> kafka/traces --> Redpanda [otel-traces]
@@ -118,7 +118,10 @@ Agent discovers targets via `GET /v1/metrics/targets`. Each target has a `type` 
 | Type | Source | Shard key | Collects |
 |------|--------|-----------|----------|
 | `server` | node-exporter `/metrics` | `server_id` | CPU, mem, GPU (DRM, hwmon) |
-| `llama-server` | (removed) | `provider_id` | loaded models, VRAM per model |
+
+(Per-provider llama-server scrape was removed in the post-Ollama refactor —
+liveness + capacity now reported by `veronex-llm-agent` heartbeat, not the
+metrics scraper.)
 
 Targets are returned as `host[:port]` only (URL normalization strips scheme/path/query). Agent prepends `http://` before scraping.
 
@@ -131,7 +134,6 @@ StatefulSet replicas shard targets by `hash(shard_key) % replica_count == ordina
 | Guard | Value | File |
 |-------|-------|------|
 | `MAX_NODE_EXPORTER_BODY` | 16 MB | `scraper.rs` |
-| `(removed: llama-server scraper deleted)` | 1 MB | `scraper.rs` |
 | `MAX_CONCURRENT_SCRAPES` | 32 (semaphore) | `main.rs` |
 | `SCRAPE_TIMEOUT` | 5 s | `scraper.rs` |
 | `OTLP_RETRIES` | 3 attempts (exponential backoff: 2s, 4s, 8s) | `otlp.rs` |
@@ -159,8 +161,11 @@ node_cpu_seconds_total,                                            (sum, isMonot
 node_drm_*,                                                        (gauge)
 node_hwmon_temp_celsius, node_hwmon_power_average_watt*,           (gauge)
 node_hwmon_chip_names,                                             (gauge — required for GPU chip→PCI address lookup)
-(removed: llama-server scraper deleted)  (gauge)
 ```
+
+The legacy `ollama_loaded_models` / `ollama_model_size_*` gauges were
+removed when the per-provider scrape was deleted; veronex-llm-agent
+reports the equivalent via heartbeat instead.
 
 Counter metrics (`node_cpu_seconds_total`) are sent as OTLP `sum` with `isMonotonic: true`. All other metrics are sent as OTLP `gauge`. `veronex-consumer`가 두 타입 모두 처리하여 `otel_metrics_gauge`에 INSERT.
 

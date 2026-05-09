@@ -105,7 +105,7 @@ pub struct InferenceJob {
     #[serde(default)]
     pub tools: Option<serde_json::Value>,
     /// The HTTP path of the inbound request that created this job.
-    /// e.g. "/v1/chat/completions", "/api/chat", "/v1beta/models/gemini-2.0-flash:generateContent"
+    /// e.g. "/v1/chat/completions", "/v1beta/models/gemini-2.0-flash:generateContent"
     /// Not set for jobs recovered on startup.
     #[serde(default)]
     pub request_path: Option<String>,

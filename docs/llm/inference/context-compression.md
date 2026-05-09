@@ -64,7 +64,7 @@ Decides how to compress each completed turn. Code: `compression_router.rs`.
 
 **DCP invariant**: pruning is in-memory only. The S3 ConversationRecord is **never** modified — every original turn is retained for dashboard / audit / replay.
 
-**Behavior on overflow**: pre-fix this ladder didn't exist (`configured_ctx = 32_768u32` hardcoded in `(removed: llama-server-compat dropped).rs`). Long MCP loops (30+ rounds) would grow `messages[]` unbounded → context overflow at provider level. Post-fix: bridge log emits structured event `context-pruner: trimmed accumulated messages to fit budget {model, configured_ctx, budget, initial_tokens, after_tokens, dropped}` whenever trim fires.
+**Behavior on overflow**: pre-fix this ladder didn't exist (`configured_ctx = 32_768u32` hardcoded in the Ollama-compat handler that has since been removed). Long MCP loops (30+ rounds) would grow `messages[]` unbounded → context overflow at provider level. Post-fix: bridge log emits structured event `context-pruner: trimmed accumulated messages to fit budget {model, configured_ctx, budget, initial_tokens, after_tokens, dropped}` whenever trim fires.
 
 **Live verified 2026-04-29** (image `develop-921771c`): synthetic 30-turn `qwen3:8b` conversation (27,394 initial tokens; budget 18,636) trimmed to 18,592 tokens, 19 messages dropped; model answered the final user query correctly (system + last 5 turns preserved).
 
@@ -93,7 +93,7 @@ Code: `context_compressor::compress_input_inline()`
 
 If the latest user message exceeds 50% of context budget (`configured_ctx × context_budget_ratio × 0.5`), compress it before submission. Replaces `last_user` message content in the outgoing llama-server messages array.
 
-Applied in `openai_handlers.rs` and `(removed: llama-server-compat dropped).rs` after llama-server message conversion.
+Applied in `openai_handlers.rs` after chat-completion message conversion. (The legacy Ollama-compat handler that also called this point was removed.)
 
 ---
 

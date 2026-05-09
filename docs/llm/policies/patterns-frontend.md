@@ -1,7 +1,7 @@
 # Code Patterns: Frontend — Index
 
 > SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
-> Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
+> Next.js 16 · React 19 · TanStack Query v5 · verodesign (vds-* utilities, no Tailwind) · Zod
 > Rust patterns → `policies/patterns.md`
 > Full rule text lives in `patterns-frontend/{domain}.md`; this file is an index.
 

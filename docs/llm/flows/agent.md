@@ -56,17 +56,14 @@ scrape_cycle()
   │
   └── 3. Scrape targets (concurrent, semaphore MAX=32)
         │
-        ├── type=server → scrape_node_exporter(url)
-        │     └── Prometheus text → Vec<Gauge>
-        │           → OTLP push to otel-collector → ClickHouse metrics
-        │
-        └── type=llama-server → (removed)(url + /api/ps)
-              ├── Vec<Gauge> → OTLP push
-              ├── heartbeat: set_online(Valkey, provider_id, TTL=180s)
-              │     key: veronex:heartbeat:{provider_id}
-              └── capacity_push::push()
-                    └── pushes loaded model list + VRAM state to veronex
-                          for dispatcher VRAM pool warm-up
+        └── type=server → scrape_node_exporter(url)
+              └── Prometheus text → Vec<Gauge>
+                    → OTLP push to otel-collector → ClickHouse metrics
+
+  Note: the legacy `type=llama_server` scrape path was removed when
+  veronex migrated off Ollama (no `/api/ps` equivalent on llama-server).
+  Per-provider liveness + capacity is now reported by the per-node
+  `veronex-llm-agent` (probe + heartbeat), not by this scraper.
 ```
 
 ---
@@ -128,13 +125,15 @@ Two discovery paths (both write to same DB + Valkey):
 ## Heartbeat Key Schema
 
 ```
-Provider liveness:   veronex:provider:hb:{provider_id}  TTL=180s
 MCP server liveness: veronex:mcp:heartbeat:{server_id}  TTL=180s
 Agent self-register: veronex:agent:instances             SET (SADD/SREM)
 Agent heartbeat:     veronex:agent:hb:{hostname}         TTL=180s
 
 Survives: 2 missed scrape cycles (default 60s interval × 3 TTL multiplier)
-On expiry: provider/server/agent marked offline
+On expiry: MCP server / agent marked offline
+
+Provider liveness is no longer driven from this scraper — see
+`veronex-llm-agent` (per-node) for the new heartbeat path.
 ```
 
 ---
@@ -144,9 +143,8 @@ On expiry: provider/server/agent marked offline
 | File | Purpose |
 |------|---------|
 | `crates/veronex-agent/src/main.rs` | Main loop, scrape_cycle, MCP health + discover |
-| `crates/veronex-agent/src/scraper.rs` | node-exporter scrape, llama-server scrape, ping_mcp |
+| `crates/veronex-agent/src/scraper.rs` | node-exporter scrape, ping_mcp |
 | `crates/veronex-agent/src/mcp_discover.rs` | MCP tool discovery + embedding pipeline |
-| `crates/veronex-agent/src/heartbeat.rs` | Valkey heartbeat SET EX |
-| `crates/veronex-agent/src/capacity_push.rs` | VRAM state push to veronex |
+| `crates/veronex-agent/src/heartbeat.rs` | Agent self-registration heartbeats |
 | `crates/veronex-agent/src/shard.rs` | Replica sharding logic |
 | `crates/veronex-agent/src/orphan_sweeper.rs` | Stale job cleanup |

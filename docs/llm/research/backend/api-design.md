@@ -42,8 +42,8 @@ Response includes `jobs: []` + `total: N`.
 
 Long-running operations return 202 immediately:
 ```
-POST /v1/llama-server/models/sync   → 202 Accepted  { "message": "sync started" }
-GET  /v1/admin/sync-status   → { "status": "running" | "completed", "results": [...] }
+POST /v1/admin/models                                  → 202 Accepted  { "id": "...", "status": "installing" }
+GET  /v1/admin/models/{id}/install/stream              → SSE stream   (resolve → download → ready)
 ```
 
 ---

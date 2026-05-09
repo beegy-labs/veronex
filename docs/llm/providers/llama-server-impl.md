@@ -33,19 +33,23 @@ fn stream_tokens(&self, job: &InferenceJob) -> Pin<Box<dyn Stream<...>>> {
 }
 ```
 
-| Condition | Endpoint | Used by |
-|-----------|----------|---------|
-| `job.messages = None` | `POST /api/generate` | `POST /v1/inference` (VeronexNative) |
-| `job.messages = Some(...)` | `POST /api/chat` | All compat handlers (OpenAI, llama-server, Gemini) |
+All inference paths funnel into a single upstream endpoint:
+
+| Condition | Upstream call | Used by |
+|-----------|---------------|---------|
+| `job.messages = None` | `POST {base}/v1/chat/completions` (single user-role message synthesised from `job.prompt`) | `POST /v1/inference` (VeronexNative) |
+| `job.messages = Some(...)` | `POST {base}/v1/chat/completions` (messages forwarded as-is) | OpenAI compat + Gemini compat |
 
 ---
 
 ## Context Length (`num_ctx`) per Request
 
-**Sync is the SSOT**. `capacity::analyzer` parses each model's Modelfile via `/api/show` and stores the `PARAMETER num_ctx` value in:
+**Modelfile is the SSOT.** With the legacy `capacity::analyzer` removed,
+`num_ctx` per model is derived from the `Modelfile` registry row (Phase 2):
 
-- Postgres `model_capacity.configured_ctx`
-- Valkey `model_ctx(provider_id, model)` (TTL 600 s, hot-path cache)
+- Postgres `modelfiles.context_length` (canonical)
+- Valkey `model_ctx(provider_id, model)` (TTL 600 s, hot-path cache,
+  populated lazily from the Modelfile row on first use)
 
 **Every request to llama-server (Phase 1 lifecycle probe AND Phase 2 inference) MUST send the same `options.num_ctx`** resolved through the same lookup chain:
 
@@ -78,66 +82,39 @@ The fabricate fallback exists for the cold-start window before the analyzer's fi
 | Layer | Mechanism | Role |
 |-------|-----------|------|
 | GitOps | `LLAMA_SERVER_CONTEXT_LENGTH: 204800` on llama-server StatefulSet | Server-wide floor (used only when client sends no `num_ctx`) |
-| Veronex sync (SSOT) | `capacity::analyzer` → Valkey `model_ctx` | Canonical per-model value from `/api/show` Modelfile |
+| Modelfile registry (SSOT) | `modelfiles.context_length` → Valkey `model_ctx` | Canonical per-model value from the Phase 2 registry |
 | Veronex fabricate (fallback) | `model_effective_num_ctx` name-pattern | Cold-start guess; values aligned to Modelfile conventions |
 
 SDD: `.specs/veronex/lifecycle-num-ctx-ssot-alignment.md`.
 
 ---
 
-## `/api/generate` -- Single Prompt
+## `POST /v1/chat/completions` (OpenAI-compat)
 
-Request:
-```json
-{ "model": "qwen3:8b", "prompt": "...", "stream": true, "options": {"num_ctx": 32768} }
-```
-
-Response struct:
-```rust
-struct GenerateResponse {
-  response: String,
-  done: bool,
-  done_reason: Option<String>,   // "stop" | "load" | "length"
-  prompt_eval_count: Option<u32>,
-  eval_count: Option<u32>,
-}
-```
-
----
-
-## `/api/chat` -- Multi-Turn Messages
-
-Request:
+Request — same chat-completion shape clients send to OpenAI:
 ```json
 {
   "model": "qwen3:8b",
   "messages": [
-    {"role": "system", "content": "..."},
-    {"role": "user",   "content": "..."},
+    {"role": "system",    "content": "..."},
+    {"role": "user",      "content": "..."},
     {"role": "assistant", "content": "..."},
-    {"role": "user",   "content": "..."}
+    {"role": "user",      "content": "..."}
   ],
   "stream": true,
-  "options": {"num_ctx": 32768}
+  "max_tokens": 4096,
+  "temperature": 0.7
 }
 ```
 
-Response struct:
-```rust
-struct ChatChunk {
-  message: Option<ChatChunkMessage>,  // { content: Option<String>, tool_calls: Option<Value> }
-  done: bool,
-  done_reason: Option<String>,
-  prompt_eval_count: Option<u32>,
-  eval_count: Option<u32>,
-}
-```
+Streaming response: SSE `data:` frames carrying OpenAI-style chunks
+(`choices[].delta.content`, `choices[].delta.tool_calls`, etc.). Final
+frame is `data: [DONE]`. Veronex consumes the SSE on the gateway side and
+re-emits to API-key clients without re-buffering.
 
----
-
-## `done_reason: "load"` Handling
-
-When llama-server first loads a model into VRAM it emits an intermediate chunk with `done_reason: "load"`. Both `stream_generate()` and `stream_chat()` skip these chunks and keep reading. Without this fix, the stream terminates prematurely with empty output.
+The legacy llama-server-native `/api/generate` (single-prompt, NDJSON) and
+`/api/chat` (multi-turn, NDJSON with `done_reason: "load"` warmup chunks)
+were removed in the migration off Ollama-style endpoints.
 
 ---
 
@@ -160,15 +137,15 @@ never leaks internal reasoning to the client.
 
 | Entry route | Converter | Notes |
 |-------------|-----------|-------|
-| `POST /v1/chat/completions` | `ChatMessage::into_chat_value()` | OpenAI `tool_calls[].arguments` (JSON string) to llama-server (JSON object) |
-| `POST /api/chat` | Passthrough (already chat-completion format) | -- |
-| `POST /v1beta/models/*` | `contents_to_messages()` | Gemini `role: "model"` to `"assistant"`, `functionCall`/`functionResponse` mapped |
-| `POST /v1/test/*` | Passthrough or extract prompt | Test Run handlers pass simple messages or None |
+| `POST /v1/chat/completions` | `ChatMessage::into_chat_value()` | Normalises content (text vs. parts) and rewrites OpenAI `tool_calls[].arguments` (JSON string) into the object form llama-server accepts |
+| `POST /v1beta/models/*` | `contents_to_messages()` | Gemini `role: "model"` → `"assistant"`, `functionCall` / `functionResponse` mapped to chat `tool_calls` / `tool` |
+| `POST /v1/inference` | Synthesises a single `user` message from `prompt` | VeronexNative entry — no message history |
 
 ---
 
 ## Related Documents
 
 - **Provider registration, routing, health**: `docs/llm/providers/llama-server.md`
-- **llama-server model sync**: `docs/llm/providers/llama-server-models.md`
+- **Modelfile registry / install pipeline**: `docs/llm/providers/llama-server-models.md`
 - **Capacity / concurrency**: `docs/llm/inference/capacity.md`
+- **ProcessManager + IdleManager lifecycle**: `docs/llm/flows/process-manager.md`

@@ -231,7 +231,7 @@ for the full state machine.
 
 | Phase | Method | Effect |
 |-------|--------|--------|
-| 1 — Lifecycle | `provider.ensure_ready(model)` | Probes load (warm hit / coalesce / cold-load via zero-prompt `POST /api/generate`); updates VramPool |
+| 1 — Lifecycle | `provider.ensure_ready(model)` | Coalesces concurrent loads on a per-(provider, model) slot; cold path delegates to `ProcessManager::ensure_running` (agent `/spawn` + `NodeClient.health` poll) and warms the AIMD admission window |
 | 2 — Inference | `provider.stream_tokens(&job)` | Token streaming, only after Phase 1 success |
 
 `LlmProviderPort: InferenceProviderPort + ModelLifecyclePort` (blanket impl in

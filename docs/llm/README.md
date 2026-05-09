@@ -13,7 +13,7 @@
 | Architecture | `policies/architecture.md` | hexagonal, ports, adapters, layers, AppState, dependency rule |
 | Code Patterns (Rust) | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, DashMap, Valkey Lua |
 | ID & API Key Policy | `policies/id-encoding.md` | UUIDv7 DB, base62 public IDs, prefix registry, BLAKE2b-256 API key hash |
-| Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, Tailwind v4 |
+| Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, verodesign (vds-* utilities) |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
 | Testing Strategy | `policies/testing-strategy.md` | testing trophy, purity, proptest, cargo-mutants, OpenAPI schema, layer responsibility |
 | Terminology | `policies/terminology.md` | provider, provider_type, naming conventions |
@@ -68,7 +68,7 @@
 | llama-server | `providers/llama-server.md` | LlmProvider, VRAM routing, DynamicProviderRouter, health_checker |
 | llama-server Allocation | `providers/llama-server-allocation.md` | end-to-end automatic allocation flow, scheduling logic |
 | llama-server Implementation | `providers/llama-server-impl.md` | LlamaServerAdapter, streaming protocol, num_ctx, format conversion |
-| llama-server Models | `providers/llama-server-models.md` | llama_server_models, llama_server_sync_jobs, LlamaServerModelRepository, model-aware routing |
+| llama-server Models | `providers/llama-server-models.md` | Modelfile registry (`/v1/admin/models`), CAS install pipeline, model-aware routing via `provider_selected_models` |
 | Gemini | `providers/gemini.md` | GeminiRateLimitPolicy, RPM, RPD, pick_gemini_provider, tier routing |
 | Gemini Models | `providers/gemini-models.md` | gemini_sync_config, gemini_models, provider_selected_models, UPSERT |
 | Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, NodeMetrics, ServerMetricsPoint, API endpoints |
@@ -99,7 +99,7 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Design System | `frontend/design-system.md` | brand, tokens.css, Tailwind v4, nav sidebar, theme, DataTable, state management |
+| Design System | `frontend/design-system.md` | brand, --vds-theme-* tokens, verodesign white-box (no Tailwind), nav sidebar, DataTable |
 | Design System i18n | `frontend/design-system-i18n.md` | i18n, locale config, timezone provider, date formatting, translation workflow |
 | Design System Components | `frontend/design-system-components.md` | login page, auth guard, API client, status colors, auth-cookie session |
 | Design System Component Patterns | `frontend/design-system-components-patterns.md` | provider taxonomy, network flow viz, accounts page, dialogs, hooks, 2-step registration |
@@ -148,14 +148,14 @@
 | Job Event Pipeline Steps | `flows/job-event-pipeline-steps.md` | submit, cancel, stream, run_job step diagrams |
 | Authentication | `flows/auth.md` | API key BLAKE2b, JWT HS256, InferCaller dual-auth, rate limit, MCP ACL, provider ACL |
 | MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
-| Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
+| Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, ProcessManager (lazy spawn), IdleManager TTL reap, circuit breaker |
 | Thermal Protection | `flows/thermal.md` | Normal→Soft→Hard→Cooldown→RampUp, forced drain, 60s/90s watchdog |
 | Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, llama-server, OTLP, dynamic sharding, KEDA |
 | Job Streaming | `flows/streaming.md` | SSE fan-out, job event streaming, stats streaming, pub/sub |
 | Multi-Instance Pub/Sub | `flows/pubsub-relay.md` | multi-instance relay, Valkey pub/sub, cross-instance fan-out |
 | Crash Recovery & Reaping | `flows/reaper.md` | crash recovery, job reaping, startup recovery, pending jobs |
 | Queue Maintenance | `flows/queue-maintenance.md` | promote_overdue, demand_resync, queue_wait_cancel, processing_reaper |
-| Placement Planner | `flows/placement-planner.md` | model auto-scaling, load_model, evict, placement score, VRAM fit |
+| Process Manager | `flows/process-manager.md` | ensure_running, IdleManager TTL reaper, ActivityTracker, AIMD admission |
 | Context Compression | `flows/context-compression.md` | context window, token budget, compress_context, sliding window |
 
 ---
@@ -170,8 +170,8 @@
 | Data Fetching | `research/frontend/data-fetching.md` | verified |
 | Next.js 16 | `research/frontend/nextjs.md` | verified |
 | Next.js 15/16 Breaking Changes | `research/frontend/nextjs-breaking-changes.md` | verified |
-| Tailwind v4 | `research/frontend/tailwind.md` | verified |
-| Tailwind v4 2026 Updates | `research/frontend/tailwind-2026.md` | verified |
+| Tailwind v4 (historical, pre-verodesign migration) | `research/frontend/tailwind.md` | superseded |
+| Tailwind v4 2026 (historical, pre-verodesign migration) | `research/frontend/tailwind-2026.md` | superseded |
 | TanStack Query | `research/frontend/tanstack-query.md` | verified |
 | TanStack Query Advanced | `research/frontend/tanstack-query-advanced.md` | verified |
 | Rust / Axum | `research/backend/rust-axum.md` | verified |

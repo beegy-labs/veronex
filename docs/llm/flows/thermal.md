@@ -80,20 +80,18 @@ Immediate effect:
   └── all new requests blocked
       active in-flight jobs continue (not immediately cancelled)
 
-Placement planner watchdog (5s tick):
-  │
-  ├── active_requests == 0?
-  │     └── → set_cooldown() immediately
-  │
-  ├── elapsed ≥ 60s && active > 0?
-  │     └── thermal_drain.cancel_jobs_for_provider(provider_id)
-  │           └── notifies cancel_notify for all assigned jobs
-  │                 jobs receive cancellation → finish early
-  │                 VramPermits dropped → active_count → 0
-  │                 → next tick: set_cooldown()
-  │
-  └── elapsed ≥ 90s?
-        └── warn!(drain stalled — provider may be stuck)
+Hard → Cooldown watchdog: currently NOT wired in the post-Ollama
+process_manager build. `ThermalPort::set_cooldown` and
+`ThermalDrainPort::cancel_jobs_for_provider` still exist on the trait
++ adapters; the legacy 5s placement_planner that drove them was deleted
+along with the rest of the Ollama-era preload/evict path. Re-wiring
+into the IdleManager tick (or a dedicated thermal-watchdog task) is
+tracked under Phase 4 follow-up.
+
+Until then, Hard state is sticky: providers stuck in Hard need either
+`ProcessManager.stop()` (admin) or temperature drop below
+`hysteresis_below`, which the live thermal monitor already handles for
+the hardware-recovery path.
 ```
 
 ---
@@ -155,6 +153,5 @@ thermal.global_perf_factor():
 | `domain/enums.rs` | `ThrottleLevel` enum definition |
 | `application/ports/outbound/thermal_port.rs` | `ThermalPort` trait |
 | `application/ports/outbound/thermal_drain_port.rs` | `ThermalDrainPort` trait |
-| `application/use_cases/placement_planner.rs` | Hard gate watchdog, drain trigger |
 | `application/use_cases/inference/use_case.rs` | `ThermalDrainAdapter` impl |
-| `infrastructure/outbound/thermal/` | Thermal monitor, threshold config |
+| `infrastructure/outbound/capacity/thermal.rs` | Thermal monitor, threshold config (Hard→Cooldown watchdog: see note above) |

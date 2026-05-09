@@ -124,7 +124,7 @@ Workers hold a lease on `queue:active` (ZSET, score = deadline_ms) and renew eve
 | **Scheduler** | Valkey (Lua ZSET priority queue + lease ZSET) · PostgreSQL 18 |
 | **MCP / Embedding** | Rust + fastembed · multilingual-e5-large · SearXNG |
 | **Analytics** | ClickHouse · OTel Collector · Redpanda |
-| **Dashboard** | Next.js 16 · React 19 · Tailwind v4 · shadcn/ui |
+| **Dashboard** | Next.js 16 · React 19 · verodesign (vds-* utilities, white-box CSS tokens) |
 | **Deploy** | Docker Compose · Kubernetes (Helm + KEDA) |
 
 ---

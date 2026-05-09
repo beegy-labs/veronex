@@ -84,7 +84,7 @@ messages: JsonValue | null,
 tools: JsonValue | null, 
 /**
  * The HTTP path of the inbound request that created this job.
- * e.g. "/v1/chat/completions", "/api/chat", "/v1beta/models/gemini-2.0-flash:generateContent"
+ * e.g. "/v1/chat/completions", "/v1beta/models/gemini-2.0-flash:generateContent"
  * Not set for jobs recovered on startup.
  */
 request_path: string | null, 

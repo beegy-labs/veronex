@@ -89,13 +89,13 @@ POST   /v1/providers/sync               -> 202 { synced_count }
        Triggers sync for all llama-server providers
 
 GET    /v1/providers/{id}/models
-       llama-server -> GET /api/tags (live)
+       llama-server -> Modelfile registry filtered by provider_selected_models
        Gemini -> 400 "Use GET /v1/gemini/models"
 
 GET    /v1/providers/{id}/key         -> { api_key } (decrypted, admin only)
 
 GET    /v1/providers/{id}/selected-models
-       llama-server -> per-provider list (llama_server_models) merged with provider_selected_models
+       llama-server -> Modelfile registry rows merged with provider_selected_models
                default is_enabled = true for rows not yet in selection table
        Gemini -> global gemini_models merged with provider_selected_models (default false)
 
@@ -103,15 +103,23 @@ PATCH  /v1/providers/{id}/selected-models/{model_name}
        { is_enabled: bool } -> 204   (shared handler, same table)
 ```
 
-### Global Model Pool ((removed: legacy llama-server-models handlers))
+### Modelfile Registry (replaces legacy global model pool)
 
 ```
-GET  /v1/llama-server/models         -> { models: ["llama3", "mistral", ...] }  // distinct, sorted
-POST /v1/llama-server/models/sync    -> 202 { job_id, status: "running" }       // async, no retry
-GET  /v1/admin/sync-status    -> LlamaServerSyncJob (progress + per-provider results)
+GET    /v1/admin/models                            -> [Modelfile, ...]
+POST   /v1/admin/models                            -> register a Modelfile
+GET    /v1/admin/models/{id}                       -> Modelfile detail
+PATCH  /v1/admin/models/{id}                       -> update metadata
+DELETE /v1/admin/models/{id}                       -> deregister
+POST   /v1/admin/models/{id}/promote               -> promote draft -> ready
+GET    /v1/admin/models/{id}/install/attempts      -> install history
+POST   /v1/admin/models/{id}/install/{retry,cancel}
+GET    /v1/admin/models/{id}/install/stream        -> SSE install progress
+GET    /v1/models, GET /v1/models/{id}             -> OpenAI-compat lookup
 ```
 
-See `docs/llm/providers/llama-server-models.md` for full spec.
+The legacy `POST /v1/llama-server/models/sync` (Ollama-era global scrape)
+was removed. See `docs/llm/providers/llama-server-models.md`.
 
 ### Request Structs
 
@@ -156,23 +164,21 @@ SQL for PATCH: `COALESCE($3, api_key_encrypted)` preserves existing key when `ap
 
 ## Background Loops
 
-### Sync Loop (run_sync_loop — analyzer.rs)
-- Tick: 30s, Cooldown: `capacity_settings.sync_interval_secs` (default 300s)
-- Manual trigger: `POST /v1/providers/sync` (ignores cooldown)
-- Per llama-server provider:
-  1. `/api/version` → health check
-  2. `/api/tags` → model sync (DB + Valkey cache)
-  3. `/api/ps` → loaded model weight measurement
-  4. `/api/show` → architecture parsing (hybrid Mamba+Attention support)
-  5. throughput stats (PG) → KV per request calculation
-  6. AIMD → max_concurrent adjustment
-  7. LLM batch → all-model combination analysis (sample ≥ 10)
-  8. DB persist → model_vram_profiles
-- Gemini: not included (no VRAM concept)
+### Sync Loop (post-Ollama, narrowed scope)
+- The legacy `analyzer::run_sync_loop` (full per-provider scrape of
+  `/api/version` + `/api/tags` + `/api/ps` + `/api/show`) was deleted
+  with the Ollama removal — llama-server has no equivalent endpoints.
+- Per-provider state now flows from two sources:
+  - `veronex-llm-agent` heartbeats (probe + node capacity)
+  - On-demand health probe via `NodeClient.health(port)` during
+    `ProcessManager::ensure_running`
+- AIMD `max_concurrent` is still adjusted per-model from live request
+  outcomes (`AimdController` + `slo` modules), now driven by the
+  in-process admission gate rather than a sync loop.
 
 ### Health Checker (health_checker.rs)
 - Interval: 30 seconds
-- llama-server only: `GET {url}/api/version` (timeout: `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` = 5s) → 200 (background auto-check)
+- llama-server: `GET {url}/health` (timeout: `LLAMA_SERVER_HEALTH_CHECK_TIMEOUT` = 5s) → 200 (background auto-check)
 - Gemini: **not auto-checked** — `GET /v1beta/models?pageSize=1` + `x-goog-api-key` header, called only on manual sync or per-row healthcheck button
 - After hw_metrics load: `thermal.update(provider_id, temp_c)` → Normal/Soft/Hard
   - Sets/removes `veronex:throttle:{provider_id}` in Valkey (TTL 360s)

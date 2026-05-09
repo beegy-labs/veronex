@@ -125,7 +125,7 @@ When `VALKEY_URL` is not set:
 |---------|--------------------------|
 | Job lifecycle / queue | `TPM_ESTIMATED_TOKENS`, `JOB_CLEANUP_DELAY`, `JOB_OWNER_TTL_SECS`, `LEASE_ATTEMPTS_TTL_SECS`, `INSTANCE_HEARTBEAT_TTL_SECS` |
 | MCP phase (coupled with `llama-server::lifecycle`) | `MCP_LIFECYCLE_LOAD_TIMEOUT`, `MCP_TOKEN_FIRST_TIMEOUT`, `MCP_STREAM_IDLE_TIMEOUT`, `MCP_ROUND_TOTAL_TIMEOUT` |
-| Cache TTLs | `API_KEY_CACHE_TTL`, `LAB_SETTINGS_CACHE_TTL`, `CONV_CACHE_TTL_SECS`, `MCP_KEY_CACHE_TTL_SECS`, `MCP_TOOLS_SUMMARY_TTL_SECS`, `(removed)`, `MODELS_CACHE_TTL_SECS`, `SERVICE_HEALTH_TTL_SECS` |
+| Cache TTLs | `API_KEY_CACHE_TTL`, `LAB_SETTINGS_CACHE_TTL`, `CONV_CACHE_TTL_SECS`, `MCP_KEY_CACHE_TTL_SECS`, `MCP_TOOLS_SUMMARY_TTL_SECS`, `MODELS_CACHE_TTL_SECS`, `SERVICE_HEALTH_TTL_SECS` |
 | Auth / rate limiting | `PASSWORD_RESET_TTL_SECS`, `LOGIN_ATTEMPTS_WINDOW_SECS`, `RATE_LIMIT_RETRY_AFTER_SECS`, `KEY_TIER_PAID`, `GEMINI_TIER_FREE`, `API_KEY_PREFIX` |
 | Placement / scaleout | `PRELOAD_LOCK_TTL_SECS`, `SCALEOUT_DECISION_TTL_SECS` |
 | Valkey keys (canonical fns) | `job_owner_key`, `conversation_record_key`, `heartbeat_key`, `ratelimit_tpm_key`, `preload_lock_key`, `scaleout_decision_key`, `demand_key`, `mcp_*_key`, … |
