@@ -16,8 +16,12 @@
 
 pub mod activity_tracker;
 pub mod agent_client;
+pub mod idle_manager;
+pub mod manager;
 pub mod port_pool;
 
 pub use activity_tracker::{ActivityTracker, RequestGuard};
 pub use agent_client::{HttpNodeClient, NodeClient, SpawnRequest, SpawnResponse, StubNodeClient};
+pub use idle_manager::{IdleManager, ProviderOverrideFn, DEFAULT_TTL_SECONDS};
+pub use manager::{ProcessManager, ProcessState, RunningProcess};
 pub use port_pool::{PortLease, PortPool};
