@@ -65,6 +65,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
         provider_type: &ProviderType,
         model_name: &str,
         tier_filter: Option<&str>,
+        prefix_hint: Option<&str>,
     ) -> Result<(Arc<dyn LlmProviderPort>, Uuid, bool)> {
         let cfg = pick_best_provider(
             &*self.registry,
@@ -75,6 +76,7 @@ impl ProviderDispatchPort for ConcreteProviderDispatch {
             model_name,
             self.valkey_pool.as_ref(),
             tier_filter,
+            prefix_hint,
         )
         .await?;
         let provider_id = cfg.id;

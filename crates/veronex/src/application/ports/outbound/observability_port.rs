@@ -13,7 +13,7 @@ pub struct InferenceEvent {
     pub api_key_id: Option<Uuid>, // present after rate-limiting PR
     pub tenant_id: String,        // empty string if unknown
     pub model_name: String,
-    pub provider_type: String,    // "ollama" | "gemini"
+    pub provider_type: String,    // "ollama" | "gemini" | "llama_server"
     pub prompt_tokens: u32,       // 0 if unknown (streaming)
     pub completion_tokens: u32,   // count of token events
     pub latency_ms: u32,          // completed_at - started_at

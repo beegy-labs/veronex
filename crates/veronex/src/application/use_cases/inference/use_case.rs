@@ -491,8 +491,14 @@ impl InferenceUseCase for InferenceUseCaseImpl {
             (entry.job.clone(), entry.gemini_tier.clone())
         };
 
+        let prefix_hint = job.conversation_id.map(|u| u.to_string());
         let (adapter, pid, is_free) = self.provider_dispatch
-            .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
+            .pick_and_build(
+                &job.provider_type,
+                job.model_name.as_str(),
+                gemini_tier.as_deref(),
+                prefix_hint.as_deref(),
+            )
             .await?;
 
         super::runner::run_job(

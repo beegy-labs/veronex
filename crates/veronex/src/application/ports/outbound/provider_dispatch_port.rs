@@ -30,12 +30,17 @@ pub trait ProviderDispatchPort: Send + Sync {
 
     /// Pick the best provider for the given type and model, then build an adapter.
     ///
+    /// `prefix_hint` is an optional affinity key (typically the conversation
+    /// ID) used by the LlamaServer router to keep the prompt cache warm.
+    /// Other backends ignore it.
+    ///
     /// Returns `(adapter, provider_id, is_free_tier)`.
     async fn pick_and_build(
         &self,
         provider_type: &ProviderType,
         model_name: &str,
         tier_filter: Option<&str>,
+        prefix_hint: Option<&str>,
     ) -> Result<(Arc<dyn LlmProviderPort>, Uuid, bool)>;
 
     /// Increment Gemini RPM/RPD rate-limit counters after a successful inference.

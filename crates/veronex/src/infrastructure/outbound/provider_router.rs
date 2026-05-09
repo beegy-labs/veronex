@@ -150,6 +150,13 @@ pub async fn increment_gemini_counters(
 ///     requested model is NOT enabled, that paid provider is skipped.
 ///
 /// Ollama: picks the server with the most available VRAM.
+///
+/// `prefix_hint` is an optional caller-supplied affinity key (typically the
+/// `conversation_id` as a string). When set, the LlamaServer branch biases
+/// toward the same provider for every request in the same conversation so
+/// the llama.cpp prompt-cache stays warm — up to a 1000× score multiplier
+/// over `slots_idle`. Saturated providers (`slots_idle == 0`) are still
+/// excluded so affinity can never overload a single instance.
 #[allow(clippy::too_many_arguments)]
 pub async fn pick_best_provider(
     registry: &dyn LlmProviderRegistry,
@@ -160,6 +167,7 @@ pub async fn pick_best_provider(
     model_name: &str,
     valkey: Option<&fred::clients::Pool>,
     tier_filter: Option<&str>,
+    prefix_hint: Option<&str>,
 ) -> Result<LlmProvider> {
     let all = registry.list_all().await?;
     let candidates: Vec<LlmProvider> = all
@@ -239,36 +247,83 @@ pub async fn pick_best_provider(
         }
 
         ProviderType::LlamaServer => {
-            // Phase 1: pick the candidate with the most idle slots reported by
-            // GET /health. Health probes execute concurrently; failed probes
-            // contribute score 0 and remain candidates only if no other does.
-            // Phase 1-3 will extend this with prefix-aware scoring; Phase 4
-            // adds AIMD composite signal.
-            use futures::future::join_all;
-            let client = reqwest::Client::new();
-            let scored: Vec<(LlmProvider, i64)> = join_all(
-                candidates.into_iter().map(|b| {
-                    let client = client.clone();
-                    let url = b.url.clone();
-                    async move {
-                        let score: i64 = match crate::infrastructure::outbound::llama_server::health::get_health(&client, &url).await {
-                            Ok(s) if s.is_ok() => s.slots_idle as i64,
-                            _ => 0,
-                        };
-                        (b, score)
-                    }
-                }),
-            )
-            .await;
-            scored
-                .into_iter()
-                .max_by_key(|(_, v)| *v)
-                .map(|(b, _)| b)
-                .ok_or_else(|| {
-                    anyhow::anyhow!("no llama-server provider with idle slots")
-                })
+            pick_llama_server_provider(candidates, prefix_hint).await
         }
     }
+}
+
+/// Score a llama-server candidate set with prefix-aware affinity.
+///
+/// Score formula: `slots_idle * SLOT_WEIGHT + prefix_match * MATCH_WEIGHT`
+/// with a hard cutoff at `slots_idle == 0` (saturated providers excluded).
+/// `MATCH_WEIGHT >> SLOT_WEIGHT` so any matched candidate with at least one
+/// idle slot beats any non-matched candidate; `slots_idle` is just a
+/// tiebreaker among matches and among non-matches. This keeps llama.cpp's
+/// prompt cache warm for a conversation without ever overloading a single
+/// instance.
+///
+/// Affinity strategy: when `prefix_hint` is `Some`, hash it and pick the
+/// candidate at `hash % candidates.len()` (after sorting by ID for
+/// determinism). Provider-set churn (add/remove) reshuffles the mapping
+/// for *new* conversations only; in-flight ones stay routed to whatever
+/// pick_best_provider returned the first time, since callers persist the
+/// `provider_id` on the job.
+async fn pick_llama_server_provider(
+    candidates: Vec<LlmProvider>,
+    prefix_hint: Option<&str>,
+) -> Result<LlmProvider> {
+    use futures::future::join_all;
+    const SLOT_WEIGHT: i64 = 1;
+    const MATCH_WEIGHT: i64 = 1000;
+
+    let mut sorted = candidates;
+    sorted.sort_by_key(|b| b.id);
+
+    let preferred_id: Option<uuid::Uuid> = prefix_hint
+        .filter(|h| !h.is_empty())
+        .filter(|_| !sorted.is_empty())
+        .map(|h| {
+            let idx = (hash_u64(h) as usize) % sorted.len();
+            sorted[idx].id
+        });
+
+    let client = reqwest::Client::new();
+    let scored: Vec<(LlmProvider, i64)> = join_all(sorted.into_iter().map(|b| {
+        let client = client.clone();
+        let url = b.url.clone();
+        let is_match = preferred_id == Some(b.id);
+        async move {
+            let slots = match crate::infrastructure::outbound::llama_server::health::get_health(&client, &url).await {
+                Ok(s) if s.is_ok() => s.slots_idle as i64,
+                _ => 0,
+            };
+            let score = if slots == 0 {
+                0
+            } else {
+                slots * SLOT_WEIGHT + if is_match { MATCH_WEIGHT } else { 0 }
+            };
+            (b, score)
+        }
+    }))
+    .await;
+
+    scored
+        .into_iter()
+        .filter(|(_, v)| *v > 0)
+        .max_by_key(|(_, v)| *v)
+        .map(|(b, _)| b)
+        .ok_or_else(|| anyhow::anyhow!("no llama-server provider with idle slots"))
+}
+
+/// Stable 64-bit hash for prefix affinity. We use the standard library's
+/// `DefaultHasher` (SipHash-1-3 in current Rust) — adequate for routing
+/// since we need uniformity, not cryptographic guarantees, and the input
+/// space (conversation IDs) is non-adversarial.
+fn hash_u64(s: &str) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 async fn pick_gemini_provider(
@@ -631,5 +686,137 @@ mod tests {
     fn validate_url_allows_localhost() {
         assert!(validate_provider_url("http://localhost:11434").is_ok());
         assert!(validate_provider_url("http://192.168.1.10:11434").is_ok());
+    }
+
+    // ── Phase 1-3: prefix-aware llama-server routing ──────────────────────
+
+    fn make_llama_provider(url: &str) -> LlmProvider {
+        LlmProvider {
+            id: Uuid::now_v7(),
+            name: "llama".into(),
+            provider_type: crate::domain::enums::ProviderType::LlamaServer,
+            url: url.into(),
+            api_key_encrypted: None,
+            total_vram_mb: 0,
+            gpu_index: None,
+            server_id: None,
+            is_free_tier: false,
+            num_parallel: 4,
+            status: LlmProviderStatus::Online,
+            registered_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Same hint always picks the same candidate from a stable set —
+    /// the conversation-affinity contract.
+    #[test]
+    fn hash_u64_is_deterministic() {
+        let h1 = hash_u64("conversation-abc");
+        let h2 = hash_u64("conversation-abc");
+        let h3 = hash_u64("conversation-xyz");
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
+    }
+
+    /// Empty candidate set surfaces the "no provider with idle slots" error.
+    #[tokio::test]
+    async fn pick_llama_empty_candidates_errors() {
+        let r = pick_llama_server_provider(vec![], None).await;
+        assert!(r.is_err());
+    }
+
+    /// All candidates saturated (slots_idle=0) → no winner.
+    /// Drives every probe to a non-existent URL so health resolves to score 0.
+    #[tokio::test]
+    async fn pick_llama_all_saturated_errors() {
+        let candidates = vec![
+            make_llama_provider("http://127.0.0.1:1"),
+            make_llama_provider("http://127.0.0.1:2"),
+        ];
+        let r = pick_llama_server_provider(candidates, None).await;
+        assert!(r.is_err());
+    }
+
+    /// Match-bonus dominates `slots_idle` so kv-cache locality wins over a
+    /// modestly less busy peer. Idle-slot ties still go to the matched one.
+    #[tokio::test]
+    async fn pick_llama_match_beats_higher_slots() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        // Two servers: matched=1 idle slot, unmatched=8 idle slots.
+        let matched_srv = MockServer::start().await;
+        let unmatched_srv = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok", "slots_idle": 1, "slots_processing": 7,
+            })))
+            .mount(&matched_srv)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok", "slots_idle": 8, "slots_processing": 0,
+            })))
+            .mount(&unmatched_srv)
+            .await;
+
+        // Make the providers' IDs deterministic so we can engineer the hint
+        // to land on the lower-slot one.
+        let mut a = make_llama_provider(&matched_srv.uri());
+        let mut b = make_llama_provider(&unmatched_srv.uri());
+        a.id = Uuid::from_u128(1);
+        b.id = Uuid::from_u128(2);
+
+        // The router sorts candidates by id, then maps `hash(hint) % len`
+        // to pick the affinity target. Try a couple of hints and verify
+        // that whichever URL is returned, it's the matched one for that hint.
+        for hint in ["conv-a", "conv-b", "conv-c", "conv-d"] {
+            let picked = pick_llama_server_provider(vec![a.clone(), b.clone()], Some(hint))
+                .await
+                .unwrap();
+            // Recompute the affinity locally to know who *should* win.
+            let mut sorted = vec![a.clone(), b.clone()];
+            sorted.sort_by_key(|p| p.id);
+            let idx = (hash_u64(hint) as usize) % sorted.len();
+            let expected_id = sorted[idx].id;
+            assert_eq!(
+                picked.id, expected_id,
+                "hint {hint:?} should route to id {expected_id} (matched server)",
+            );
+        }
+    }
+
+    /// Without a hint the router falls back to the highest-`slots_idle`
+    /// candidate — same behaviour as before Phase 1-3.
+    #[tokio::test]
+    async fn pick_llama_no_hint_picks_max_slots() {
+        use wiremock::matchers::{method, path};
+        use wiremock::{Mock, MockServer, ResponseTemplate};
+
+        let lo = MockServer::start().await;
+        let hi = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok", "slots_idle": 1,
+            })))
+            .mount(&lo)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/health"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "status": "ok", "slots_idle": 4,
+            })))
+            .mount(&hi)
+            .await;
+
+        let candidates = vec![
+            make_llama_provider(&lo.uri()),
+            make_llama_provider(&hi.uri()),
+        ];
+        let picked = pick_llama_server_provider(candidates, None).await.unwrap();
+        assert_eq!(picked.url, hi.uri());
     }
 }

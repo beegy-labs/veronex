@@ -304,8 +304,14 @@ pub(super) fn spawn_job_direct(
 ) {
     tokio::spawn(
         async move {
+            let prefix_hint = job.conversation_id.map(|u| u.to_string());
             let (adapter, provider_id, is_free) = match provider_dispatch
-                .pick_and_build(&job.provider_type, job.model_name.as_str(), gemini_tier.as_deref())
+                .pick_and_build(
+                    &job.provider_type,
+                    job.model_name.as_str(),
+                    gemini_tier.as_deref(),
+                    prefix_hint.as_deref(),
+                )
                 .await
             {
                 Ok(r) => r,
