@@ -415,6 +415,15 @@ pub(crate) fn make_app() -> axum::Router {
         local_pv: None,
         llm_node_repo: None,
         system_settings_repo: None,
+        process_manager: crate::infrastructure::outbound::process_manager::ProcessManager::new(
+            crate::infrastructure::outbound::process_manager::ActivityTracker::new(),
+            crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new(),
+        ),
+        activity_tracker: crate::infrastructure::outbound::process_manager::ActivityTracker::new(),
+        aimd_registry: crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new(),
+        aimd_admission: crate::infrastructure::outbound::capacity::admission::AimdAdmission::new(
+            crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new(),
+        ),
     };
     // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()

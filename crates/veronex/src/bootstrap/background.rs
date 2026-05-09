@@ -56,6 +56,8 @@ pub async fn spawn_background_tasks(
     infra: &InfraContext,
     shutdown: &CancellationToken,
     tasks: &mut JoinSet<()>,
+    aimd_admission: veronex::infrastructure::outbound::capacity::admission::AimdAdmission,
+    activity_tracker: veronex::infrastructure::outbound::process_manager::ActivityTracker,
 ) -> BackgroundHandles {
     let thermal = Arc::new(ThermalThrottleMap::new(
         veronex::domain::constants::THERMAL_HARD_COOLDOWN_SECS as u64,
@@ -195,6 +197,8 @@ pub async fn spawn_background_tasks(
         thermal.clone(),
         circuit_breaker.clone(),
         provider_dispatch,
+        aimd_admission,
+        activity_tracker,
         (*job_event_tx).clone(),
         repos.message_store.clone(),
         repos.image_store.clone(),

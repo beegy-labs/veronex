@@ -38,7 +38,10 @@ use crate::application::ports::outbound::install_attempts_log::InstallAttemptsLo
 use crate::application::ports::outbound::llm_node_repository::LlmNodeRepository;
 use crate::application::ports::outbound::modelfile_registry::ModelfileRegistry;
 use crate::application::ports::outbound::system_settings_repository::SystemSettingsRepository;
+use crate::infrastructure::outbound::capacity::admission::AimdAdmission;
+use crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry;
 use crate::infrastructure::outbound::model_store::{BlobStore, InstallOrchestrator, LocalPv};
+use crate::infrastructure::outbound::process_manager::{ActivityTracker, ProcessManager};
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
@@ -178,4 +181,15 @@ pub struct AppState {
     pub llm_node_repo: Option<Arc<dyn LlmNodeRepository>>,
     /// `system_settings` repo — runtime knobs (idle TTL, warmup tokens).
     pub system_settings_repo: Option<Arc<dyn SystemSettingsRepository>>,
+    /// Phase 3 — managed-process orchestrator. Cheap to clone.
+    pub process_manager: ProcessManager,
+    /// Phase 3 — per-provider in-flight + idle tracking. Shared with
+    /// the dispatcher so each request bumps `RequestGuard`.
+    pub activity_tracker: ActivityTracker,
+    /// Phase 4 — AIMD window registry (read by admission, written by
+    /// the analyzer loop).
+    pub aimd_registry: AimdRegistry,
+    /// Phase 4 — admission gate. The dispatcher calls `acquire()`
+    /// before invoking the adapter; `None` from acquire surfaces 503.
+    pub aimd_admission: AimdAdmission,
 }

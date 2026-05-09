@@ -294,6 +294,8 @@ pub(super) fn spawn_job_direct(
     thermal: Arc<dyn ThermalPort>,
     circuit_breaker: Arc<dyn CircuitBreakerPort>,
     provider_dispatch: Arc<dyn ProviderDispatchPort>,
+    aimd_admission: crate::infrastructure::outbound::capacity::admission::AimdAdmission,
+    activity_tracker: crate::infrastructure::outbound::process_manager::ActivityTracker,
     uuid: Uuid,
     job: InferenceJob,
     gemini_tier: Option<String>,
@@ -338,7 +340,21 @@ pub(super) fn spawn_job_direct(
                 Some(p) => p,
                 None => { tracing::warn!(job_id = %uuid, "direct spawn skipped — VRAM unavailable"); return; }
             };
-    
+
+            // Phase 4 — AIMD admission gate. Untracked providers (not
+            // managed by ProcessManager) admit without gating; tracked
+            // ones with full window 503-equivalent skip and the client
+            // retries against another instance.
+            let _admission = match aimd_admission.acquire(provider_id) {
+                Some(g) => g,
+                None => {
+                    tracing::warn!(job_id = %uuid, %provider_id, "AIMD admission denied — window full");
+                    return;
+                }
+            };
+            let _activity = activity_tracker
+                .on_request_start(provider_id, chrono::Utc::now());
+
             match run_job(
                 jobs, adapter, job_repo, message_store, valkey, observability, model_manager,
                 provider_dispatch, uuid, job, Some(provider_id), is_free,

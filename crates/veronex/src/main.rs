@@ -87,6 +87,24 @@ async fn async_main() -> Result<()> {
     // ── Bootstrap super account ────────────────────────────────────
     bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config, &infra.pg_pool).await;
 
+    // ── Phase 3/4 — process manager + AIMD wiring (in-memory) ──────
+    // ProcessManager / AimdRegistry / AimdAdmission / ActivityTracker
+    // are all in-process — `Arc`-of-state, cheap to clone. The
+    // bootstrap loop registers nodes once they're announced.
+    let activity_tracker =
+        veronex::infrastructure::outbound::process_manager::ActivityTracker::new();
+    let aimd_registry =
+        veronex::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new();
+    let aimd_admission =
+        veronex::infrastructure::outbound::capacity::admission::AimdAdmission::new(
+            aimd_registry.clone(),
+        );
+    let process_manager =
+        veronex::infrastructure::outbound::process_manager::ProcessManager::new(
+            activity_tracker.clone(),
+            aimd_registry.clone(),
+        );
+
     // ── Phase 3 — node + system_settings repos (always-on) ─────────
     let llm_node_repo: std::sync::Arc<dyn veronex::application::ports::outbound::llm_node_repository::LlmNodeRepository> =
         std::sync::Arc::new(
@@ -122,6 +140,8 @@ async fn async_main() -> Result<()> {
         &infra,
         &shutdown,
         &mut tasks,
+        aimd_admission.clone(),
+        activity_tracker.clone(),
     )
     .await;
 
@@ -261,8 +281,30 @@ async fn async_main() -> Result<()> {
         blob_store: model_store.blob_store,
         local_pv: model_store.local_pv,
         llm_node_repo: Some(llm_node_repo),
-        system_settings_repo: Some(system_settings_repo),
+        system_settings_repo: Some(system_settings_repo.clone()),
+        process_manager: process_manager.clone(),
+        activity_tracker: activity_tracker.clone(),
+        aimd_registry: aimd_registry.clone(),
+        aimd_admission,
     };
+
+    // ── Phase 3 — IdleManager background loop ──────────────────────
+    {
+        let cancel = shutdown.clone();
+        let idle = veronex::infrastructure::outbound::process_manager::IdleManager::new(
+            activity_tracker.clone(),
+            process_manager.clone(),
+            system_settings_repo,
+            // Per-provider override lookup wires into the cached
+            // provider registry once `LlmProviderRegistry::get` is on
+            // the type-erased trait. Until then we always defer to the
+            // global setting.
+            std::sync::Arc::new(|_| None),
+        );
+        tasks.spawn(async move {
+            idle.run(std::time::Duration::from_secs(5), cancel).await;
+        });
+    }
 
     // ── MCP tool refresh loop ──────────────────────────────────────
     // Periodically refresh tool cache for all connected MCP servers,
