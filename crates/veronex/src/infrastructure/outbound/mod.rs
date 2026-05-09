@@ -10,6 +10,7 @@ pub mod health_checker;
 pub mod hw_metrics;
 pub mod model_manager;
 pub mod observability;
+pub mod llama_server;
 pub mod ollama;
 pub mod persistence;
 pub mod pubsub;

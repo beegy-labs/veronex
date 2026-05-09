@@ -133,6 +133,7 @@ CREATE TABLE llm_providers (
 
 CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
+CREATE UNIQUE INDEX uq_llm_providers_llama_server_url ON llm_providers(url) WHERE provider_type = 'llama_server';
 
 -- ── Conversations ─────────────────────────────────────────────────────────────
 -- source column included (migration 000002)

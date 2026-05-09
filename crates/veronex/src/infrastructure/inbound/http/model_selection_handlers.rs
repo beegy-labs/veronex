@@ -108,6 +108,22 @@ pub async fn list_selected_models(
                 .collect();
             (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
         }
+
+        ProviderType::LlamaServer => {
+            // Phase 1: llama-server has no per-provider model registry exposed
+            // here — model selection arrives via Phase 2 Modelfile registry
+            // (`/v1/admin/models`). Return any selections recorded in the
+            // generic table without a discovery list.
+            let dtos: Vec<SelectedModelDto> = sel_map
+                .into_iter()
+                .map(|(model_name, is_enabled)| SelectedModelDto {
+                    model_name,
+                    is_enabled,
+                    synced_at: Utc::now(),
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
+        }
     }
 }
 

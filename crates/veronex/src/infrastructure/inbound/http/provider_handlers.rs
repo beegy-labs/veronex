@@ -64,6 +64,15 @@ async fn fetch_models_live(client: &reqwest::Client, provider: &LlmProvider) -> 
 
             gemini_helpers::fetch_gemini_models(client, api_key).await
         }
+
+        ProviderType::LlamaServer => {
+            // Phase 1: external mode — llama-server runs ONE model per process
+            // and does not expose a `/api/tags`-style discovery endpoint. The
+            // canonical model registry is Phase 2 (`veronex_models` table).
+            // Return an empty list so cache writes are no-ops; admin pages
+            // should source models from the Modelfile registry instead.
+            Ok(Vec::new())
+        }
     }
 }
 
@@ -284,8 +293,10 @@ pub async fn register_provider(
     Json(req): Json<RegisterProviderRequest>,
 ) -> impl IntoResponse {
     let Some(provider_type) = parse_provider_type(&req.provider_type) else {
-        return AppError::BadRequest("provider_type must be 'ollama' or 'gemini'".into())
-            .into_response();
+        return AppError::BadRequest(
+            "provider_type must be 'ollama', 'gemini', or 'llama_server'".into(),
+        )
+        .into_response();
     };
 
     // Validate required fields per provider type.
@@ -308,6 +319,20 @@ pub async fn register_provider(
                     .into_response();
             }
         }
+        ProviderType::LlamaServer => {
+            // Phase 1 external mode: operator supplies a reachable HTTP base
+            // URL pointing at an already-running llama-server. No api_key.
+            let url = req.url.as_deref().unwrap_or("");
+            if url.is_empty() {
+                return AppError::BadRequest(
+                    "url is required for llama_server providers".into(),
+                )
+                .into_response();
+            }
+            if let Err(e) = validate_provider_url(url) {
+                return e.into_response();
+            }
+        }
     }
 
     let provider = LlmProvider {
@@ -327,11 +352,16 @@ pub async fn register_provider(
 
     // Health check before persisting.
     let initial_status = check_provider(&state.http_client, &provider).await;
-    if matches!(provider_type, ProviderType::Ollama)
-        && initial_status == LlmProviderStatus::Offline
+    if matches!(
+        provider_type,
+        ProviderType::Ollama | ProviderType::LlamaServer
+    ) && initial_status == LlmProviderStatus::Offline
     {
-        return AppError::BadGateway("Ollama is not reachable at the given URL".into())
-            .into_response();
+        return AppError::BadGateway(format!(
+            "{} is not reachable at the given URL",
+            provider_type.as_str()
+        ))
+        .into_response();
     }
     let provider = LlmProvider {
         status: initial_status,

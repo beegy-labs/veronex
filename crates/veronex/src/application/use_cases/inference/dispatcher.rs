@@ -155,6 +155,13 @@ fn score_and_claim(
                 } else { base }
             }
             ProviderType::Gemini => i64::MAX,
+            ProviderType::LlamaServer => {
+                // Phase 1 external mode: VRAM is opaque to Veronex. Treat as
+                // effectively-unlimited so the dispatcher never blocks; the
+                // router's slots-aware scoring (Phase 1-3) is what actually
+                // selects between candidates.
+                i64::MAX
+            }
         };
         scored.push((b, avail));
     }

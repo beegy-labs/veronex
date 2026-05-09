@@ -165,10 +165,11 @@ impl std::str::FromStr for JobSource {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export, export_to = "../../../web/lib/generated/")]
-#[serde(rename_all = "lowercase")]
+#[serde(rename_all = "snake_case")]
 pub enum ProviderType {
     Ollama,
     Gemini,
+    LlamaServer,
 }
 
 impl ProviderType {
@@ -176,6 +177,7 @@ impl ProviderType {
         match self {
             Self::Ollama => "ollama",
             Self::Gemini => "gemini",
+            Self::LlamaServer => "llama_server",
         }
     }
 
@@ -184,6 +186,7 @@ impl ProviderType {
         match self {
             Self::Ollama => "ollama_provider",
             Self::Gemini => "gemini_provider",
+            Self::LlamaServer => "llama_server_provider",
         }
     }
 }
@@ -194,6 +197,7 @@ impl std::str::FromStr for ProviderType {
         match s {
             "ollama" => Ok(Self::Ollama),
             "gemini" => Ok(Self::Gemini),
+            "llama_server" => Ok(Self::LlamaServer),
             other => Err(format!("unknown provider type: {other}")),
         }
     }
@@ -401,11 +405,19 @@ mod tests {
 
     #[test]
     fn provider_type_roundtrip() {
-        for pt in &[ProviderType::Ollama, ProviderType::Gemini] {
+        for pt in &[ProviderType::Ollama, ProviderType::Gemini, ProviderType::LlamaServer] {
             let s = pt.as_str();
             let parsed: ProviderType = s.parse().unwrap();
             assert_eq!(*pt, parsed);
         }
+    }
+
+    #[test]
+    fn provider_type_serde_snake_case() {
+        let s = serde_json::to_string(&ProviderType::LlamaServer).unwrap();
+        assert_eq!(s, "\"llama_server\"");
+        let pt: ProviderType = serde_json::from_str("\"llama_server\"").unwrap();
+        assert_eq!(pt, ProviderType::LlamaServer);
     }
 
     #[test]
@@ -463,5 +475,6 @@ mod tests {
     fn provider_type_resource_type() {
         assert_eq!(ProviderType::Ollama.resource_type(), "ollama_provider");
         assert_eq!(ProviderType::Gemini.resource_type(), "gemini_provider");
+        assert_eq!(ProviderType::LlamaServer.resource_type(), "llama_server_provider");
     }
 }

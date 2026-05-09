@@ -237,6 +237,37 @@ pub async fn pick_best_provider(
                 .map(|(b, _)| b)
                 .ok_or_else(|| anyhow::anyhow!("no Ollama provider with available VRAM"))
         }
+
+        ProviderType::LlamaServer => {
+            // Phase 1: pick the candidate with the most idle slots reported by
+            // GET /health. Health probes execute concurrently; failed probes
+            // contribute score 0 and remain candidates only if no other does.
+            // Phase 1-3 will extend this with prefix-aware scoring; Phase 4
+            // adds AIMD composite signal.
+            use futures::future::join_all;
+            let client = reqwest::Client::new();
+            let scored: Vec<(LlmProvider, i64)> = join_all(
+                candidates.into_iter().map(|b| {
+                    let client = client.clone();
+                    let url = b.url.clone();
+                    async move {
+                        let score: i64 = match crate::infrastructure::outbound::llama_server::health::get_health(&client, &url).await {
+                            Ok(s) if s.is_ok() => s.slots_idle as i64,
+                            _ => 0,
+                        };
+                        (b, score)
+                    }
+                }),
+            )
+            .await;
+            scored
+                .into_iter()
+                .max_by_key(|(_, v)| *v)
+                .map(|(b, _)| b)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no llama-server provider with idle slots")
+                })
+        }
     }
 }
 
@@ -476,6 +507,24 @@ pub fn make_adapter(
             // Gemini uses a fixed Google API host; URL validation is N/A.
             let key = cfg.api_key_encrypted.as_deref().unwrap_or("");
             Arc::new(GeminiAdapter::new(key))
+        }
+        ProviderType::LlamaServer => {
+            // External-mode adapter: same SSRF validation as Ollama since
+            // operators register an arbitrary HTTP base URL.
+            if let Err(e) = validate_provider_url(&cfg.url) {
+                tracing::warn!(
+                    provider_id = %cfg.id,
+                    name = %cfg.name,
+                    url = %cfg.url,
+                    "SSRF: skipping provider — {e}"
+                );
+                return Arc::new(BlockedAdapter(e.to_string()));
+            }
+            let _ = (valkey, vram_pool); // Phase 1 adapter holds no Valkey/VramPool dep yet
+            Arc::new(
+                crate::infrastructure::outbound::llama_server::LlamaServerAdapter::new(&cfg.url)
+                    .with_provider_id(cfg.id),
+            )
         }
     }
 }

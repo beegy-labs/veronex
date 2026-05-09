@@ -247,6 +247,11 @@ impl LlmProvider {
     pub fn is_gemini(&self) -> bool {
         self.provider_type == ProviderType::Gemini
     }
+
+    /// True for llama-server-typed providers (Phase 1 external mode).
+    pub fn is_llama_server(&self) -> bool {
+        self.provider_type == ProviderType::LlamaServer
+    }
 }
 
 fn default_num_parallel() -> i16 {

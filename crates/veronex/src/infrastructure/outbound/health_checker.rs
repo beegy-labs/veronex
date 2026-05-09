@@ -73,6 +73,31 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                 }
             }
         }
+        ProviderType::LlamaServer => {
+            // GET {url}/health → 2xx + status:"ok" ⇒ Online. Reuses the same
+            // 5s timeout as the adapter so behaviour is consistent.
+            use crate::infrastructure::outbound::llama_server::health::{get_health, HEALTH_TIMEOUT};
+            let _ = HEALTH_TIMEOUT; // import for symmetry; get_health uses it internally
+            match get_health(client, &provider.url).await {
+                Ok(s) if s.is_ok() => LlmProviderStatus::Online,
+                Ok(s) => {
+                    tracing::warn!(
+                        provider_id = %provider.id,
+                        status = %s.status,
+                        "llama-server /health returned non-ok status"
+                    );
+                    LlmProviderStatus::Offline
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        provider_id = %provider.id,
+                        error = %e,
+                        "llama-server health check failed"
+                    );
+                    LlmProviderStatus::Offline
+                }
+            }
+        }
     }
 }
 
