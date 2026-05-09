@@ -1,19 +1,28 @@
 # Roadmap
 
-> L1: Direction | Load on planning only | **Last Updated**: 2026-05-09
+> L1: Direction | Load on planning only | **Last Updated**: 2026-05-09 (Modelfile + CAS blob store)
 
 ## 2026 — AI BaaS 전환
 
 Veronex를 "Ollama 게이트웨이"에서 "AI BaaS (AI Backend as a Service)"로 전환.
-핵심 문제: Ollama cold start (163s+) → llama-server 상시 로드로 근본 해결.
-모델 관리 직접 소유: HuggingFace + S3 캐시.
+핵심 문제: Ollama cold start (163s+) →
+  llama-server **lazy 라이프사이클**(요청 시 시작 → 유휴 1분 후 종료, 어드민에서 TTL 조정)로 근본 해결.
+  CAS blob store (sha256 dedup) + 노드별 Local PV 캐시로 cold start 단축, 명시적 unload API 도 동일 경로로 처리.
+모델 관리 직접 소유: **Modelfile registry** — 압축버전(quantization)별 row + family default,
+  4종 source (HuggingFace / Direct upload / URL / S3 pointer), HF LFS OID 사전 dedup.
+설치 1회 실패 시 자동 재시도 X, admin manual retry only. install_attempts 영구 보관.
+Storage: k8s 내부 Garage S3 (CAS) + 노드별 Local PV (LRU 90% threshold).
+LLM 노드 지원 매트릭스 (좁힘, 2026-05-09):
+  - **Mac M-chip 베어메탈** (darwin-aarch64 + Apple Metal, brew tap + launchd)
+  - **AMD AI 395+ Strix Halo k8s** (linux-x86_64 + Vulkan/RADV, DaemonSet + /dev/dri 마운트)
+  - 제외: NVIDIA CUDA, AMD ROCm, 일반 dGPU, Intel Mac (필요 시 별도 Phase 에서 확장)
 
 | Phase | 우선순위 | 변경 | 타입 | 상태 |
 | ----- | -------- | ---- | ---- | ---- |
 | Phase 1 | P0 | LlamaServer 어댑터 + ProviderType 추가 | Migrate | → scopes/2026-Phase1.md |
-| Phase 2 | P0 | ModelStore (HuggingFace + S3 캐시) | Add | → scopes/2026-Phase2.md |
-| Phase 3 | P1 | ProcessManager (llama-server 설치·운영) | Add | → scopes/2026-Phase3.md |
-| Phase 4 | P1 | AIMD slots_idle 기반 재구현 | Change | → scopes/2026-Phase4.md |
+| Phase 2 | P0 | Modelfile registry + CAS blob store (HF/Upload/URL/S3 pointer, Garage + Local PV) | Add | → scopes/2026-Phase2.md |
+| Phase 3 | P1 | ProcessManager (lazy 라이프사이클 + 다중 노드) | Add | → scopes/2026-Phase3.md |
+| Phase 4 | P1 | AIMD composite + Snapshot/Lease/Forecast/TieredKV/Criticality 본격 구현 | Change | → scopes/2026-Phase4.md |
 
 ## 제거 대상 (Ollama 의존성)
 
