@@ -87,6 +87,20 @@ async fn async_main() -> Result<()> {
     // ── Bootstrap super account ────────────────────────────────────
     bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config, &infra.pg_pool).await;
 
+    // ── Phase 3 — node + system_settings repos (always-on) ─────────
+    let llm_node_repo: std::sync::Arc<dyn veronex::application::ports::outbound::llm_node_repository::LlmNodeRepository> =
+        std::sync::Arc::new(
+            veronex::infrastructure::outbound::persistence::llm_node_repository::PostgresLlmNodeRepository::new(
+                infra.pg_pool.clone(),
+            ),
+        );
+    let system_settings_repo: std::sync::Arc<dyn veronex::application::ports::outbound::system_settings_repository::SystemSettingsRepository> =
+        std::sync::Arc::new(
+            veronex::infrastructure::outbound::persistence::system_settings_repository::PostgresSystemSettingsRepository::new(
+                infra.pg_pool.clone(),
+            ),
+        );
+
     // ── Wire Phase 2 model store (env > app_config > default) ──────
     // Reuses the same master key as the provider registry; the wizard
     // writes encrypted secrets to `app_config` and we decrypt on read.
@@ -246,6 +260,8 @@ async fn async_main() -> Result<()> {
         install_orchestrator: model_store.install_orchestrator,
         blob_store: model_store.blob_store,
         local_pv: model_store.local_pv,
+        llm_node_repo: Some(llm_node_repo),
+        system_settings_repo: Some(system_settings_repo),
     };
 
     // ── MCP tool refresh loop ──────────────────────────────────────

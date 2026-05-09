@@ -18,6 +18,8 @@ use super::auth_handlers;
 use super::role_handlers;
 use super::setup_handlers;
 use super::admin_modelfile_handlers;
+use super::admin_node_handlers;
+use super::admin_settings_handlers;
 use super::model_selection_handlers;
 use super::global_model_handlers;
 use super::key_provider_access_handlers;
@@ -201,6 +203,27 @@ fn build_jwt_router() -> Router<AppState> {
         .route(
             "/v1/admin/config/{key}",
             patch(setup_handlers::upsert_config).delete(setup_handlers::delete_config),
+        )
+        // Phase 3 — managed compute nodes (data layer; agent ships separately)
+        .route(
+            "/v1/admin/nodes",
+            get(admin_node_handlers::list_nodes).post(admin_node_handlers::register_node),
+        )
+        .route(
+            "/v1/admin/nodes/{id}",
+            get(admin_node_handlers::get_node).delete(admin_node_handlers::delete_node),
+        )
+        .route(
+            "/v1/admin/nodes/{id}/probe",
+            post(admin_node_handlers::probe_node),
+        )
+        // Phase 3 — system settings (idle TTL, warmup tokens, AIMD knobs)
+        .route("/v1/admin/settings", get(admin_settings_handlers::list_settings))
+        .route(
+            "/v1/admin/settings/{key}",
+            get(admin_settings_handlers::get_setting)
+                .put(admin_settings_handlers::upsert_setting)
+                .delete(admin_settings_handlers::delete_setting),
         )
         // Global model settings
         .route("/v1/models/global-settings", get(global_model_handlers::list_global_model_settings))

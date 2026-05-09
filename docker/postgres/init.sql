@@ -116,6 +116,31 @@ CREATE TABLE gpu_servers (
 
 -- ── LLM Providers ─────────────────────────────────────────────────────────────
 
+-- ── LLM Nodes (Phase 3 — managed compute hosts) ───────────────────────────────
+-- Physical / virtual hosts that can run llama-server. Two deployment kinds:
+--   * `k8s`            — DaemonSet pod on the cluster (auto-registered)
+--   * `baremetal_mac`  — Mac mini / Studio outside the cluster (manual)
+-- The ProcessManager talks to each node via `agent_url` (HTTP).
+CREATE TABLE llm_nodes (
+    id              UUID        PRIMARY KEY DEFAULT uuidv7(),
+    hostname        VARCHAR(255) NOT NULL,
+    deployment_kind VARCHAR(32)  NOT NULL CHECK (deployment_kind IN ('k8s', 'baremetal_mac')),
+    os              VARCHAR(16)  NOT NULL CHECK (os IN ('linux', 'darwin')),
+    arch            VARCHAR(16)  NOT NULL CHECK (arch IN ('x86_64', 'aarch64')),
+    gpu_accel       VARCHAR(32)  NOT NULL CHECK (gpu_accel IN ('apple_metal', 'amd_vulkan')),
+    gpu_model       VARCHAR(255),
+    total_vram_mb   BIGINT      NOT NULL DEFAULT 0,
+    total_ram_mb    BIGINT      NOT NULL DEFAULT 0,
+    cpu_threads     SMALLINT    NOT NULL DEFAULT 0,
+    agent_url       TEXT        NOT NULL,
+    status          VARCHAR(32) NOT NULL DEFAULT 'offline',
+    registered_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_probe_at   TIMESTAMPTZ
+);
+
+CREATE UNIQUE INDEX uq_llm_nodes_agent_url ON llm_nodes(agent_url);
+CREATE INDEX        idx_llm_nodes_status   ON llm_nodes(status);
+
 CREATE TABLE llm_providers (
     id                UUID        PRIMARY KEY DEFAULT uuidv7(),
     name              VARCHAR(255) NOT NULL,
@@ -128,12 +153,46 @@ CREATE TABLE llm_providers (
     gpu_index         SMALLINT,
     server_id         UUID        REFERENCES gpu_servers(id) ON DELETE SET NULL,
     is_free_tier      BOOLEAN     NOT NULL DEFAULT false,
-    num_parallel      SMALLINT    NOT NULL DEFAULT 4
+    num_parallel      SMALLINT    NOT NULL DEFAULT 4,
+    -- Phase 3: lifecycle ownership.
+    --   * external — operator runs llama.cpp/Ollama; Veronex only routes.
+    --   * managed  — ProcessManager owns the process on `node_id`.
+    mode              VARCHAR(16) NOT NULL DEFAULT 'external'
+                                        CHECK (mode IN ('external', 'managed')),
+    node_id           UUID        REFERENCES llm_nodes(id) ON DELETE SET NULL,
+    -- Per-provider override for `system_settings.llama_server.idle_ttl_seconds`.
+    -- NULL = use the global setting; 0 = disable idle reaping.
+    idle_ttl_seconds_override INT
 );
 
 CREATE INDEX idx_llm_providers_status    ON llm_providers(status);
+CREATE INDEX idx_llm_providers_mode      ON llm_providers(mode);
+CREATE INDEX idx_llm_providers_node_id   ON llm_providers(node_id) WHERE node_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_llm_providers_ollama_url ON llm_providers(url) WHERE provider_type = 'ollama';
 CREATE UNIQUE INDEX uq_llm_providers_llama_server_url ON llm_providers(url) WHERE provider_type = 'llama_server';
+
+-- ── System settings (Phase 3 — operator-tunable singletons) ───────────────────
+-- Distinct from `app_config`: app_config holds bootstrap secrets (S3, HF) that
+-- only matter at restart; system_settings holds runtime knobs (idle TTLs, AIMD
+-- tuning, capacity heuristics) that take effect on the next setting read.
+-- All values are TEXT — typed parsing happens in the consuming module so the
+-- table stays generic and the schema doesn't migrate when knobs come and go.
+CREATE TABLE system_settings (
+    key         TEXT        PRIMARY KEY,
+    value       TEXT        NOT NULL,
+    description TEXT,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_by  UUID        REFERENCES accounts(id) ON DELETE SET NULL
+);
+
+INSERT INTO system_settings (key, value, description) VALUES
+    ('llama_server.idle_ttl_seconds', '60',
+     'Reap a managed llama-server process after this many seconds of zero activity. 0 disables idle reaping.'),
+    ('llama_server.warmup_short_tokens', '8',
+     'max_tokens used by the warmup probe short prompt.'),
+    ('llama_server.warmup_long_tokens',  '8',
+     'max_tokens used by the warmup probe long prompt (75% of n_ctx).')
+ON CONFLICT (key) DO NOTHING;
 
 -- ── App config (Phase 2 first-install wizard) ─────────────────────────────────
 -- Runtime-mutable configuration for self-hosted Veronex. Values are

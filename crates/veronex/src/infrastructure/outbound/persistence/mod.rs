@@ -47,7 +47,9 @@ pub mod provider_vram_budget_repository;
 pub mod app_config_repository;
 pub mod blob_registry;
 pub mod install_attempts_log;
+pub mod llm_node_repository;
 pub mod modelfile_registry;
+pub mod system_settings_repository;
 
 #[cfg(test)]
 mod tests {

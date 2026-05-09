@@ -140,6 +140,13 @@ pub struct RegisterProviderRequest {
     pub is_free_tier: Option<bool>,
     /// Ollama num_parallel setting. Default 4. Used as AIMD upper bound.
     pub num_parallel: Option<i16>,
+    /// Phase 3 lifecycle ownership. `external` (default) or `managed`.
+    /// `managed` requires `node_id` to be set; rejected otherwise.
+    pub mode: Option<String>,
+    /// FK → llm_nodes. Required when `mode == "managed"`.
+    pub node_id: Option<uuid::Uuid>,
+    /// Per-provider idle reaper override (seconds). 0 disables idle reaping.
+    pub idle_ttl_seconds_override: Option<i32>,
 }
 
 /// Update request for `PATCH /v1/providers/{id}`.
@@ -335,6 +342,28 @@ pub async fn register_provider(
         }
     }
 
+    let mode = req.mode.clone().unwrap_or_else(|| "external".to_string());
+    if mode == "managed" && req.node_id.is_none() {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "node_id_required",
+                "message": "managed providers require node_id (POST /v1/admin/nodes first)",
+            })),
+        )
+            .into_response();
+    }
+    if mode != "external" && mode != "managed" {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "error": "invalid_mode",
+                "message": "mode must be 'external' or 'managed'",
+            })),
+        )
+            .into_response();
+    }
+
     let provider = LlmProvider {
         id: Uuid::now_v7(),
         name: req.name.clone(),
@@ -348,6 +377,9 @@ pub async fn register_provider(
         num_parallel: req.num_parallel.unwrap_or(4),
         status: LlmProviderStatus::Offline, // initial; overwritten by health check
         registered_at: Utc::now(),
+        mode,
+        node_id: req.node_id,
+        idle_ttl_seconds_override: req.idle_ttl_seconds_override,
     };
 
     // Health check before persisting.
@@ -750,6 +782,9 @@ mod tests {
             num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
         };
         let s = ProviderSummary::from(b);
         assert_eq!(s.provider_type, "ollama");
@@ -773,6 +808,9 @@ mod tests {
             num_parallel: 4,
             status: LlmProviderStatus::Offline,
             registered_at: Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
         };
         let s = ProviderSummary::from(b);
         assert_eq!(s.provider_type, "gemini");

@@ -132,6 +132,9 @@ mod tests {
             num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: chrono::Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
         }
     }
 

@@ -14,6 +14,7 @@ pub mod llama_server;
 pub mod model_store;
 pub mod ollama;
 pub mod persistence;
+pub mod process_manager;
 pub mod pubsub;
 pub mod session_grouping;
 pub mod queue_maintenance;

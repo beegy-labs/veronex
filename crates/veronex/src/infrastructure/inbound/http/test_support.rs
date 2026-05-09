@@ -413,6 +413,8 @@ pub(crate) fn make_app() -> axum::Router {
         install_orchestrator: None,
         blob_store: None,
         local_pv: None,
+        llm_node_repo: None,
+        system_settings_repo: None,
     };
     // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()

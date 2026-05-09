@@ -32,3 +32,5 @@ pub mod modelfile_registry;
 pub mod blob_registry;
 pub mod install_attempts_log;
 pub mod app_config_repository;
+pub mod llm_node_repository;
+pub mod system_settings_repository;

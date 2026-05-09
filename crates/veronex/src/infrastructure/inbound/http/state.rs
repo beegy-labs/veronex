@@ -35,7 +35,9 @@ use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::app_config_repository::AppConfigRepository;
 use crate::application::ports::outbound::blob_registry::BlobRegistry;
 use crate::application::ports::outbound::install_attempts_log::InstallAttemptsLog;
+use crate::application::ports::outbound::llm_node_repository::LlmNodeRepository;
 use crate::application::ports::outbound::modelfile_registry::ModelfileRegistry;
+use crate::application::ports::outbound::system_settings_repository::SystemSettingsRepository;
 use crate::infrastructure::outbound::model_store::{BlobStore, InstallOrchestrator, LocalPv};
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
@@ -170,4 +172,10 @@ pub struct AppState {
     pub install_orchestrator: Option<InstallOrchestrator>,
     pub blob_store: Option<BlobStore>,
     pub local_pv: Option<LocalPv>,
+    // ── Phase 3 — managed-mode foundation ──────────────────────────────
+    /// `llm_nodes` repo — admin endpoints + ProcessManager. `None` only
+    /// when the binary is built without Postgres (no current path).
+    pub llm_node_repo: Option<Arc<dyn LlmNodeRepository>>,
+    /// `system_settings` repo — runtime knobs (idle TTL, warmup tokens).
+    pub system_settings_repo: Option<Arc<dyn SystemSettingsRepository>>,
 }

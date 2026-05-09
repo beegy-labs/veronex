@@ -16,6 +16,11 @@ pub use modelfile::{
     TriggeredBy, VeronexModel,
 };
 
+pub mod llm_node;
+pub use llm_node::{
+    DeploymentKind, GpuAccel, HostArch, HostOs, LlmNode, NodeProbeInfo,
+};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
@@ -240,6 +245,17 @@ pub struct LlmProvider {
     pub num_parallel: i16,
     pub status: LlmProviderStatus,
     pub registered_at: DateTime<Utc>,
+    /// Phase 3 lifecycle ownership. `external` = operator runs the process,
+    /// `managed` = ProcessManager spawns/reaps it on `node_id`.
+    #[serde(default = "default_provider_mode")]
+    pub mode: String,
+    /// FK → llm_nodes. Required when `mode == "managed"`, else None.
+    #[serde(default)]
+    pub node_id: Option<Uuid>,
+    /// Per-provider override for `system_settings.llama_server.idle_ttl_seconds`.
+    /// `None` = use the global setting; `Some(0)` = never reap.
+    #[serde(default)]
+    pub idle_ttl_seconds_override: Option<i32>,
 }
 
 impl LlmProvider {
@@ -262,6 +278,10 @@ impl LlmProvider {
 
 fn default_num_parallel() -> i16 {
     4
+}
+
+fn default_provider_mode() -> String {
+    "external".to_string()
 }
 
 /// Per-model Gemini rate limit policy (shared across all free-tier providers).
@@ -349,6 +369,9 @@ mod tests {
             num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
         }
     }
 
