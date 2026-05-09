@@ -62,10 +62,14 @@ function AuthShell({ children }: { children: React.ReactNode }) {
   }, [queryClient, isLoginPage, isSetupPage])
 
   useEffect(() => {
-    api.setupStatus().then(({ needs_setup }) => {
-      if (needs_setup) {
+    api.setupStatus().then(({ needs_setup_account, needs_setup_storage, setup_complete }) => {
+      // Need any wizard step → redirect to /setup. The page itself picks
+      // which step to show (account first, then storage). Once both are
+      // done, redirect to the right post-login destination.
+      const needsAnySetup = needs_setup_account || needs_setup_storage
+      if (needsAnySetup) {
         if (!isSetupPage) router.replace('/setup')
-      } else {
+      } else if (setup_complete) {
         if (isSetupPage) {
           router.replace(isLoggedIn() ? '/' : '/login')
         } else if (!isLoginPage && !isLoggedIn()) {

@@ -854,15 +854,38 @@
   "setup": {
     "title": "Veronexへようこそ",
     "description": "スーパー管理者アカウントを作成して始めましょう。",
+    "checking": "セットアップ状態を確認中…",
     "username": "ユーザー名",
     "password": "パスワード",
     "confirmPassword": "パスワード確認",
     "submit": "アカウント作成",
-    "submitting": "作成中…",
+    "submitting": "処理中…",
     "passwordTooShort": "パスワードは8文字以上にしてください",
     "passwordMismatch": "パスワードが一致しません",
     "alreadySetup": "セットアップ済みです。サインインしてください。",
-    "failed": "セットアップに失敗しました。もう一度お試しください。"
+    "failed": "セットアップに失敗しました。もう一度お試しください。",
+    "storage": {
+      "title": "ストレージ設定",
+      "description": "オブジェクトストレージとモデルキャッシュを設定します。環境変数が優先され、変更は再起動後に反映されます。",
+      "endpoint": "S3 エンドポイント",
+      "region": "リージョン",
+      "bucket": "モデルバケット",
+      "accessKey": "Access key",
+      "secretKey": "Secret key",
+      "hfToken": "HuggingFace トークン",
+      "hfTokenOptional": "任意 — 非公開リポジトリ用",
+      "localPath": "ローカルキャッシュパス",
+      "maxDiskGb": "最大ディスク (GB)",
+      "submit": "保存して続行",
+      "missingRequired": "エンドポイント / access key / secret key / バケットは必須です。",
+      "invalidMaxDisk": "最大ディスクは正の数である必要があります。",
+      "failed": "ストレージ設定に失敗しました。もう一度お試しください。"
+    },
+    "restart": {
+      "title": "再起動が必要",
+      "description": "ストレージ設定を保存しました。",
+      "body": "変更を反映するには Veronex サーバーを再起動してください。次回起動時に新しい設定を読み込み、モデルストアが有効になります。"
+    }
   },
   "accounts": {
     "title": "アカウント",

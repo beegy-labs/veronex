@@ -854,15 +854,38 @@
   "setup": {
     "title": "Welcome to Veronex",
     "description": "Create your super admin account to get started.",
+    "checking": "Checking setup status…",
     "username": "Username",
     "password": "Password",
     "confirmPassword": "Confirm Password",
     "submit": "Create account",
-    "submitting": "Creating account…",
+    "submitting": "Submitting…",
     "passwordTooShort": "Password must be at least 8 characters",
     "passwordMismatch": "Passwords do not match",
     "alreadySetup": "Setup already completed. Please sign in.",
-    "failed": "Setup failed. Please try again."
+    "failed": "Setup failed. Please try again.",
+    "storage": {
+      "title": "Storage configuration",
+      "description": "Configure object storage and the model cache. Environment variables override these values, so a restart is required to apply changes.",
+      "endpoint": "S3 endpoint",
+      "region": "Region",
+      "bucket": "Model bucket",
+      "accessKey": "Access key",
+      "secretKey": "Secret key",
+      "hfToken": "HuggingFace token",
+      "hfTokenOptional": "Optional — used for private repos",
+      "localPath": "Local cache path",
+      "maxDiskGb": "Max disk (GB)",
+      "submit": "Save and continue",
+      "missingRequired": "Endpoint, access key, secret key and bucket are required.",
+      "invalidMaxDisk": "Max disk must be a positive number.",
+      "failed": "Storage setup failed. Please try again."
+    },
+    "restart": {
+      "title": "Restart required",
+      "description": "Storage configuration saved.",
+      "body": "Restart the Veronex server to apply storage changes. The next start will read the new settings and bring the model store online."
+    }
   },
   "accounts": {
     "title": "Accounts",

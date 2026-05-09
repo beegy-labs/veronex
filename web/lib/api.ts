@@ -271,13 +271,34 @@ export const api = {
 
   // ── Setup (public — no auth, first-run only) ──────────────────────────────
   setupStatus: () =>
-    fetchPublic<{ needs_setup: boolean }>('/v1/setup/status'),
+    fetchPublic<{
+      needs_setup_account: boolean
+      needs_setup_storage: boolean
+      setup_complete: boolean
+    }>('/v1/setup/status'),
 
   setup: (body: { username: string; password: string }) =>
     fetchPublic<LoginResponse>('/v1/setup', {
       method: 'POST',
       body: JSON.stringify(body),
     }),
+
+  /** Phase 2 storage wizard. Requires a JWT (super admin from `setup`). */
+  setupStorage: (body: {
+    s3_endpoint: string
+    s3_region?: string | null
+    s3_access_key: string
+    s3_secret_key: string
+    s3_model_bucket: string
+    hf_token?: string | null
+    hf_endpoint?: string | null
+    model_local_path?: string | null
+    model_max_disk_gb?: number | null
+  }) =>
+    apiClient.post<{ ok: true; restart_required: boolean; message: string }>(
+      '/v1/setup/storage',
+      body,
+    ),
 
   // ── Auth (public) ─────────────────────────────────────────────────────────
   login: (body: LoginRequest) =>

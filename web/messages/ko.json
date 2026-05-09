@@ -854,15 +854,38 @@
   "setup": {
     "title": "Veronex에 오신 것을 환영합니다",
     "description": "슈퍼 관리자 계정을 생성하여 시작하세요.",
+    "checking": "설치 상태 확인 중…",
     "username": "사용자명",
     "password": "비밀번호",
     "confirmPassword": "비밀번호 확인",
     "submit": "계정 생성",
-    "submitting": "계정 생성 중…",
+    "submitting": "처리 중…",
     "passwordTooShort": "비밀번호는 최소 8자 이상이어야 합니다",
     "passwordMismatch": "비밀번호가 일치하지 않습니다",
     "alreadySetup": "설치가 이미 완료되었습니다. 로그인하세요.",
-    "failed": "설치에 실패했습니다. 다시 시도해 주세요."
+    "failed": "설치에 실패했습니다. 다시 시도해 주세요.",
+    "storage": {
+      "title": "스토리지 설정",
+      "description": "오브젝트 스토리지와 모델 캐시를 설정합니다. 환경변수가 우선하며, 변경 사항은 재시작 후 적용됩니다.",
+      "endpoint": "S3 엔드포인트",
+      "region": "리전",
+      "bucket": "모델 버킷",
+      "accessKey": "Access key",
+      "secretKey": "Secret key",
+      "hfToken": "HuggingFace 토큰",
+      "hfTokenOptional": "선택 — 비공개 모델 다운로드 시 필요",
+      "localPath": "로컬 캐시 경로",
+      "maxDiskGb": "최대 디스크 (GB)",
+      "submit": "저장하고 계속",
+      "missingRequired": "엔드포인트, access key, secret key, 버킷은 필수입니다.",
+      "invalidMaxDisk": "최대 디스크는 양수여야 합니다.",
+      "failed": "스토리지 설정에 실패했습니다. 다시 시도해 주세요."
+    },
+    "restart": {
+      "title": "재시작 필요",
+      "description": "스토리지 설정이 저장되었습니다.",
+      "body": "변경 사항을 적용하려면 Veronex 서버를 재시작하세요. 다음 부팅 시 새 설정을 읽어 모델 스토어가 활성화됩니다."
+    }
   },
   "accounts": {
     "title": "계정",
