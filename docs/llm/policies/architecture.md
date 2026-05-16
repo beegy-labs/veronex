@@ -1,6 +1,6 @@
 # Hexagonal Architecture Policy
 
-> SSOT | **Last Updated**: 2026-04-28 | Classification: Constitutional
+> SSOT | **Last Updated**: 2026-05-16 | Classification: Constitutional
 > Code patterns and templates → `policies/patterns.md`
 
 ## Vision
@@ -162,6 +162,14 @@ Background loops:
 | SSE over WebSocket | Unidirectional stream is sufficient; simpler implementation |
 | Arc<dyn Trait> | Runtime polymorphism; adapters freely swappable at composition root |
 | async-trait kept | `Arc<dyn Port>` requires it; native async fn in trait is not dyn-safe |
+
+## 2026 Boundary Clarification
+
+| Boundary | Policy | Why |
+|---|---|---|
+| Application ports | Keep dyn-safe `Arc<dyn Port>` boundaries on `async-trait` until Rust supports direct dyn-safe async traits | Preserves current composition-root polymorphism without custom erased-trait scaffolding |
+| Internal services | Concrete-only or generic traits may adopt native `async fn` incrementally | Reduces macro use where dynamic dispatch is not required |
+| HTTP state | Router-owned dependencies remain `State<AppState>` / `FromRef` driven, not ad-hoc request extensions | Keeps Axum wiring explicit and compile-time checked |
 
 ## Port Catalog
 

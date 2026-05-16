@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-16 | Classification: Operational
 
 ## Methodology: Testing Trophy (5-Layer, 2026)
 
@@ -92,6 +92,12 @@ All crates in `crates/` MUST have at least Unit + Handler (if they expose HTTP) 
 ### vitest v4 Notes
 
 v3→v4 migration details (poolOptions, projects, options position, mock behavior, reporters, min reqs) → `docs/llm/research/frontend/vitest-v4-migration.md`.
+
+| 2026 Delta | Policy |
+|---|---|
+| Runtime floor | Vitest 4 requires Vite 6+ and Node 20+; keep CI/runtime aligned before tool bumps |
+| Browser coverage | Browser Mode remains the default component-test path for layout/focus/CSS behavior |
+| Query testing | TanStack Query hooks stay at Unit/Integration level unless browser behavior is the assertion target |
 
 ### Bash E2E
 
