@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_closure)]
+
 use axum::extract::{Path, State};
 use axum::Json;
 use chrono::{DateTime, Utc};

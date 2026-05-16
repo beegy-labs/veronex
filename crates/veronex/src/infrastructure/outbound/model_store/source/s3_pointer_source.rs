@@ -18,7 +18,7 @@ use bytes::Bytes;
 use super::{ByteStream, ModelSource, Sha256Hex};
 
 pub struct S3PointerSource {
-    client: Client,
+    client: Option<Client>,
     bucket: String,
     s3_key: String,
 }
@@ -26,7 +26,16 @@ pub struct S3PointerSource {
 impl S3PointerSource {
     pub fn new(client: Client, bucket: impl Into<String>, s3_key: impl Into<String>) -> Self {
         Self {
-            client,
+            client: Some(client),
+            bucket: bucket.into(),
+            s3_key: s3_key.into(),
+        }
+    }
+
+    #[cfg(test)]
+    fn for_spec_test(bucket: impl Into<String>, s3_key: impl Into<String>) -> Self {
+        Self {
+            client: None,
             bucket: bucket.into(),
             s3_key: s3_key.into(),
         }
@@ -41,6 +50,8 @@ impl ModelSource for S3PointerSource {
         // SDK exposes it under the `metadata` field of the response.
         let resp = match self
             .client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("S3PointerSource test stub has no client"))?
             .head_object()
             .bucket(&self.bucket)
             .key(&self.s3_key)
@@ -61,6 +72,8 @@ impl ModelSource for S3PointerSource {
     async fn stream_blob(&self) -> Result<ByteStream> {
         let resp = self
             .client
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("S3PointerSource test stub has no client"))?
             .get_object()
             .bucket(&self.bucket)
             .key(&self.s3_key)
@@ -104,17 +117,7 @@ mod tests {
 
     #[test]
     fn source_spec_carries_canonical_fields() {
-        // Build a Client without performing any network IO. We use a
-        // hard-coded fake region; the test only inspects source_spec.
-        let cfg = aws_sdk_s3::Config::builder()
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                "ak", "sk", None, None, "test",
-            ))
-            .build();
-        let client = Client::from_conf(cfg);
-        let src = S3PointerSource::new(client, "veronex-models", "external/x.gguf");
+        let src = S3PointerSource::for_spec_test("veronex-models", "external/x.gguf");
         let s = src.source_spec();
         assert_eq!(s["type"], "s3_pointer");
         assert_eq!(s["s3_key"], "external/x.gguf");

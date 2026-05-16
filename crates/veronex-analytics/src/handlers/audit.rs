@@ -71,10 +71,10 @@ pub async fn list_audit_events(
         return Err(StatusCode::BAD_REQUEST);
     }
     // resource_id is a UUID — validate format to prevent injection.
-    if let Some(ref rid) = q.resource_id {
-        if uuid::Uuid::parse_str(rid).is_err() {
-            return Err(StatusCode::BAD_REQUEST);
-        }
+    if let Some(ref rid) = q.resource_id
+        && uuid::Uuid::parse_str(rid).is_err()
+    {
+        return Err(StatusCode::BAD_REQUEST);
     }
 
     // Build filter conditions. Values are whitelist-validated above, safe for interpolation.

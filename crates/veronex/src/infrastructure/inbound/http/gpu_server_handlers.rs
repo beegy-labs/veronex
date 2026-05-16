@@ -5,6 +5,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::domain::constants::NODE_EXPORTER_TIMEOUT;
 use crate::domain::entities::GpuServer;
@@ -75,6 +76,7 @@ async fn get_gpu_server(state: &AppState, id: Uuid) -> Result<GpuServer, AppErro
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
 /// `POST /v1/servers/verify` — validate URL format, duplicate check, and reachability.
+#[instrument(skip_all)]
 pub async fn verify_gpu_server(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -92,20 +94,14 @@ pub async fn verify_gpu_server(
     }
 
     // Duplicate check.
-    let count_res: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM gpu_servers WHERE node_exporter_url = $1",
-    )
-    .bind(&url)
-    .fetch_one(&state.pg_pool)
-    .await;
-
-    match count_res {
-        Ok((c,)) if c > 0 => {
+    use crate::infrastructure::outbound::persistence::gpu_server_queries as gpu_q;
+    match gpu_q::url_is_registered(&state.pg_pool, &url).await {
+        Ok(true) => {
             return AppError::Conflict("a server with this URL is already registered".into())
                 .into_response();
         }
         Err(e) => return db_error(e).into_response(),
-        _ => {}
+        Ok(false) => {}
     }
 
     // Connectivity check.
@@ -121,6 +117,7 @@ pub async fn verify_gpu_server(
 }
 
 /// `POST /v1/servers`
+#[instrument(skip_all)]
 pub async fn register_gpu_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -141,14 +138,11 @@ pub async fn register_gpu_server(
     }
 
     // Reject duplicate node_exporter_url.
-    let (count,): (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM gpu_servers WHERE node_exporter_url = $1",
-    )
-    .bind(&node_exporter_url)
-    .fetch_one(&state.pg_pool)
-    .await
-    .map_err(db_error)?;
-    if count > 0 {
+    if crate::infrastructure::outbound::persistence::gpu_server_queries::
+        url_is_registered(&state.pg_pool, &node_exporter_url)
+        .await
+        .map_err(db_error)?
+    {
         return Err(AppError::Conflict("a server with this URL is already registered".into()));
     }
 
@@ -180,6 +174,7 @@ pub async fn register_gpu_server(
 use super::handlers::ListPageParams;
 
 /// `GET /v1/servers`
+#[instrument(skip_all)]
 pub async fn list_gpu_servers(
     State(state): State<AppState>,
     Query(params): Query<ListPageParams>,
@@ -208,6 +203,7 @@ pub struct UpdateGpuServerRequest {
 }
 
 /// `PATCH /v1/servers/{id}`
+#[instrument(skip_all)]
 pub async fn update_gpu_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -261,6 +257,7 @@ pub async fn update_gpu_server(
 }
 
 /// `DELETE /v1/servers/{id}`
+#[instrument(skip_all)]
 pub async fn delete_gpu_server(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -280,6 +277,7 @@ pub async fn delete_gpu_server(
 /// and caches full `NodeMetrics` per server. This endpoint reads from
 /// cache instead of live-scraping, avoiding per-request network calls
 /// and scaling to 10K+ providers.
+#[instrument(skip_all)]
 pub async fn get_server_metrics(
     State(state): State<AppState>,
     Path(gid): Path<GpuServerId>,
@@ -310,6 +308,7 @@ pub struct BatchMetricsQuery {
 ///
 /// Returns a map of server_id → NodeMetrics for up to 100 servers in a single
 /// request. Replaces N individual `/metrics` calls from the dashboard.
+#[instrument(skip_all)]
 pub async fn get_server_metrics_batch(
     State(state): State<AppState>,
     Query(params): Query<BatchMetricsQuery>,
@@ -355,6 +354,7 @@ pub struct MetricsHistoryQuery {
 ///
 /// Delegates to the `analytics_repo` (→ veronex-analytics → ClickHouse).
 /// Returns 503 when analytics is not configured.
+#[instrument(skip_all)]
 pub async fn get_server_metrics_history(
     State(state): State<AppState>,
     Path(gid): Path<GpuServerId>,

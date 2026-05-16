@@ -5,7 +5,7 @@ use crate::domain::value_objects::{ConvId, JobId};
 
 /// LATERAL JOIN for per-model pricing lookup.
 /// Used by usage breakdown, key model breakdown, and dashboard job queries.
-pub(super) const PRICING_LATERAL: &str = "\
+pub const PRICING_LATERAL: &str = "\
 LEFT JOIN LATERAL (
     SELECT input_per_1m, output_per_1m FROM model_pricing
     WHERE provider = j.provider_type
@@ -15,7 +15,7 @@ LEFT JOIN LATERAL (
 ) pricing ON true";
 
 /// Percentage with one decimal place: `(numerator / denominator * 100)` rounded to 0.1.
-pub(super) fn pct(numerator: i64, denominator: i64) -> f64 {
+pub fn pct(numerator: i64, denominator: i64) -> f64 {
     if denominator > 0 {
         (numerator as f64 / denominator as f64 * 1000.0).round() / 10.0
     } else {
@@ -24,7 +24,7 @@ pub(super) fn pct(numerator: i64, denominator: i64) -> f64 {
 }
 
 /// Validate hours parameter to prevent SQL INTERVAL abuse.
-pub(super) fn validate_hours(hours: u32) -> Result<(), super::error::AppError> {
+pub fn validate_hours(hours: u32) -> Result<(), super::error::AppError> {
     if hours == 0 || hours > 8760 {
         return Err(super::error::AppError::BadRequest("hours must be between 1 and 8760".into()));
     }
@@ -32,7 +32,7 @@ pub(super) fn validate_hours(hours: u32) -> Result<(), super::error::AppError> {
 }
 
 /// Compute tokens-per-second for a job.
-pub(super) fn compute_tps(
+pub fn compute_tps(
     latency_ms: Option<i32>,
     ttft_ms: Option<i32>,
     completion_tokens: Option<i32>,
@@ -49,7 +49,7 @@ pub(super) fn compute_tps(
 
 /// Common fields extracted from an `inference_jobs` row.
 /// Both `JobSummary` (list) and `JobDetail` (single) share these columns.
-pub(super) struct JobRowCommon {
+pub struct JobRowCommon {
     pub id: uuid::Uuid,
     pub model_name: String,
     pub provider_type: String,
@@ -134,7 +134,7 @@ pub struct JobSummary {
 }
 
 /// Build a `JobSummary` from a `JobRowCommon` and a `has_tool_calls` flag.
-pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, provider_name: Option<String>) -> JobSummary {
+pub fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, provider_name: Option<String>) -> JobSummary {
     let tps = c.tps();
     JobSummary {
         id: JobId::from_uuid(c.id).to_string(),
@@ -161,6 +161,7 @@ pub(super) fn job_summary_from_common(c: JobRowCommon, has_tool_calls: bool, pro
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

@@ -46,7 +46,7 @@ impl SystemSettingsRepository for PostgresSystemSettingsRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<SystemSetting>> {
-        let q = format!("SELECT {SS_COLS} FROM system_settings ORDER BY key");
+        let q = format!("SELECT {SS_COLS} FROM system_settings ORDER BY key LIMIT 1000");
         let rows = sqlx::query(&q).fetch_all(&self.pool).await?;
         rows.iter().map(row_to_setting).collect()
     }

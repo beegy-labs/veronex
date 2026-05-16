@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -38,6 +39,7 @@ pub struct SetModelEnabledRequest {
 ///   New models default to `is_enabled = true`.
 /// **Gemini**: merges the global `gemini_models` pool with `provider_selected_models`.
 ///   New models default to `is_enabled = false`.
+#[instrument(skip_all)]
 pub async fn list_selected_models(
     State(state): State<AppState>,
     Path(pid): Path<ProviderId>,
@@ -105,6 +107,7 @@ pub async fn list_selected_models(
 }
 
 /// `PATCH /v1/providers/{id}/selected-models/{model_name}` — toggle a model's enabled state.
+#[instrument(skip_all)]
 pub async fn set_model_enabled(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,

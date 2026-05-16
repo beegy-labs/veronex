@@ -128,6 +128,7 @@ impl std::fmt::Debug for PortLease {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

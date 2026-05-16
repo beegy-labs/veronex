@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use std::sync::Arc;
 use tracing::Instrument;
 

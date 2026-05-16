@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use tracing::instrument;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -167,6 +168,7 @@ pub struct StatusResponse {
 // ── Handlers ───────────────────────────────────────────────────────
 
 /// POST /v1/inference - Submit a new inference request.
+#[instrument(skip_all)]
 pub async fn submit_inference(
     State(state): State<AppState>,
     axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
@@ -212,6 +214,7 @@ pub async fn submit_inference(
 }
 
 /// GET /v1/inference/:job_id/stream - SSE token streaming.
+#[instrument(skip_all)]
 pub async fn stream_inference(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -242,6 +245,7 @@ pub async fn stream_inference(
 }
 
 /// GET /v1/inference/:job_id/status - Get job status.
+#[instrument(skip_all)]
 pub async fn get_status(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -261,6 +265,7 @@ pub async fn get_status(
 ///
 /// Streams a job's tokens in the same OpenAI chunk format as `/v1/chat/completions`.
 /// Completed jobs are replayed from the DB; in-progress jobs stream live tokens.
+#[instrument(skip_all)]
 pub async fn stream_job_openai(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -303,6 +308,7 @@ pub async fn stream_job_openai(
 }
 
 /// DELETE /v1/inference/:job_id - Cancel a job.
+#[instrument(skip_all)]
 pub async fn cancel_inference(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,

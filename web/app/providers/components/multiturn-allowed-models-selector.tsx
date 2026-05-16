@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { useTranslation } from '@/i18n'
-import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama_server-models'
+import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama-server-models'
 
 interface Props {
   selected: string[]

@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 //! Read-model queries for the dashboard.
 //!
 //! Each function takes a `&PgPool` (or `&AppState`) and returns typed results.
@@ -11,8 +13,8 @@ use crate::application::ports::outbound::analytics_repository::{HourlyThroughput
 use crate::application::ports::outbound::message_store::{ConversationRecord, ConversationTurn};
 use crate::domain::value_objects::JobId;
 
-use super::error::AppError;
-use super::query_helpers::{JobRowCommon, JobSummary, job_summary_from_common};
+use crate::infrastructure::inbound::http::error::AppError;
+use crate::infrastructure::inbound::http::query_helpers::{JobRowCommon, JobSummary, job_summary_from_common};
 
 // ── Response types ─────────────────────────────────────────────────
 
@@ -78,7 +80,7 @@ pub struct JobDetail {
 /// At 10K+ providers / high request volume, pending/running counts should read from Valkey
 /// atomic counters (JOBS_PENDING_COUNTER / JOBS_RUNNING_COUNTER) and jobs_by_status should
 /// be cached or moved to a materialized view.
-pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, AppError> {
+pub async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, AppError> {
     use sqlx::Row;
 
     // Key counts (standard keys only — exclude test keys)
@@ -146,7 +148,7 @@ pub(super) async fn fetch_stats(pool: &sqlx::PgPool) -> Result<DashboardStats, A
 /// Raw row returned by the job detail query.
 /// Large content columns (prompt, result_text, messages_json, tool_calls_json) were
 /// removed from Postgres — they are read from S3 ConversationRecord in the handler.
-pub(super) struct JobDetailRow {
+pub struct JobDetailRow {
     pub common: JobRowCommon,
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
     pub prompt_preview: Option<String>,
@@ -158,7 +160,7 @@ pub(super) struct JobDetailRow {
     pub conversation_id: Option<uuid::Uuid>,
 }
 
-pub(super) async fn fetch_job_detail(
+pub async fn fetch_job_detail(
     pool: &sqlx::PgPool,
     id: uuid::Uuid,
 ) -> Result<Option<JobDetailRow>, AppError> {
@@ -224,7 +226,7 @@ pub(super) async fn fetch_job_detail(
 ///
 /// `conversation` is `None` when S3 is unavailable or the object does not exist yet
 /// (e.g. job still running). In that case, `prompt_preview` is used as the prompt fallback.
-pub(super) fn build_job_detail(
+pub fn build_job_detail(
     row: JobDetailRow,
     conversation: Option<ConversationRecord>,
     image_urls: Option<Vec<String>>,
@@ -278,7 +280,7 @@ pub(super) fn build_job_detail(
 /// NOTE(scale): Uses COUNT(*) for total + OFFSET pagination. At 10K+ scale, replace with
 /// cursor-based pagination (WHERE created_at < $cursor ORDER BY created_at DESC LIMIT N)
 /// and drop the total count query to avoid sequential scans.
-pub(super) async fn fetch_jobs(
+pub async fn fetch_jobs(
     pool: &sqlx::PgPool,
     limit: i64,
     offset: i64,
@@ -380,7 +382,7 @@ pub(super) async fn fetch_jobs(
 /// in get_performance / get_dashboard_overview). At 10K+ scale, ensure ClickHouse
 /// is always available so this fallback is never hit in production.
 #[allow(clippy::unwrap_used)]
-pub(super) async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMetrics, AppError> {
+pub async fn pg_performance(pool: &sqlx::PgPool, hours: u32) -> Result<PerformanceMetrics, AppError> {
     use sqlx::Row;
     let hours_i32 = hours as i32;
 

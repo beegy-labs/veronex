@@ -1,5 +1,5 @@
 use axum::extract::{Path, Query, State};
-use tracing::Instrument;
+use tracing::{instrument, Instrument};
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 use crate::domain::value_objects::McpId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireMcpManage;
+use crate::infrastructure::outbound::persistence::mcp_server_queries as mcp_q;
 use crate::infrastructure::outbound::valkey_keys;
 
 use super::audit_helpers::emit_audit;
@@ -68,22 +69,15 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
         .collect();
     let server_ids: Vec<Uuid> = vec![server_id; tools.len()];
 
-    let _ = sqlx::query(
-        "INSERT INTO mcp_server_tools (server_id, tool_name, namespaced_name, description, input_schema, discovered_at)
-         SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::jsonb[], array_fill(now()::timestamptz, ARRAY[$6::int]))
-         ON CONFLICT (server_id, tool_name) DO UPDATE
-           SET namespaced_name = EXCLUDED.namespaced_name,
-               description     = EXCLUDED.description,
-               input_schema    = EXCLUDED.input_schema,
-               discovered_at   = EXCLUDED.discovered_at"
+    let _ = mcp_q::upsert_tools_batch(
+        &state.pg_pool,
+        &server_ids,
+        &tool_names,
+        &namespaced_names,
+        &descriptions,
+        &schemas,
+        tools.len() as i32,
     )
-    .bind(&server_ids as &[Uuid])
-    .bind(&tool_names as &[&str])
-    .bind(&namespaced_names as &[String])
-    .bind(&descriptions as &[&str])
-    .bind(&schemas as &[serde_json::Value])
-    .bind(tools.len() as i32)
-    .execute(&state.pg_pool)
     .await
     .map_err(|e| tracing::warn!(%server_id, count = tools.len(), error = %e, "MCP: batch tool persist failed"));
 
@@ -95,15 +89,9 @@ async fn discover_and_persist_tools(state: &AppState, server_id: Uuid) {
     })).collect();
     let summary_json = serde_json::Value::Array(summary);
 
-    let _ = sqlx::query(
-        "UPDATE mcp_servers SET tool_count = $1, tools_summary = $2, updated_at = now() WHERE id = $3"
-    )
-    .bind(tools.len() as i16)
-    .bind(&summary_json)
-    .bind(server_id)
-    .execute(&state.pg_pool)
-    .await
-    .map_err(|e| tracing::warn!(%server_id, error = %e, "MCP: failed to update tools_summary"));
+    let _ = mcp_q::update_tools_summary(&state.pg_pool, server_id, tools.len() as i16, &summary_json)
+        .await
+        .map_err(|e| tracing::warn!(%server_id, error = %e, "MCP: failed to update tools_summary"));
 
     // Valkey cache — list API reads from here first (skip DB on hot path)
     if let Some(ref pool) = state.valkey_pool {
@@ -176,50 +164,15 @@ pub struct McpToolSummary {
     description: Option<String>,
 }
 
-// ── Row types ──────────────────────────────────────────────────────────────────
-
-struct McpServerRow {
-    id: Uuid,
-    name: String,
-    slug: String,
-    url: String,
-    is_enabled: bool,
-    timeout_secs: i16,
-    tool_count: i16,
-    tools_summary: serde_json::Value,
-    created_at: DateTime<Utc>,
-}
-
-impl sqlx::FromRow<'_, sqlx::postgres::PgRow> for McpServerRow {
-    fn from_row(row: &sqlx::postgres::PgRow) -> sqlx::Result<Self> {
-        use sqlx::Row;
-        Ok(Self {
-            id: row.try_get("id")?,
-            name: row.try_get("name")?,
-            slug: row.try_get("slug")?,
-            url: row.try_get("url")?,
-            is_enabled: row.try_get("is_enabled")?,
-            timeout_secs: row.try_get("timeout_secs")?,
-            tool_count: row.try_get("tool_count")?,
-            tools_summary: row.try_get("tools_summary")?,
-            created_at: row.try_get("created_at")?,
-        })
-    }
-}
-
 // ── Handlers ───────────────────────────────────────────────────────────────────
 
 /// `GET /v1/mcp/servers`
+#[instrument(skip_all)]
 pub async fn list_mcp_servers(
     RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
 ) -> HandlerResult<Json<Vec<McpServerResponse>>> {
-    let rows: Vec<McpServerRow> = sqlx::query_as(
-        "SELECT id, name, slug, url, is_enabled, timeout_secs, tool_count, tools_summary, created_at FROM mcp_servers ORDER BY created_at ASC LIMIT 500"
-    )
-    .fetch_all(&state.pg_pool)
-    .await
-    .map_err(db_error)?;
+    let rows = mcp_q::list_full(&state.pg_pool).await.map_err(db_error)?;
 
     if rows.is_empty() {
         return Ok(Json(vec![]));
@@ -276,6 +229,7 @@ pub async fn list_mcp_servers(
 }
 
 /// `POST /v1/mcp/servers/verify` — probe connectivity to an MCP server URL.
+#[instrument(skip_all)]
 pub async fn verify_mcp_server(
     _claims: RequireMcpManage,
     State(state): State<AppState>,
@@ -315,6 +269,7 @@ pub async fn verify_mcp_server(
 }
 
 /// `POST /v1/mcp/servers`
+#[instrument(skip_all)]
 pub async fn register_mcp_server(
     RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
@@ -340,17 +295,9 @@ pub async fn register_mcp_server(
     let id = Uuid::now_v7();
     let timeout_secs = req.timeout_secs.unwrap_or(30);
 
-    sqlx::query(
-        "INSERT INTO mcp_servers (id, name, slug, url, timeout_secs) VALUES ($1, $2, $3, $4, $5)"
-    )
-    .bind(id)
-    .bind(&name)
-    .bind(&slug)
-    .bind(&url)
-    .bind(timeout_secs)
-    .execute(&state.pg_pool)
-    .await
-    .map_err(db_error)?;
+    mcp_q::insert(&state.pg_pool, id, &name, &slug, &url, timeout_secs)
+        .await
+        .map_err(db_error)?;
 
     // Best-effort connect + tool discovery
     if let Some(ref bridge) = state.mcp_bridge {
@@ -376,6 +323,7 @@ pub async fn register_mcp_server(
 }
 
 /// `PATCH /v1/mcp/servers/:id`
+#[instrument(skip_all)]
 pub async fn patch_mcp_server(
     RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
@@ -383,14 +331,10 @@ pub async fn patch_mcp_server(
     Json(req): Json<PatchMcpServerRequest>,
 ) -> HandlerResult<Json<McpServerResponse>> {
     let id = mid.0;
-    let row: McpServerRow = sqlx::query_as(
-        "SELECT id, name, slug, url, is_enabled, timeout_secs, tool_count, tools_summary, created_at FROM mcp_servers WHERE id = $1"
-    )
-    .bind(id)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .map_err(db_error)?
-    .ok_or_else(|| AppError::NotFound("mcp server not found".into()))?;
+    let row = mcp_q::get_full(&state.pg_pool, id)
+        .await
+        .map_err(db_error)?
+        .ok_or_else(|| AppError::NotFound("mcp server not found".into()))?;
 
     let new_enabled = req.is_enabled.unwrap_or(row.is_enabled);
     let new_url = req.url.as_deref().unwrap_or(&row.url);
@@ -407,18 +351,12 @@ pub async fn patch_mcp_server(
     let new_slug = if let Some(ref s) = req.slug {
         let s = s.trim().to_string();
         validate_slug(&s)?;
-        if s != row.slug {
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM mcp_servers WHERE slug = $1 AND id != $2)"
-            )
-            .bind(&s)
-            .bind(id)
-            .fetch_one(&state.pg_pool)
-            .await
-            .map_err(db_error)?;
-            if exists {
-                return Err(AppError::Conflict("slug already in use".into()));
-            }
+        if s != row.slug
+            && mcp_q::slug_exists_excluding(&state.pg_pool, &s, id)
+                .await
+                .map_err(db_error)?
+        {
+            return Err(AppError::Conflict("slug already in use".into()));
         }
         s
     } else {
@@ -426,15 +364,7 @@ pub async fn patch_mcp_server(
     };
     let slug_changed = new_slug != row.slug;
 
-    sqlx::query(
-        "UPDATE mcp_servers SET is_enabled = $1, url = $2, name = $3, slug = $4, updated_at = now() WHERE id = $5"
-    )
-        .bind(new_enabled)
-        .bind(new_url)
-        .bind(new_name)
-        .bind(&new_slug)
-        .bind(id)
-        .execute(&state.pg_pool)
+    mcp_q::update_core(&state.pg_pool, id, new_enabled, new_url, new_name, &new_slug)
         .await
         .map_err(db_error)?;
 
@@ -476,18 +406,12 @@ pub async fn patch_mcp_server(
             }
         },
         async {
-            #[derive(sqlx::FromRow)]
-            struct TR { tool_name: String, namespaced_name: String, description: Option<String> }
-            sqlx::query_as::<_, TR>(
-                "SELECT tool_name, namespaced_name, description FROM mcp_server_tools WHERE server_id = $1 ORDER BY tool_name"
-            )
-            .bind(id)
-            .fetch_all(&state.pg_pool)
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .map(|r| McpToolSummary { name: r.tool_name, namespaced_name: r.namespaced_name, description: r.description })
-            .collect::<Vec<_>>()
+            mcp_q::list_tools(&state.pg_pool, id)
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|r| McpToolSummary { name: r.tool_name, namespaced_name: r.namespaced_name, description: r.description })
+                .collect::<Vec<_>>()
         }
     );
 
@@ -506,24 +430,19 @@ pub async fn patch_mcp_server(
 }
 
 /// `DELETE /v1/mcp/servers/:id`
+#[instrument(skip_all)]
 pub async fn delete_mcp_server(
     RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
     Path(mid): Path<McpId>,
 ) -> HandlerResult<StatusCode> {
     let id = mid.0;
-    let row: Option<(String,)> = sqlx::query_as("SELECT name FROM mcp_servers WHERE id = $1")
-        .bind(id)
-        .fetch_optional(&state.pg_pool)
+    let name = mcp_q::get_name(&state.pg_pool, id)
         .await
-        .map_err(db_error)?;
-    let (name,) = row.ok_or_else(|| AppError::NotFound("mcp server not found".into()))?;
+        .map_err(db_error)?
+        .ok_or_else(|| AppError::NotFound("mcp server not found".into()))?;
 
-    sqlx::query("DELETE FROM mcp_servers WHERE id = $1")
-        .bind(id)
-        .execute(&state.pg_pool)
-        .await
-        .map_err(db_error)?;
+    mcp_q::delete(&state.pg_pool, id).await.map_err(db_error)?;
 
     if let Some(ref bridge) = state.mcp_bridge {
         bridge.session_manager.disconnect(id);
@@ -563,18 +482,10 @@ pub struct McpTargetEntry {
 ///
 /// Returns enabled MCP servers as `[{id, url}]` for the agent to health-check.
 /// Consumed by veronex-agent on each scrape cycle. No auth — internal network only.
+#[instrument(skip_all)]
 pub async fn list_mcp_targets(State(state): State<AppState>) -> HandlerResult<Json<Vec<McpTargetEntry>>> {
-    #[derive(sqlx::FromRow)]
-    struct Row { id: Uuid, url: String }
-
-    let rows: Vec<Row> = sqlx::query_as(
-        "SELECT id, url FROM mcp_servers WHERE is_enabled = true ORDER BY created_at LIMIT 500"
-    )
-    .fetch_all(&state.pg_pool)
-    .await
-    .map_err(db_error)?;
-
-    Ok(Json(rows.into_iter().map(|r| McpTargetEntry { id: r.id.to_string(), url: r.url }).collect()))
+    let rows = mcp_q::list_enabled_for_session(&state.pg_pool).await;
+    Ok(Json(rows.into_iter().map(|s| McpTargetEntry { id: s.id.to_string(), url: s.url }).collect()))
 }
 
 // ── MCP Settings ──────────────────────────────────────────────────────────────
@@ -599,6 +510,7 @@ pub struct PatchMcpSettingsRequest {
 }
 
 /// `GET /v1/mcp/settings`
+#[instrument(skip_all)]
 pub async fn get_mcp_settings(
     RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
@@ -615,6 +527,7 @@ pub async fn get_mcp_settings(
 }
 
 /// `PATCH /v1/mcp/settings`
+#[instrument(skip_all)]
 pub async fn patch_mcp_settings(
     RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
@@ -650,6 +563,8 @@ pub async fn patch_mcp_settings(
 
 // ── GET /v1/mcp/stats ─────────────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn get_mcp_stats(
     State(state): State<AppState>,
     Query(params): Query<super::usage_handlers::UsageQuery>,
@@ -667,14 +582,8 @@ pub async fn get_mcp_stats(
         return Ok(Json(vec![]));
     }
 
-    #[derive(sqlx::FromRow)]
-    struct McpRow { id: Uuid, name: String, slug: String }
-
-    let pg_rows: Vec<McpRow> = sqlx::query_as("SELECT id, name, slug FROM mcp_servers ORDER BY name LIMIT 500")
-        .fetch_all(&state.pg_pool)
-        .await?;
-
-    let pg_map: std::collections::HashMap<&str, &McpRow> =
+    let pg_rows = mcp_q::list_identities(&state.pg_pool).await?;
+    let pg_map: std::collections::HashMap<&str, &mcp_q::McpServerIdentity> =
         pg_rows.iter().map(|r| (r.slug.as_str(), r)).collect();
 
     let result = slug_stats.into_iter().map(|s| {

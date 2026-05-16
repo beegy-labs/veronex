@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use std::pin::Pin;
 use tracing::Instrument;
 use std::sync::Arc;

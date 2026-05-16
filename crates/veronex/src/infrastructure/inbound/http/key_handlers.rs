@@ -5,6 +5,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, RequireKeyManage};
 
@@ -75,6 +76,7 @@ pub struct KeySummary {
 /// POST /v1/keys — Create a new API key.
 ///
 /// Returns the plaintext key exactly once. It is never stored or retrievable again.
+#[instrument(skip_all)]
 pub async fn create_key(
     RequireKeyManage(claims): RequireKeyManage,
     State(state): State<AppState>,
@@ -142,6 +144,7 @@ use super::handlers::ListPageParams;
 /// GET /v1/keys — List keys for the authenticated tenant with optional search/pagination.
 ///
 /// Returns key prefix only — never the hash or plaintext.
+#[instrument(skip_all)]
 pub async fn list_keys(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
@@ -200,6 +203,7 @@ pub async fn list_keys(
 }
 
 /// DELETE /v1/keys/{id} — Soft-delete an API key (hidden from list, blocked from auth).
+#[instrument(skip_all)]
 pub async fn delete_key(
     RequireKeyManage(claims): RequireKeyManage,
     Path(kid): Path<ApiKeyId>,
@@ -223,6 +227,7 @@ pub async fn delete_key(
 }
 
 /// PATCH /v1/keys/{id} — Update mutable fields: `is_active` and/or `tier`.
+#[instrument(skip_all)]
 pub async fn toggle_key(
     RequireKeyManage(claims): RequireKeyManage,
     Path(kid): Path<ApiKeyId>,
@@ -261,10 +266,8 @@ pub async fn toggle_key(
     state.api_key_repo.update_fields(&kid.0, req.is_active, tier.as_ref()).await?;
 
     if let Some(cap) = req.mcp_cap_points {
-        sqlx::query("UPDATE api_keys SET mcp_cap_points = $1 WHERE id = $2")
-            .bind(cap)
-            .bind(kid.0)
-            .execute(&state.pg_pool)
+        crate::infrastructure::outbound::persistence::api_key_queries::
+            update_mcp_cap_points(&state.pg_pool, kid.0, cap)
             .await
             .map_err(super::error::db_error)?;
         // Invalidate Valkey cap_points cache for this key.
@@ -284,6 +287,7 @@ pub async fn toggle_key(
 /// POST /v1/keys/{id}/regenerate — Issue a new key for the same ID.
 ///
 /// The old key is immediately invalidated. Returns the new plaintext key once.
+#[instrument(skip_all)]
 pub async fn regenerate_key(
     RequireKeyManage(claims): RequireKeyManage,
     Path(kid): Path<ApiKeyId>,

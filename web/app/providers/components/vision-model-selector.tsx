@@ -4,7 +4,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select'
 import { useTranslation } from '@/i18n'
-import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama_server-models'
+import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama-server-models'
 
 interface VisionModelSelectorProps {
   value: string | null

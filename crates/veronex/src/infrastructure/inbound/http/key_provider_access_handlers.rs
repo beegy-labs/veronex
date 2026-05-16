@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::domain::value_objects::{ApiKeyId, ProviderId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireSettingsManage;
@@ -20,6 +21,7 @@ pub struct SetAccessBody {
 }
 
 /// GET /v1/keys/{key_id}/providers — List provider access rules for a key.
+#[instrument(skip_all)]
 pub async fn list_key_provider_access(
     RequireSettingsManage(_): RequireSettingsManage,
     State(state): State<AppState>,
@@ -33,6 +35,7 @@ pub async fn list_key_provider_access(
 }
 
 /// PATCH /v1/keys/{key_id}/providers/{provider_id} — Set provider access for a key.
+#[instrument(skip_all)]
 pub async fn set_key_provider_access(
     RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,

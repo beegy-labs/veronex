@@ -161,6 +161,7 @@ pub fn preload_lock(model: &str, provider_id: Uuid) -> String { pk(&d::preload_l
 pub fn scaleout_decision(model: &str) -> String { pk(&d::scaleout_decision_key(model)) }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

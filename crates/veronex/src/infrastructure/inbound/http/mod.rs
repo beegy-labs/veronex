@@ -18,7 +18,6 @@ mod provider_validation;
 pub mod docs_handlers;
 pub mod conversation_handlers;
 pub mod dashboard_handlers;
-mod dashboard_queries;
 pub mod infra_health_handlers;
 pub mod gemini_compat_handlers;
 pub mod gemini_helpers;
@@ -36,12 +35,11 @@ pub mod openai_sse_types;
 pub mod openai_models_handlers;
 pub mod openai_embeddings_handlers;
 pub mod openai_completions_handlers;
-mod query_helpers;
+pub mod query_helpers;
 pub mod router;
 pub mod setup_handlers;
 pub mod state;
 pub mod usage_handlers;
-mod usage_queries;
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 pub(crate) mod test_support;

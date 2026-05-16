@@ -2,6 +2,7 @@ use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use chrono::Utc;
+use tracing::instrument;
 
 use crate::domain::services::api_key_generator::hash_api_key;
 use crate::infrastructure::inbound::http::error::AppError;
@@ -13,6 +14,7 @@ const EXCLUDED_PATHS: &[&str] = &["/health", "/readyz"];
 ///
 /// Skips health/readiness endpoints. On success, inserts the `ApiKey` entity
 /// into request extensions for downstream handlers/middleware.
+#[instrument(skip_all)]
 pub async fn api_key_auth(
     State(state): State<AppState>,
     mut req: Request,

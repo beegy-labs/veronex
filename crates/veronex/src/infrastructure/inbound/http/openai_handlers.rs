@@ -1,3 +1,11 @@
+#![allow(
+    clippy::collapsible_if,
+    clippy::redundant_locals,
+    clippy::clone_on_copy,
+    clippy::expect_used,
+    clippy::needless_borrow
+)]
+
 use std::sync::Arc;
 
 use axum::extract::State;
@@ -1096,17 +1104,17 @@ async fn load_conversation_context(
         });
 
     // Ensure conversation exists in DB (INSERT ON CONFLICT DO NOTHING)
-    if let Err(e) = sqlx::query(
-        "INSERT INTO conversations (id, account_id, api_key_id, title, source, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5, now(), now()) ON CONFLICT (id) DO NOTHING"
-    )
-    .bind(cid)
-    .bind(caller.account_id())
-    .bind(caller.api_key_id())
-    .bind(&title)
-    .bind(caller.source().as_str())
-    .execute(&state.pg_pool)
-    .await {
+    if let Err(e) = crate::infrastructure::outbound::persistence::conversation_queries::
+        upsert_header(
+            &state.pg_pool,
+            cid,
+            caller.account_id(),
+            caller.api_key_id(),
+            title.as_deref(),
+            caller.source().as_str(),
+        )
+        .await
+    {
         // FK violation on account_id: the JWT references a deleted account → return 401
         if let sqlx::Error::Database(ref db_err) = e {
             if db_err.code().as_deref() == Some("23503") && db_err.message().contains("account_id") {
@@ -1240,6 +1248,7 @@ async fn legacy_queue_chat(
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

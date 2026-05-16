@@ -4,11 +4,13 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::domain::enums::ALL_PERMISSIONS;
 use crate::domain::value_objects::RoleId;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireRoleManage;
 use crate::infrastructure::inbound::http::state::AppState;
+use crate::infrastructure::outbound::persistence::role_queries as role_q;
 
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
@@ -63,55 +65,52 @@ async fn fetch_role_identity(
     pool: &sqlx::PgPool,
     rid: &RoleId,
 ) -> Result<(String, bool), AppError> {
-    sqlx::query_as::<_, (String, bool)>(
-        "SELECT name, is_system FROM roles WHERE id = $1",
-    )
-    .bind(rid.0)
-    .fetch_optional(pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
-    .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))
+    role_q::get_identity(pool, rid.0)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("get role: {e}")))?
+        .ok_or_else(|| AppError::NotFound(format!("role {rid} not found")))
 }
 
 // ── GET /v1/roles ───────────────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn list_roles(
     RequireRoleManage(_claims): RequireRoleManage,
     State(state): State<AppState>,
 ) -> Result<Json<Vec<RoleSummary>>, AppError> {
-    let rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, bool, chrono::DateTime<chrono::Utc>)>(
-        "SELECT id, name, permissions, is_system, created_at FROM roles ORDER BY created_at ASC LIMIT $1"
-    )
-    .bind(MAX_ROLES)
-    .fetch_all(&state.pg_pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("list roles: {e}")))?;
+    let rows = role_q::list(&state.pg_pool, MAX_ROLES)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("list roles: {e}")))?;
 
     if rows.is_empty() {
         return Ok(Json(vec![]));
     }
 
-    // Single batch COUNT query — avoids N round-trips.
-    let role_ids: Vec<Uuid> = rows.iter().map(|(id, ..)| *id).collect();
-    let count_rows: Vec<(Uuid, i64)> = sqlx::query_as(
-        "SELECT ar.role_id, COUNT(*)::bigint FROM account_roles ar JOIN accounts a ON a.id = ar.account_id WHERE a.deleted_at IS NULL AND ar.role_id = ANY($1) GROUP BY ar.role_id"
-    )
-    .bind(&role_ids as &[Uuid])
-    .fetch_all(&state.pg_pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
-
+    let role_ids: Vec<Uuid> = rows.iter().map(|r| r.id).collect();
+    let count_rows = role_q::account_counts(&state.pg_pool, &role_ids)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
     let count_map: std::collections::HashMap<Uuid, i64> = count_rows.into_iter().collect();
 
-    let result = rows.into_iter().map(|(id, name, permissions, is_system, created_at)| {
-        let account_count = count_map.get(&id).copied().unwrap_or(0);
-        RoleSummary { id: RoleId::from_uuid(id), name, permissions, is_system, account_count, created_at }
+    let result = rows.into_iter().map(|r| {
+        let account_count = count_map.get(&r.id).copied().unwrap_or(0);
+        RoleSummary {
+            id: RoleId::from_uuid(r.id),
+            name: r.name,
+            permissions: r.permissions,
+            is_system: r.is_system,
+            account_count,
+            created_at: r.created_at,
+        }
     }).collect();
 
     Ok(Json(result))
 }
 
 // ── POST /v1/roles ──────────────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn create_role(
     RequireRoleManage(claims): RequireRoleManage,
@@ -127,23 +126,16 @@ pub async fn create_role(
     let id = Uuid::now_v7();
     let now = chrono::Utc::now();
 
-    sqlx::query(
-        "INSERT INTO roles (id, name, permissions, is_system, created_at) VALUES ($1, $2, $3, FALSE, $4)"
-    )
-    .bind(id)
-    .bind(&name)
-    .bind(&req.permissions)
-    .bind(now)
-    .execute(&state.pg_pool)
-    .await
-    .map_err(|e| {
-        let msg = e.to_string();
-        if msg.contains("unique") || msg.contains("duplicate") {
-            AppError::Conflict(format!("role '{}' already exists", name))
-        } else {
-            AppError::Internal(anyhow::anyhow!("create role: {e}"))
-        }
-    })?;
+    role_q::insert(&state.pg_pool, id, &name, &req.permissions, now)
+        .await
+        .map_err(|e| {
+            let msg = e.to_string();
+            if msg.contains("unique") || msg.contains("duplicate") {
+                AppError::Conflict(format!("role '{}' already exists", name))
+            } else {
+                AppError::Internal(anyhow::anyhow!("create role: {e}"))
+            }
+        })?;
 
     emit_audit(&state, &claims, "create", "role", &id.to_string(), &name,
         &format!("Role '{}' created with permissions: {:?}", name, req.permissions)).await;
@@ -155,6 +147,8 @@ pub async fn create_role(
 }
 
 // ── PATCH /v1/roles/{id} ────────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn update_role(
     RequireRoleManage(claims): RequireRoleManage,
@@ -186,16 +180,7 @@ pub async fn update_role(
         None => None,
     };
 
-    sqlx::query(
-        "UPDATE roles \
-         SET name        = COALESCE($2, name), \
-             permissions = COALESCE($3, permissions) \
-         WHERE id = $1",
-    )
-    .bind(rid.0)
-    .bind(name.as_deref())
-    .bind(req.permissions.as_deref())
-    .execute(&state.pg_pool)
+    role_q::update_partial(&state.pg_pool, rid.0, name.as_deref(), req.permissions.as_deref())
         .await
         .map_err(|e| {
             let msg = e.to_string();
@@ -214,6 +199,8 @@ pub async fn update_role(
 
 // ── DELETE /v1/roles/{id} ───────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn delete_role(
     RequireRoleManage(claims): RequireRoleManage,
     Path(rid): Path<RoleId>,
@@ -224,23 +211,17 @@ pub async fn delete_role(
         return Err(AppError::Forbidden("system roles cannot be deleted".into()));
     }
 
-    let count: (i64,) = sqlx::query_as(
-        "SELECT count(*) FROM account_roles ar JOIN accounts a ON a.id = ar.account_id WHERE ar.role_id = $1 AND a.deleted_at IS NULL"
-    )
-        .bind(rid.0)
-        .fetch_one(&state.pg_pool)
+    let count = role_q::count_accounts_for_role(&state.pg_pool, rid.0)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
 
-    if count.0 > 0 {
+    if count > 0 {
         return Err(AppError::Conflict(format!(
-            "cannot delete role '{}': {} account(s) still assigned", row.0, count.0
+            "cannot delete role '{}': {} account(s) still assigned", row.0, count
         )));
     }
 
-    sqlx::query("DELETE FROM roles WHERE id = $1")
-        .bind(rid.0)
-        .execute(&state.pg_pool)
+    role_q::delete(&state.pg_pool, rid.0)
         .await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("delete role: {e}")))?;
 

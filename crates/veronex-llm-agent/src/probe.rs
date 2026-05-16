@@ -27,17 +27,9 @@ pub struct ProbeResponse {
 /// missing data falls back to 0 / None so the response is always valid
 /// even on a node with unusual sysfs layout.
 pub fn probe() -> ProbeResponse {
-    let os = if cfg!(target_os = "macos") {
-        "darwin"
-    } else if cfg!(target_os = "linux") {
-        "linux"
-    } else {
-        "linux"
-    };
+    let os = if cfg!(target_os = "macos") { "darwin" } else { "linux" };
     let arch = if cfg!(target_arch = "aarch64") {
         "aarch64"
-    } else if cfg!(target_arch = "x86_64") {
-        "x86_64"
     } else {
         "x86_64"
     };

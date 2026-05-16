@@ -14,6 +14,7 @@ use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::domain::entities::{
     DeploymentKind, GpuAccel, HostArch, HostOs, LlmNode,
@@ -84,6 +85,7 @@ fn node_to_json(n: &LlmNode) -> serde_json::Value {
 }
 
 /// `POST /v1/admin/nodes`
+#[instrument(skip_all)]
 pub async fn register_node(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -165,6 +167,7 @@ pub async fn register_node(
 }
 
 /// `GET /v1/admin/nodes`
+#[instrument(skip_all)]
 pub async fn list_nodes(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -187,6 +190,7 @@ pub async fn list_nodes(
 }
 
 /// `GET /v1/admin/nodes/{id}`
+#[instrument(skip_all)]
 pub async fn get_node(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -211,6 +215,7 @@ pub async fn get_node(
 }
 
 /// `DELETE /v1/admin/nodes/{id}`
+#[instrument(skip_all)]
 pub async fn delete_node(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -240,6 +245,7 @@ pub async fn delete_node(
 /// agent and rewrites the hardware columns. Until the `veronex-agent`
 /// HTTP API ships, the endpoint returns 501 so the operator knows to
 /// seed values manually at registration.
+#[instrument(skip_all)]
 pub async fn probe_node(
     _claims: RequireProviderManage,
     State(_state): State<AppState>,

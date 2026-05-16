@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments, clippy::expect_used, clippy::collapsible_if)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -198,7 +200,7 @@ async fn check_and_store_services(
         let start = std::time::Instant::now();
         let res = tokio::time::timeout(
             SERVICE_PROBE_TIMEOUT,
-            sqlx::query("SELECT 1").execute(pg_pool),
+            crate::infrastructure::outbound::persistence::health_queries::ping(pg_pool),
         ).await;
         let ms = start.elapsed().as_millis() as u32;
         let s = match res {
@@ -698,13 +700,8 @@ pub async fn run_server_metrics_loop(
 
             // Persist gpu_vendor when detected and not already correct.
             if !detected_vendor.is_empty() {
-                if let Err(e) = sqlx::query(
-                    "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
-                )
-                .bind(detected_vendor)
-                .bind(server.id)
-                .execute(&pg_pool)
-                .await
+                if let Err(e) = crate::infrastructure::outbound::persistence::health_queries::
+                    update_gpu_vendor_if_changed(&pg_pool, server.id, detected_vendor).await
                 {
                     tracing::warn!(
                         server_id = %server.id,

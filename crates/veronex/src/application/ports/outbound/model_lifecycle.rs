@@ -65,6 +65,7 @@ pub enum LifecycleOutcome {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 pub mod mock {
     //! In-memory `ModelLifecyclePort` mock for use case / runner tests.
     //! Reproduces the real adapter's contract minus HTTP / VramPool side-effects.
@@ -166,6 +167,7 @@ pub mod mock {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::mock::{MockBehaviour, MockLifecycle};
     use super::*;
@@ -200,8 +202,8 @@ mod tests {
     #[tokio::test]
     async fn mock_evict_increments_counter() {
         let m = MockLifecycle::new();
-        let _ = m.evict("model", EvictionReason::Operator).await.unwrap();
-        let _ = m.evict("model", EvictionReason::VramPressure).await.unwrap();
+        m.evict("model", EvictionReason::Operator).await.unwrap();
+        m.evict("model", EvictionReason::VramPressure).await.unwrap();
         assert_eq!(m.evict_count("model"), 2);
     }
 }

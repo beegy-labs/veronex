@@ -7,6 +7,7 @@
 
 | Trigger | Workflow |
 |---------|----------|
+| **Any code-writing task once scope is approved** | [**`codex-delegate.md`**](codex-delegate.md) |
 | Code review, optimization, review of files | [`code-review.md`](code-review.md) |
 | Frontend-only review | [`frontend-review.md`](frontend-review.md) |
 | Backend-only review (Rust) | [`backend-review.md`](backend-review.md) |

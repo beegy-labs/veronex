@@ -28,6 +28,7 @@
 
 use std::convert::Infallible;
 use std::time::Duration;
+use tracing::instrument;
 
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -146,6 +147,7 @@ fn parse_install_status(s: &str) -> Option<InstallStatus> {
 /// `POST /v1/admin/models` — create row. Phase 2 leaves the actual install
 /// pipeline to the orchestrator; clients that want the full happy path
 /// invoke `POST .../install/retry` after registration completes if desired.
+#[instrument(skip_all)]
 pub async fn register_model(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -189,6 +191,8 @@ pub async fn register_model(
     (StatusCode::CREATED, Json(json!({ "model_id": model_id }))).into_response()
 }
 
+#[instrument(skip_all)]
+
 pub async fn list_models(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -213,6 +217,8 @@ pub async fn list_models(
         Err(e) => internal_err("list_failed", e),
     }
 }
+
+#[instrument(skip_all)]
 
 pub async fn get_model(
     _claims: RequireProviderManage,
@@ -274,6 +280,8 @@ pub struct PatchModelRequest {
     pub tags: Option<Option<Vec<String>>>,
 }
 
+#[instrument(skip_all)]
+
 pub async fn patch_model(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -326,6 +334,8 @@ pub async fn patch_model(
     }
 }
 
+#[instrument(skip_all)]
+
 pub async fn delete_model(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -345,6 +355,8 @@ pub async fn delete_model(
     }
 }
 
+#[instrument(skip_all)]
+
 pub async fn promote_model(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -361,6 +373,8 @@ pub async fn promote_model(
 }
 
 // ── Install endpoints ───────────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn list_attempts(
     _claims: RequireProviderManage,
@@ -409,6 +423,7 @@ pub async fn list_attempts(
 /// attempt row — actual orchestration awaits a follow-up commit that wires
 /// the source-spec re-resolution path. The endpoint is exposed so the admin
 /// UI can POST against it without code changes when wiring lands.
+#[instrument(skip_all)]
 pub async fn retry_install(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -464,6 +479,8 @@ pub async fn retry_install(
     )
         .into_response()
 }
+
+#[instrument(skip_all)]
 
 pub async fn cancel_install(
     _claims: RequireProviderManage,
@@ -529,6 +546,7 @@ pub async fn cancel_install(
 /// Subscribes to the install_orchestrator's broadcast channel for `id` and
 /// re-emits every event as a `data:` line. Slow consumers see `Lagged` and
 /// just miss intermediate progress events.
+#[instrument(skip_all)]
 pub async fn install_stream(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -596,6 +614,8 @@ fn serialize_event(event: &InstallEvent) -> String {
 
 // ── Blob endpoints ──────────────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn list_orphan_blobs(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -633,6 +653,8 @@ pub async fn list_orphan_blobs(
         Err(e) => internal_err("list_orphans_failed", e),
     }
 }
+
+#[instrument(skip_all)]
 
 pub async fn delete_blob(
     _claims: RequireProviderManage,

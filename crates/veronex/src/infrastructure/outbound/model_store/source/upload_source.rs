@@ -1,3 +1,5 @@
+#![allow(clippy::expect_used)]
+
 //! Direct multipart upload source.
 //!
 //! Used when the admin uploads a custom-quantized GGUF directly through
@@ -84,6 +86,7 @@ impl ModelSource for UploadSource {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use futures::stream;

@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_closure, clippy::collapsible_if)]
+
 //! Shared validation and helper functions for inference handler endpoints.
 //!
 //! Extracted from the duplicated logic across `openai_handlers`, `gemini_compat_handlers`,
@@ -446,6 +448,7 @@ pub fn build_sse_response(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

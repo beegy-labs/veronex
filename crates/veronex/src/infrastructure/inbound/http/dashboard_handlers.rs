@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tracing::Instrument;
+use tracing::{instrument, Instrument};
 use std::convert::Infallible;
 
 use axum::extract::{Extension, Path, Query, State};
@@ -21,7 +21,7 @@ use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
 use super::constants::{PROVIDER_GEMINI, PROVIDER_LLAMA_SERVER};
-use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
+use crate::infrastructure::outbound::persistence::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
 use super::state::AppState;
@@ -54,6 +54,7 @@ fn default_limit() -> i64 {
 // ── Handlers ───────────────────────────────────────────────────────
 
 /// GET /v1/dashboard/stats — Overview statistics.
+#[instrument(skip_all)]
 pub async fn get_stats(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardStats>, AppError> {
@@ -64,6 +65,7 @@ pub async fn get_stats(
 ///
 /// Super admins can view any job. Regular users can only view jobs
 /// belonging to their own account (matched via `account_id` on the job).
+#[instrument(skip_all)]
 pub async fn get_job_detail(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
@@ -109,6 +111,7 @@ pub async fn get_job_detail(
 }
 
 /// GET /v1/dashboard/jobs — Paginated job list.
+#[instrument(skip_all)]
 pub async fn list_jobs(
     State(state): State<AppState>,
     Query(params): Query<JobsQuery>,
@@ -143,6 +146,7 @@ pub async fn list_jobs(
 }
 
 /// DELETE /v1/dashboard/jobs/{id} — Admin cancel a job (JWT-protected).
+#[instrument(skip_all)]
 pub async fn cancel_job(
     RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
@@ -159,6 +163,7 @@ pub async fn cancel_job(
 
 /// GET /v1/dashboard/performance — Latency percentiles + hourly throughput.
 /// ClickHouse primary, PostgreSQL fallback.
+#[instrument(skip_all)]
 pub async fn get_performance(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
@@ -370,6 +375,7 @@ pub struct DashboardOverview {
 ///
 /// Runs stats, performance, queue depth, and lab settings queries in parallel.
 /// Capacity data is served by the dedicated `/capacity` endpoint (paginated).
+#[instrument(skip_all)]
 pub async fn get_dashboard_overview(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardOverview>, AppError> {
@@ -412,6 +418,8 @@ pub async fn get_dashboard_overview(
 }
 
 // ── GET /v1/dashboard/capacity ──────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn get_capacity(
     State(state): State<AppState>,
@@ -462,6 +470,7 @@ pub struct ClusterModelInfo {
 /// Returns one row per unique model name with summed active/limit counts.
 ///
 /// Reads entirely from the in-memory VramPool (no DB scan) — safe at 10K providers.
+#[instrument(skip_all)]
 pub async fn get_capacity_cluster(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ClusterModelInfo>>, AppError> {
@@ -487,6 +496,8 @@ pub async fn get_capacity_cluster(
 
 // ── GET /v1/dashboard/capacity/settings ────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn get_capacity_settings(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
@@ -499,6 +510,8 @@ pub async fn get_capacity_settings(
 }
 
 // ── PATCH /v1/dashboard/capacity/settings ──────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn patch_capacity_settings(
     RequireSettingsManage(claims): RequireSettingsManage,
@@ -593,11 +606,15 @@ pub struct QueueDepth {
     pub total: i64,
 }
 
+#[instrument(skip_all)]
+
 pub async fn get_queue_depth(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     Json(fetch_queue_depth(&state).await).into_response()
 }
 
 // ── GET /v1/dashboard/jobs/stream — Real-time job status SSE ───────
+
+#[instrument(skip_all)]
 
 pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Response {
     // Enforce global SSE connection limit — prevents resource exhaustion.
@@ -690,6 +707,7 @@ fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings
 }
 
 /// `GET /v1/dashboard/lab` — return current lab feature flags.
+#[instrument(skip_all)]
 pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     match state.lab_settings_repo.get().await {
         Ok(s) => Json(lab_settings_to_response(s)).into_response(),
@@ -735,6 +753,7 @@ pub struct PatchLabSettingsBody {
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
+#[instrument(skip_all)]
 pub async fn patch_lab_settings(
     RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
@@ -787,6 +806,8 @@ pub struct TriggerGroupingRequest {
     /// Omit to use the default: today's midnight (all jobs before today).
     pub before_date: Option<NaiveDate>,
 }
+
+#[instrument(skip_all)]
 
 pub async fn trigger_session_grouping(
     RequireSettingsManage(claims): RequireSettingsManage,

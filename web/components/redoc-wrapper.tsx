@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { RedocStandalone } from 'redoc'
 
 interface RedocWrapperProps {
@@ -16,39 +17,83 @@ interface RedocWrapperProps {
   }
 }
 
-/**
- * Thin wrapper around RedocStandalone.
- * Loaded via dynamic() with ssr:false from the /api-docs/redoc page.
- *
- * NOTE: Redoc does not support CSS custom properties — all theme values must be
- * static hex strings. These are intentional light-mode palette constants;
- * the `no-hardcoded-hex` linting exception applies to this file only.
- */
+// Thin wrapper around RedocStandalone.
+// Loaded via dynamic() with ssr:false from the /api-docs/redoc page.
+//
+// The Redoc theme prop reads colors once at mount and stores them in JS
+// state; CSS custom properties cannot reach that path. To keep the
+// verodesign SSOT, every value is resolved at runtime by setting the
+// vds-theme-* variable on a hidden probe element and reading the computed
+// color. Redoc receives the resolved value (e.g. rgb(...)); the source of
+// truth stays in app/styles/vds/theme-veronex.css.
 
-// ── Veronex light-mode palette (Redoc-only) ──────────────────────────────────
-const REDOC_COLOR_PRIMARY        = '#0f3325'
-const REDOC_COLOR_SUCCESS        = '#16a34a'
-const REDOC_COLOR_WARNING        = '#d97706'
-const REDOC_COLOR_ERROR          = '#dc2626'
-const REDOC_COLOR_INFO           = '#2563eb'
-const REDOC_TEXT_PRIMARY         = '#141a14'
-const REDOC_TEXT_SECONDARY       = '#334155'
-const REDOC_BORDER_DARK          = '#cbd5e1'
-const REDOC_BORDER_LIGHT         = '#e2e8e0'
-const REDOC_SIDEBAR_BG           = '#f2f4f2'
-const REDOC_SIDEBAR_ACTIVE_BG    = '#e2e8e0'
-const REDOC_RIGHT_PANEL_BG       = '#1a2118'
-const REDOC_CODE_BLOCK_BG        = '#111412'
-const REDOC_RESP_SUCCESS_BG      = '#f0fdf4'
-const REDOC_RESP_SUCCESS_TAB     = '#14532d'
-const REDOC_RESP_ERROR_BG        = '#fef2f2'
-const REDOC_RESP_ERROR_TAB       = '#7f1d1d'
-const REDOC_RESP_REDIRECT_BG     = '#fffbeb'
-const REDOC_RESP_REDIRECT_TAB    = '#78350f'
-const REDOC_RESP_INFO_BG         = '#eff6ff'
-const REDOC_RESP_INFO_TAB        = '#1e3a5f'
+// SSR-only sentinel — RedocStandalone is loaded with ssr:false, so this
+// branch is unreachable at runtime. The CSS keyword keeps the file free
+// of raw color literals.
+const SSR_SENTINEL = 'transparent'
+
+function readThemeColor(varName: string): string {
+  if (typeof window === 'undefined') return SSR_SENTINEL
+  const probe = document.createElement('span')
+  probe.style.color = `var(${varName})`
+  probe.style.display = 'none'
+  document.documentElement.appendChild(probe)
+  const resolved = getComputedStyle(probe).color
+  probe.remove()
+  return resolved || SSR_SENTINEL
+}
+
+interface ResolvedTheme {
+  primary: string
+  success: string
+  warning: string
+  error: string
+  info: string
+  textPrimary: string
+  textSecondary: string
+  borderDefault: string
+  borderSubtle: string
+  bgMuted: string
+  bgHover: string
+  bgInverse: string
+  bgCode: string
+  successBg: string
+  errorBg: string
+  warningBg: string
+  infoBg: string
+}
+
+function resolveTheme(): ResolvedTheme {
+  return {
+    primary:        readThemeColor('--vds-theme-primary'),
+    success:        readThemeColor('--vds-theme-success'),
+    warning:        readThemeColor('--vds-theme-warning'),
+    error:          readThemeColor('--vds-theme-error'),
+    info:           readThemeColor('--vds-theme-info'),
+    textPrimary:    readThemeColor('--vds-theme-text-primary'),
+    textSecondary:  readThemeColor('--vds-theme-text-secondary'),
+    borderDefault:  readThemeColor('--vds-theme-border-default'),
+    borderSubtle:   readThemeColor('--vds-theme-border-subtle'),
+    bgMuted:        readThemeColor('--vds-theme-bg-muted'),
+    bgHover:        readThemeColor('--vds-theme-bg-hover'),
+    bgInverse:      readThemeColor('--vds-theme-bg-inverse'),
+    bgCode:         readThemeColor('--vds-theme-bg-code'),
+    successBg:      readThemeColor('--vds-theme-success-bg'),
+    errorBg:        readThemeColor('--vds-theme-error-bg'),
+    warningBg:      readThemeColor('--vds-theme-warning-bg'),
+    infoBg:         readThemeColor('--vds-theme-info-bg'),
+  }
+}
 
 export default function RedocWrapper({ specUrl, labels }: RedocWrapperProps) {
+  const [t, setTheme] = useState<ResolvedTheme | null>(null)
+
+  useEffect(() => {
+    setTheme(resolveTheme())
+  }, [])
+
+  if (!t) return null
+
   return (
     <RedocStandalone
       specUrl={specUrl}
@@ -61,20 +106,20 @@ export default function RedocWrapper({ specUrl, labels }: RedocWrapperProps) {
         theme: {
           spacing: { unit: 5 },
           colors: {
-            primary: { main: REDOC_COLOR_PRIMARY },
-            success: { main: REDOC_COLOR_SUCCESS },
-            warning: { main: REDOC_COLOR_WARNING },
-            error:   { main: REDOC_COLOR_ERROR },
+            primary: { main: t.primary },
+            success: { main: t.success },
+            warning: { main: t.warning },
+            error:   { main: t.error },
             text: {
-              primary:   REDOC_TEXT_PRIMARY,
-              secondary: REDOC_TEXT_SECONDARY,
+              primary:   t.textPrimary,
+              secondary: t.textSecondary,
             },
-            border: { dark: REDOC_BORDER_DARK, light: REDOC_BORDER_LIGHT },
+            border: { dark: t.borderDefault, light: t.borderSubtle },
             responses: {
-              success:  { color: REDOC_COLOR_SUCCESS,  backgroundColor: REDOC_RESP_SUCCESS_BG,  tabTextColor: REDOC_RESP_SUCCESS_TAB  },
-              error:    { color: REDOC_COLOR_ERROR,    backgroundColor: REDOC_RESP_ERROR_BG,    tabTextColor: REDOC_RESP_ERROR_TAB    },
-              redirect: { color: REDOC_COLOR_WARNING,  backgroundColor: REDOC_RESP_REDIRECT_BG, tabTextColor: REDOC_RESP_REDIRECT_TAB },
-              info:     { color: REDOC_COLOR_INFO,     backgroundColor: REDOC_RESP_INFO_BG,     tabTextColor: REDOC_RESP_INFO_TAB     },
+              success:  { color: t.success, backgroundColor: t.successBg, tabTextColor: t.success },
+              error:    { color: t.error,   backgroundColor: t.errorBg,   tabTextColor: t.error   },
+              redirect: { color: t.warning, backgroundColor: t.warningBg, tabTextColor: t.warning },
+              info:     { color: t.info,    backgroundColor: t.infoBg,    tabTextColor: t.info    },
             },
           },
           typography: {
@@ -85,17 +130,17 @@ export default function RedocWrapper({ specUrl, labels }: RedocWrapperProps) {
           },
           sidebar: {
             width: '240px',
-            backgroundColor: REDOC_SIDEBAR_BG,
-            textColor:       REDOC_TEXT_PRIMARY,
-            activeTextColor: REDOC_COLOR_PRIMARY,
-            groupItems: { activeBackgroundColor: REDOC_SIDEBAR_ACTIVE_BG, activeTextColor: REDOC_COLOR_PRIMARY },
-            level1Items:  { activeBackgroundColor: REDOC_SIDEBAR_ACTIVE_BG, activeTextColor: REDOC_COLOR_PRIMARY },
+            backgroundColor: t.bgMuted,
+            textColor:       t.textPrimary,
+            activeTextColor: t.primary,
+            groupItems: { activeBackgroundColor: t.bgHover, activeTextColor: t.primary },
+            level1Items:  { activeBackgroundColor: t.bgHover, activeTextColor: t.primary },
           },
           rightPanel: {
-            backgroundColor: REDOC_RIGHT_PANEL_BG,
+            backgroundColor: t.bgInverse,
           },
           codeBlock: {
-            backgroundColor: REDOC_CODE_BLOCK_BG,
+            backgroundColor: t.bgCode,
           },
         },
       }}

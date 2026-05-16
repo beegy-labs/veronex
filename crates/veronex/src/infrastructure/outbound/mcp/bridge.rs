@@ -1,3 +1,5 @@
+#![allow(clippy::doc_lazy_continuation, clippy::collapsible_if, clippy::unnecessary_cast)]
+
 //! McpBridgeAdapter — wraps the upstream inference loop with MCP tool execution.
 //!
 //! # Flow (per request)
@@ -564,20 +566,18 @@ impl McpBridgeAdapter {
         // + bridge-owned consolidated S3 turn write + turn_count bump ───────
         if let Some(ref fid) = first_job_id {
             let pg = &state.pg_pool;
-            let _ = sqlx::query(
-                "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3",
+            use crate::infrastructure::outbound::persistence::mcp_bridge_queries as bridge_q;
+            let _ = bridge_q::roll_up_first_job_tokens(
+                pg,
+                fid.0,
+                total_prompt_tokens.min(i32::MAX as u32) as i32,
+                total_completion_tokens.min(i32::MAX as u32) as i32,
             )
-            .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-            .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-            .bind(fid.0)
-            .execute(pg)
             .await
             .map_err(|e| warn!(job_id = %fid.0, error = %e, "ReAct: failed to update job tokens"));
 
             if !intermediate_job_ids.is_empty() {
-                let _ = sqlx::query("DELETE FROM inference_jobs WHERE id = ANY($1)")
-                    .bind(&intermediate_job_ids)
-                    .execute(pg)
+                let _ = bridge_q::delete_intermediate_jobs(pg, &intermediate_job_ids)
                     .await
                     .map_err(|e| warn!(error = %e, "ReAct: failed to cleanup intermediate jobs"));
             }
@@ -624,22 +624,16 @@ impl McpBridgeAdapter {
             }
 
             if let Some(conv_id) = conversation_id {
-                let _ = sqlx::query(
-                    "UPDATE conversations \
-                        SET turn_count = turn_count + 1, \
-                            total_prompt_tokens = total_prompt_tokens + $1, \
-                            total_completion_tokens = total_completion_tokens + $2, \
-                            model_name = COALESCE(model_name, $3), \
-                            updated_at = now() \
-                      WHERE id = $4"
-                )
-                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-                .bind(&model)
-                .bind(conv_id)
-                .execute(pg)
-                .await
-                .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "ReAct: turn_count increment failed"));
+                let _ = crate::infrastructure::outbound::persistence::mcp_bridge_queries::
+                    bump_conversation_turn(
+                        pg,
+                        conv_id,
+                        total_prompt_tokens.min(i32::MAX as u32) as i32,
+                        total_completion_tokens.min(i32::MAX as u32) as i32,
+                        &model,
+                    )
+                    .await
+                    .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "ReAct: turn_count increment failed"));
             }
         }
 
@@ -1135,13 +1129,8 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     }
 
     // ── L2: DB (cache miss) ────────────────────────────────────────────────────
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT server_id FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true"
-    )
-    .bind(key_id)
-    .fetch_all(&state.pg_pool)
-    .await
-    .unwrap_or_default();
+    let ids = crate::infrastructure::outbound::persistence::mcp_key_access_queries::
+        list_allowed_server_ids(&state.pg_pool, key_id).await;
 
     // Populate cache — empty array is also cached (negative cache).
     if let Some(ref pool) = state.valkey_pool && let Ok(json) = serde_json::to_string(&ids) {
@@ -1204,7 +1193,7 @@ async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
     cached_mcp_int_lookup(
         state,
         crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id),
-        "SELECT mcp_cap_points FROM api_keys WHERE id = $1",
+        crate::infrastructure::outbound::persistence::mcp_bridge_queries::SELECT_MCP_CAP_POINTS,
         key_id,
         "cap_points",
     ).await.map(|v| v as u8)
@@ -1216,7 +1205,7 @@ async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
     cached_mcp_int_lookup(
         state,
         crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id),
-        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL",
+        crate::infrastructure::outbound::persistence::mcp_bridge_queries::SELECT_MIN_TOP_K_FOR_KEY,
         key_id,
         "top_k",
     ).await.map(|v| v as usize)
@@ -1271,6 +1260,7 @@ impl McpBridgeAdapter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 

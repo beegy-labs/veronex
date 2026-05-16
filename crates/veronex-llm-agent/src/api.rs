@@ -5,10 +5,10 @@
 //! - `/healthz`         — real
 //! - `/health/{port}`   — proxies llama-server `/health`
 //! - `/blobs/{sha256}`  — GET = presence (real); POST = 501 until the
-//!                        streaming fetch lands
+//!   streaming fetch lands
 //! - `/spawn`           — 501 until platform-specific spawn lands
 //! - `/process/{handle}` — DELETE = 501; the registry returns 404 when
-//!                         the handle is unknown
+//!   the handle is unknown
 
 use std::sync::Arc;
 

@@ -1,6 +1,7 @@
 use axum::extract::{Extension, Path, Query, State};
 use axum::Json;
 use serde::Deserialize;
+use tracing::instrument;
 
 use crate::application::ports::outbound::analytics_repository::{
     AnalyticsSummary, HourlyUsage, UsageAggregate, UsageJob,
@@ -11,7 +12,7 @@ use crate::infrastructure::inbound::http::middleware::jwt_auth::{Claims, Require
 use super::error::AppError;
 use super::query_helpers::validate_hours;
 use super::state::AppState;
-use super::usage_queries::{self, ModelBreakdown, UsageBreakdownResponse};
+use crate::infrastructure::outbound::persistence::usage_queries::{self, ModelBreakdown, UsageBreakdownResponse};
 
 // ── Query parameters ───────────────────────────────────────────────
 
@@ -94,6 +95,7 @@ async fn verify_key_ownership(
 
 /// GET /v1/usage — Aggregate usage across all keys (super admin only).
 /// ClickHouse primary, PostgreSQL fallback.
+#[instrument(skip_all)]
 pub async fn aggregate_usage(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
@@ -111,6 +113,7 @@ pub async fn aggregate_usage(
 
 /// GET /v1/usage/{key_id} — Per-key hourly breakdown.
 /// ClickHouse primary, PostgreSQL fallback.
+#[instrument(skip_all)]
 pub async fn key_usage(
     Extension(claims): Extension<Claims>,
     Path(kid): Path<ApiKeyId>,
@@ -131,6 +134,7 @@ pub async fn key_usage(
 
 /// GET /v1/dashboard/analytics — Model distribution, finish reasons, TPS and avg tokens (super admin only).
 /// ClickHouse primary, PostgreSQL fallback.
+#[instrument(skip_all)]
 pub async fn get_analytics(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
@@ -148,6 +152,7 @@ pub async fn get_analytics(
 
 /// GET /v1/usage/{key_id}/jobs — Individual request list for a key.
 /// ClickHouse primary, PostgreSQL fallback.
+#[instrument(skip_all)]
 pub async fn key_usage_jobs(
     Extension(claims): Extension<Claims>,
     Path(kid): Path<ApiKeyId>,
@@ -168,6 +173,7 @@ pub async fn key_usage_jobs(
 
 /// GET /v1/usage/{key_id}/models — Per-key model breakdown from PostgreSQL.
 /// Returns which models the key has used, with request counts and token stats.
+#[instrument(skip_all)]
 pub async fn key_model_breakdown(
     Extension(claims): Extension<Claims>,
     Path(kid): Path<ApiKeyId>,
@@ -183,6 +189,7 @@ pub async fn key_model_breakdown(
 }
 
 /// GET /v1/usage/breakdown — Provider, API key, and model breakdown from PostgreSQL (super admin only).
+#[instrument(skip_all)]
 pub async fn usage_breakdown(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,

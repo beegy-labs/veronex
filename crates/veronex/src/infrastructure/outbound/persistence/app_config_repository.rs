@@ -116,7 +116,7 @@ impl AppConfigRepository for PostgresAppConfigRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<AppConfigEntry>> {
-        let q = format!("SELECT {COLS} FROM app_config ORDER BY key");
+        let q = format!("SELECT {COLS} FROM app_config ORDER BY key LIMIT 1000");
         let rows = sqlx::query(&q).fetch_all(&self.pool).await?;
         rows.iter().map(|r| self.decode(r)).collect()
     }

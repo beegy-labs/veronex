@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 //! Install-state gate for inference dispatch.
 //!
 //! Looks up a Modelfile by `model_id` (precise) or `family` (resolves to the
@@ -115,6 +117,7 @@ fn parse_kind(s: &str) -> Option<ErrorKind> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use crate::application::ports::outbound::modelfile_registry::{

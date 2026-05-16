@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use crate::application::ports::outbound::lab_settings_repository::LabSettings;
 use crate::application::ports::outbound::message_store::ConversationRecord;
 

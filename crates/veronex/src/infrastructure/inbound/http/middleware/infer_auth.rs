@@ -1,7 +1,10 @@
+#![allow(clippy::doc_overindented_list_items)]
+
 use axum::extract::{Request, State};
 use axum::middleware::Next;
 use axum::response::Response;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
+use tracing::instrument;
 
 use crate::domain::entities::ApiKey;
 use crate::domain::services::api_key_generator::hash_api_key;
@@ -63,6 +66,7 @@ const EXCLUDED_PATHS: &[&str] = &["/health", "/readyz"];
 ///
 /// JWT fallback requires `api_test` permission → 403 if missing.
 /// Neither present → 401.
+#[instrument(skip_all)]
 pub async fn infer_auth(
     State(state): State<AppState>,
     mut req: Request,

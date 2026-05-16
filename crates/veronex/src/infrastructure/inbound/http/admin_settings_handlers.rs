@@ -12,6 +12,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::Deserialize;
 use serde_json::json;
+use tracing::instrument;
 
 use crate::application::ports::outbound::system_settings_repository::default_for;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
@@ -37,6 +38,7 @@ fn not_wired() -> axum::response::Response {
 
 /// `GET /v1/admin/settings` — list every persisted row plus seed values
 /// for canonical keys that haven't been written yet.
+#[instrument(skip_all)]
 pub async fn list_settings(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -73,6 +75,7 @@ pub async fn list_settings(
 /// `GET /v1/admin/settings/{key}` — single key. Falls back to the
 /// canonical default when the row is absent so callers always get a
 /// usable value.
+#[instrument(skip_all)]
 pub async fn get_setting(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -122,6 +125,7 @@ pub async fn get_setting(
 }
 
 /// `PUT /v1/admin/settings/{key}` — upsert.
+#[instrument(skip_all)]
 pub async fn upsert_setting(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -145,6 +149,7 @@ pub async fn upsert_setting(
 }
 
 /// `DELETE /v1/admin/settings/{key}`
+#[instrument(skip_all)]
 pub async fn delete_setting(
     _claims: RequireProviderManage,
     State(state): State<AppState>,

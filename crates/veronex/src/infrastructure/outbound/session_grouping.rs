@@ -72,32 +72,11 @@ pub async fn group_sessions_before(
     pg_pool: &PgPool,
     cutoff:  Option<NaiveDate>,
 ) -> anyhow::Result<usize> {
-    // ── Build cutoff expression ────────────────────────────────────────────────
-    // None  → DATE_TRUNC('day', NOW())         — everything before today
-    // Some  → the supplied date cast as TIMESTAMPTZ
-    let cutoff_clause = if cutoff.is_some() {
-        "AND created_at < $1::date::timestamptz"
-    } else {
-        "AND created_at < DATE_TRUNC('day', NOW())"
-    };
-
     // 1. Load existing hash → conversation_id for already-grouped jobs.
     //    Key: (api_key_id, account_id, messages_hash) → prevents cross-key contamination.
     //    Only include jobs created before the cutoff to stay consistent with the ungrouped query.
-    let existing_sql = format!(
-        "SELECT api_key_id, account_id, messages_hash, conversation_id
-         FROM inference_jobs
-         WHERE conversation_id IS NOT NULL
-           AND messages_hash IS NOT NULL
-           {cutoff_clause}
-         ORDER BY created_at DESC
-         LIMIT 50000"
-    );
-    let existing_rows = if let Some(date) = cutoff {
-        sqlx::query(&existing_sql).bind(date).fetch_all(pg_pool).await?
-    } else {
-        sqlx::query(&existing_sql).fetch_all(pg_pool).await?
-    };
+    use crate::infrastructure::outbound::persistence::session_grouping_queries as sgq;
+    let existing_rows = sgq::fetch_grouped_jobs(pg_pool, cutoff).await?;
 
     let mut hash_to_conv: HashMap<(Option<Uuid>, Option<Uuid>, String), String> =
         HashMap::with_capacity(existing_rows.len());
@@ -116,20 +95,7 @@ pub async fn group_sessions_before(
 
     // 2. Fetch ungrouped jobs oldest-first so chains resolve in order.
     //    Cutoff: created_at < cutoff — never touch in-progress conversations.
-    let ungrouped_sql = format!(
-        "SELECT id, api_key_id, account_id, messages_hash, messages_prefix_hash
-         FROM inference_jobs
-         WHERE conversation_id IS NULL
-           AND messages_hash IS NOT NULL
-           {cutoff_clause}
-         ORDER BY created_at ASC
-         LIMIT 10000"
-    );
-    let ungrouped_rows = if let Some(date) = cutoff {
-        sqlx::query(&ungrouped_sql).bind(date).fetch_all(pg_pool).await?
-    } else {
-        sqlx::query(&ungrouped_sql).fetch_all(pg_pool).await?
-    };
+    let ungrouped_rows = sgq::fetch_ungrouped_jobs(pg_pool, cutoff).await?;
 
     if ungrouped_rows.is_empty() {
         return Ok(0);
@@ -183,16 +149,7 @@ pub async fn group_sessions_before(
     let job_ids:  Vec<Uuid>   = ids_to_update.iter().map(|(id, _)| *id).collect();
     let conv_ids: Vec<String> = ids_to_update.iter().map(|(_, c)| c.clone()).collect();
 
-    sqlx::query(
-        "UPDATE inference_jobs AS j
-         SET conversation_id = u.conv_id
-         FROM UNNEST($1::uuid[], $2::text[]) AS u(job_id, conv_id)
-         WHERE j.id = u.job_id",
-    )
-    .bind(&job_ids)
-    .bind(&conv_ids)
-    .execute(pg_pool)
-    .await?;
+    sgq::assign_conversations_batch(pg_pool, &job_ids, &conv_ids).await?;
 
     Ok(ids_to_update.len())
 }

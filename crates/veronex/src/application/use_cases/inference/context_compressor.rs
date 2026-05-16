@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use std::sync::{Arc, OnceLock};
 use uuid::Uuid;
 

@@ -12,7 +12,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EditModal, RegisterModal } from './components/modals'
-import { LlamaServerTab } from './components/llama_server-tab'
+import { LlamaServerTab } from './components/llama-server-tab'
 import { GeminiTab } from './components/gemini-tab'
 
 // ── Page ──────────────────────────────────────────────────────────────────────

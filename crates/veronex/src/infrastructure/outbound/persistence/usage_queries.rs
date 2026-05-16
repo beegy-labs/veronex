@@ -9,8 +9,8 @@ use crate::application::ports::outbound::analytics_repository::{
     AnalyticsSummary, FinishReasonStat, HourlyUsage, ModelStat, UsageAggregate, UsageJob,
 };
 
-use super::error::AppError;
-use super::query_helpers::{pct, PRICING_LATERAL};
+use crate::infrastructure::inbound::http::error::AppError;
+use crate::infrastructure::inbound::http::query_helpers::{pct, PRICING_LATERAL};
 
 // ── Breakdown types ───────────────────────────────────────────────
 
@@ -65,7 +65,7 @@ pub struct UsageBreakdownResponse {
 
 // ── Query functions ────────────────────────────────────────────────
 
-pub(super) async fn pg_aggregate_usage(pool: &sqlx::PgPool, hours: u32) -> Result<UsageAggregate, AppError> {
+pub async fn pg_aggregate_usage(pool: &sqlx::PgPool, hours: u32) -> Result<UsageAggregate, AppError> {
     use sqlx::Row;
     let row = sqlx::query(
         "SELECT
@@ -94,7 +94,7 @@ pub(super) async fn pg_aggregate_usage(pool: &sqlx::PgPool, hours: u32) -> Resul
     })
 }
 
-pub(super) async fn pg_key_usage_hourly(
+pub async fn pg_key_usage_hourly(
     pool: &sqlx::PgPool,
     key_id: &uuid::Uuid,
     hours: u32,
@@ -134,7 +134,7 @@ pub(super) async fn pg_key_usage_hourly(
     }).collect())
 }
 
-pub(super) async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Result<AnalyticsSummary, AppError> {
+pub async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Result<AnalyticsSummary, AppError> {
     use sqlx::Row;
     // Aggregate stats
     let agg = sqlx::query(
@@ -224,7 +224,7 @@ pub(super) async fn pg_analytics_summary(pool: &sqlx::PgPool, hours: u32) -> Res
     })
 }
 
-pub(super) async fn pg_key_usage_jobs(
+pub async fn pg_key_usage_jobs(
     pool: &sqlx::PgPool,
     key_id: &uuid::Uuid,
     hours: u32,
@@ -268,7 +268,7 @@ pub(super) async fn pg_key_usage_jobs(
 }
 
 /// Per-key model breakdown query.
-pub(super) async fn pg_key_model_breakdown(
+pub async fn pg_key_model_breakdown(
     pool: &sqlx::PgPool,
     key_id: &uuid::Uuid,
     hours: u32,
@@ -333,7 +333,7 @@ pub(super) async fn pg_key_model_breakdown(
 }
 
 /// Full usage breakdown: by provider, by key, and by model.
-pub(super) async fn pg_usage_breakdown(
+pub async fn pg_usage_breakdown(
     pool: &sqlx::PgPool,
     hours: u32,
 ) -> Result<UsageBreakdownResponse, AppError> {

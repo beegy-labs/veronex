@@ -106,7 +106,7 @@ impl LlmNodeRepository for PostgresLlmNodeRepository {
     }
 
     async fn list_all(&self) -> Result<Vec<LlmNode>> {
-        let q = format!("SELECT {NODE_COLS} FROM llm_nodes ORDER BY registered_at ASC");
+        let q = format!("SELECT {NODE_COLS} FROM llm_nodes ORDER BY registered_at ASC LIMIT 1000");
         let rows = sqlx::query(&q).fetch_all(&self.pool).await?;
         rows.iter().map(row_to_node).collect()
     }

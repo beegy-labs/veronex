@@ -296,7 +296,8 @@ pub async fn get_analytics(
             WHERE LogAttributes['event.name'] = 'inference.completed'
               AND Timestamp >= now() - INTERVAL ? HOUR
             GROUP BY model_name
-            ORDER BY request_count DESC",
+            ORDER BY request_count DESC
+            LIMIT 500",
         )
         .bind(q.hours)
         .fetch_all::<ModelStatRow>()

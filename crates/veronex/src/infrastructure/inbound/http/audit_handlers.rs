@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::application::ports::outbound::analytics_repository::AuditFilters;
 use crate::infrastructure::inbound::http::error::AppError;
@@ -33,6 +34,8 @@ pub struct AuditEventResponse {
 }
 
 // ── GET /v1/audit ─────────────────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn list_audit_events(
     RequireAuditView(_claims): RequireAuditView,

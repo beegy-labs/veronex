@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_else_if, clippy::collapsible_if, clippy::while_let_loop)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Instrument;
@@ -848,6 +850,7 @@ pub(super) fn strip_think_blocks(mut text: String) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::TokenStreamState;
 

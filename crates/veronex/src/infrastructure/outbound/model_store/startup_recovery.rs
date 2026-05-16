@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::let_unit_value, clippy::unused_unit)]
+
 //! Startup recovery — sweep zombie installs left behind by an app crash.
 //!
 //! Any Modelfile whose `install_status` is one of the in-progress states
@@ -167,6 +169,7 @@ async fn clean_orphan_tmp(local_pv: &LocalPv) -> Result<u32> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use std::time::SystemTime;

@@ -28,6 +28,8 @@
 //! The cache is OS-agnostic: works on macOS APFS (Mac M-chip baremetal) and
 //! Linux ext4/xfs (Strix Halo k8s) without conditional code.
 
+#![allow(clippy::collapsible_if)]
+
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -355,6 +357,7 @@ async fn disk_usage_pct(base: &Path) -> Result<u8> {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use bytes::Bytes;
@@ -417,12 +420,11 @@ mod tests {
 
         // Tmp file should be removed; blobs/ contains nothing.
         let mut rd = fs::read_dir(pv.blobs_dir()).await.unwrap();
-        let mut count = 0;
+        let count = 0;
         while let Some(entry) = rd.next_entry().await.unwrap() {
             let name = entry.file_name();
             if let Some(n) = name.to_str() {
                 if n != "." && n != ".." {
-                    count += 1;
                     panic!("unexpected leftover: {n}");
                 }
             }

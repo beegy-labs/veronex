@@ -302,6 +302,7 @@ pub fn parse_forced_action(text: &str) -> ForcedAction {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

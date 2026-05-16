@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use std::sync::Arc;
 
 use crate::application::ports::outbound::lab_settings_repository::{LabSettings, LabSettingsRepository};
@@ -110,6 +112,7 @@ pub async fn decide(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use async_trait::async_trait;

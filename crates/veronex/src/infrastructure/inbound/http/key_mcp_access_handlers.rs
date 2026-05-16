@@ -4,9 +4,13 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::domain::value_objects::{ApiKeyId, McpId};
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireMcpManage;
+use crate::infrastructure::outbound::persistence::{
+    mcp_key_access_queries as access_q, mcp_server_queries as mcp_q,
+};
 use crate::infrastructure::outbound::valkey_keys;
 use super::audit_helpers::emit_audit;
 use super::error::AppError;
@@ -41,46 +45,15 @@ pub struct GrantMcpAccessBody {
     pub top_k: Option<i16>,
 }
 
-#[derive(sqlx::FromRow)]
-struct McpAccessRow {
-    id: Uuid,
-    name: String,
-    slug: String,
-    is_allowed: bool,
-    top_k: Option<i16>,
-}
-
-#[derive(sqlx::FromRow)]
-struct McpServerRow {
-    id: Uuid,
-    name: String,
-    slug: String,
-}
-
 /// GET /v1/keys/{key_id}/mcp — List MCP server access for a key.
 /// Returns all MCP servers with their allowed status for this key.
+#[instrument(skip_all)]
 pub async fn list_key_mcp_access(
     RequireMcpManage(_): RequireMcpManage,
     State(state): State<AppState>,
     Path(kid): Path<ApiKeyId>,
 ) -> Result<Json<Vec<McpAccessEntry>>, AppError> {
-    let key_uuid = kid.0;
-
-    let rows: Vec<McpAccessRow> = sqlx::query_as(
-        r#"
-        SELECT ms.id, ms.name, ms.slug,
-               COALESCE(ka.is_allowed, false) AS is_allowed,
-               ka.top_k
-        FROM mcp_servers ms
-        LEFT JOIN mcp_key_access ka
-            ON ka.server_id = ms.id AND ka.api_key_id = $1
-        ORDER BY ms.name
-        LIMIT 500
-        "#,
-    )
-    .bind(key_uuid)
-    .fetch_all(&state.pg_pool)
-    .await?;
+    let rows = access_q::list_for_key(&state.pg_pool, kid.0).await?;
 
     Ok(Json(rows.into_iter().map(|r| McpAccessEntry {
         server_id: McpId::from_uuid(r.id),
@@ -92,6 +65,7 @@ pub async fn list_key_mcp_access(
 }
 
 /// POST /v1/keys/{key_id}/mcp — Grant a key access to an MCP server.
+#[instrument(skip_all)]
 pub async fn grant_key_mcp_access(
     RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
@@ -101,27 +75,11 @@ pub async fn grant_key_mcp_access(
     let key_uuid = kid.0;
     let server_uuid = body.server_id.0;
 
-    let server: Option<McpServerRow> = sqlx::query_as(
-        "SELECT id, name, slug FROM mcp_servers WHERE id = $1"
-    )
-    .bind(server_uuid)
-    .fetch_optional(&state.pg_pool)
-    .await?;
+    let server = mcp_q::get_identity(&state.pg_pool, server_uuid)
+        .await?
+        .ok_or_else(|| AppError::NotFound("MCP server not found".into()))?;
 
-    let server = server.ok_or_else(|| AppError::NotFound("MCP server not found".into()))?;
-
-    sqlx::query(
-        r#"
-        INSERT INTO mcp_key_access (api_key_id, server_id, is_allowed, top_k)
-        VALUES ($1, $2, true, $3)
-        ON CONFLICT (api_key_id, server_id) DO UPDATE SET is_allowed = true, top_k = EXCLUDED.top_k
-        "#,
-    )
-    .bind(key_uuid)
-    .bind(server_uuid)
-    .bind(body.top_k)
-    .execute(&state.pg_pool)
-    .await?;
+    access_q::grant(&state.pg_pool, key_uuid, server_uuid, body.top_k).await?;
 
     invalidate_mcp_acl_cache(&state, key_uuid).await;
 
@@ -139,6 +97,7 @@ pub async fn grant_key_mcp_access(
 }
 
 /// DELETE /v1/keys/{key_id}/mcp/{server_id} — Revoke a key's access to an MCP server.
+#[instrument(skip_all)]
 pub async fn revoke_key_mcp_access(
     RequireMcpManage(claims): RequireMcpManage,
     State(state): State<AppState>,
@@ -147,11 +106,7 @@ pub async fn revoke_key_mcp_access(
     let key_uuid = kid.0;
     let server_uuid = mid.0;
 
-    sqlx::query("DELETE FROM mcp_key_access WHERE api_key_id = $1 AND server_id = $2")
-        .bind(key_uuid)
-        .bind(server_uuid)
-        .execute(&state.pg_pool)
-        .await?;
+    access_q::revoke(&state.pg_pool, key_uuid, server_uuid).await?;
 
     invalidate_mcp_acl_cache(&state, key_uuid).await;
 

@@ -5,8 +5,7 @@
 //! - `VERONEX_AGENT_BIND`         — `0.0.0.0:9100` (default)
 //! - `VERONEX_AGENT_BLOB_DIR`     — `/var/lib/veronex-agent` (default)
 //! - `VERONEX_AGENT_LLAMA_BIN`    — path to `llama-server`. When unset,
-//!                                  `/spawn` returns 503; useful for
-//!                                  pre-deployment smoke tests.
+//!   `/spawn` returns 503; useful for pre-deployment smoke tests.
 //! - `RUST_LOG`                   — tracing filter (default: `info`)
 
 use std::net::SocketAddr;

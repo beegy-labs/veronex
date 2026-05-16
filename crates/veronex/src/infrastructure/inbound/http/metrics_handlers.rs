@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -32,6 +33,7 @@ struct SdTarget {
 /// Returns scrape targets for veronex-agent.  Server and llama-server targets are
 /// returned independently — each is collected on its own, linked via
 /// `server_id` when associated.
+#[instrument(skip_all)]
 pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoResponse {
     let mut targets: Vec<SdTarget> = Vec::new();
 

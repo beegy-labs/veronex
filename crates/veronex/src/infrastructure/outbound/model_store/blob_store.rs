@@ -30,13 +30,18 @@ pub const KEY_PREFIX: &str = "gguf-blobs/";
 /// or hold one inside the install orchestrator.
 #[derive(Clone)]
 pub struct BlobStore {
-    client: Client,
+    client: Option<Client>,
     bucket: String,
 }
 
 impl BlobStore {
     pub fn new(client: Client, bucket: impl Into<String>) -> Self {
-        Self { client, bucket: bucket.into() }
+        Self { client: Some(client), bucket: bucket.into() }
+    }
+
+    #[cfg(test)]
+    pub fn for_tests(bucket: impl Into<String>) -> Self {
+        Self { client: None, bucket: bucket.into() }
     }
 
     pub fn bucket(&self) -> &str {
@@ -52,8 +57,9 @@ impl BlobStore {
     /// `BucketAlreadyExists` so multiple replicas can race the call on
     /// startup without errors. Mirrors the pattern used by `S3ImageStore`.
     pub async fn ensure_bucket(&self) -> Result<()> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("BlobStore test stub has no client"))?;
         use aws_sdk_s3::operation::create_bucket::CreateBucketError;
-        match self.client.create_bucket().bucket(&self.bucket).send().await {
+        match client.create_bucket().bucket(&self.bucket).send().await {
             Ok(_) => {
                 tracing::info!(bucket = %self.bucket, "GGUF blob bucket created");
                 Ok(())
@@ -76,8 +82,9 @@ impl BlobStore {
     /// the install orchestrator to skip downloads when CAS already has the
     /// content. A single HEAD round-trip — no body fetched.
     pub async fn exists(&self, sha256: &str) -> Result<bool> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("BlobStore test stub has no client"))?;
         let key = Self::key_for(sha256);
-        match self.client.head_object().bucket(&self.bucket).key(&key).send().await {
+        match client.head_object().bucket(&self.bucket).key(&key).send().await {
             Ok(_) => Ok(true),
             Err(SdkError::ServiceError(e)) if e.err().meta().code() == Some("NotFound") => {
                 Ok(false)
@@ -101,11 +108,12 @@ impl BlobStore {
     /// converts to multipart for files larger than a threshold automatically.
     /// Garage v2 advertises full S3 multipart so this works unchanged.
     pub async fn put_from_path(&self, sha256: &str, path: &Path) -> Result<()> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("BlobStore test stub has no client"))?;
         let key = Self::key_for(sha256);
         let body = ByteStream::from_path(path)
             .await
             .with_context(|| format!("open {} for upload", path.display()))?;
-        self.client
+        client
             .put_object()
             .bucket(&self.bucket)
             .key(&key)
@@ -121,9 +129,9 @@ impl BlobStore {
     /// node's Local PV (`.tmp.{uuid}` → atomic rename to `{sha256}.gguf`)
     /// and may verify sha256 incidentally.
     pub async fn get_stream(&self, sha256: &str) -> Result<ByteStream> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("BlobStore test stub has no client"))?;
         let key = Self::key_for(sha256);
-        let resp = self
-            .client
+        let resp = client
             .get_object()
             .bucket(&self.bucket)
             .key(&key)
@@ -136,8 +144,9 @@ impl BlobStore {
     /// Delete a single CAS object. Used by admin manual GC for orphan blobs
     /// (`ref_count = 0`). Tolerates `NotFound` so repeated deletes are no-ops.
     pub async fn delete(&self, sha256: &str) -> Result<()> {
+        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("BlobStore test stub has no client"))?;
         let key = Self::key_for(sha256);
-        match self.client.delete_object().bucket(&self.bucket).key(&key).send().await {
+        match client.delete_object().bucket(&self.bucket).key(&key).send().await {
             Ok(_) => Ok(()),
             Err(SdkError::ServiceError(e))
                 if matches!(

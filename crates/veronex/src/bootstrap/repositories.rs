@@ -360,11 +360,10 @@ pub async fn maybe_bootstrap_super_account(
             {
                 Ok(hash) => {
                     // Look up the super role_id from seeded roles table.
-                    let super_role_id = match sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM roles WHERE name = 'super'")
-                        .fetch_optional(pg_pool)
-                        .await
+                    let super_role_id = match veronex::infrastructure::outbound::persistence::
+                        role_queries::get_id_by_name(pg_pool, "super").await
                     {
-                        Ok(Some(row)) => row.0,
+                        Ok(Some(id)) => id,
                         Ok(None) => { tracing::warn!("super role not found in DB — skip bootstrap"); return; }
                         Err(e) => { tracing::warn!("failed to query super role: {e}"); return; }
                     };

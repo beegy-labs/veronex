@@ -148,10 +148,10 @@ impl McpToolCache {
                 continue;
             }
             // ACL filter — skip servers the caller is not allowed to use
-            if let Some(ids) = allowed {
-                if !ids.contains(&server_id) {
-                    continue;
-                }
+            if let Some(ids) = allowed
+                && !ids.contains(&server_id)
+            {
+                continue;
             }
 
             // Refresh stale L1 entry from Valkey (no DashMap ref held at this point)

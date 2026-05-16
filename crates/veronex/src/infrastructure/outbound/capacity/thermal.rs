@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use std::sync::Arc;
 use std::time::Instant;
 

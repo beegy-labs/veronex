@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 //! First-install wizard endpoints (extends `/v1/setup/*`).
 //!
 //! Two-step setup flow for an open-source self-host:
@@ -21,6 +23,7 @@ use axum::response::IntoResponse;
 use axum::Json;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tracing::instrument;
 
 use crate::application::ports::outbound::app_config_repository::{
     self as cfg, AppConfigRepository, AppConfigUpsert, ALL_KEYS,
@@ -116,6 +119,7 @@ fn not_wired() -> impl IntoResponse {
 
 /// `GET /v1/setup/status` (v2 shape, replaces the v1 single-flag response).
 /// No authentication: needs to work before the first account exists.
+#[instrument(skip_all)]
 pub async fn setup_status_v2(State(state): State<AppState>) -> impl IntoResponse {
     let needs_account = state
         .account_repo
@@ -146,6 +150,7 @@ pub async fn setup_status_v2(State(state): State<AppState>) -> impl IntoResponse
 /// this immediately after `/v1/setup`. We do NOT allow an unauthenticated
 /// call because anyone reaching the open-source instance pre-config could
 /// otherwise hijack the storage layer.
+#[instrument(skip_all)]
 pub async fn setup_storage(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -263,6 +268,7 @@ pub async fn setup_storage(
 /// (replaced with `"********"`); the timestamps and `is_secret` flag are
 /// always returned so the UI can render an editor without revealing the
 /// stored value.
+#[instrument(skip_all)]
 pub async fn list_config(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -325,6 +331,7 @@ pub async fn list_config(
 /// Honors the canonical secret-flag: a key listed in `ALL_KEYS` keeps its
 /// declared `is_secret`; arbitrary user-defined keys are always stored as
 /// non-secret.
+#[instrument(skip_all)]
 pub async fn upsert_config(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -351,6 +358,7 @@ pub async fn upsert_config(
 }
 
 /// `DELETE /v1/admin/config/:key`.
+#[instrument(skip_all)]
 pub async fn delete_config(
     _claims: RequireProviderManage,
     State(state): State<AppState>,

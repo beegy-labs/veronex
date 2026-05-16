@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments)]
+
 //! Install orchestrator — drives a Modelfile from `Pending` to `Ready`
 //! through the [`InstallStatus`] FSM.
 //!
@@ -608,14 +610,7 @@ mod tests {
     }
 
     fn make_test_blob_store() -> BlobStore {
-        let cfg = aws_sdk_s3::Config::builder()
-            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
-            .region(aws_sdk_s3::config::Region::new("us-east-1"))
-            .credentials_provider(aws_sdk_s3::config::Credentials::new(
-                "ak", "sk", None, None, "test",
-            ))
-            .build();
-        BlobStore::new(aws_sdk_s3::Client::from_conf(cfg), "veronex-models")
+        BlobStore::for_tests("veronex-models")
     }
 
     // ── No-op trait stubs — the orchestrator's bus tests never call them ──

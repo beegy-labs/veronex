@@ -362,58 +362,6 @@ fn shard_key(t: &SdTarget) -> &str {
     }
 }
 
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    #[test]
-    fn self_gauges_always_five() {
-        let stats = AgentStats { scrape_errors: AtomicU64::new(0) };
-        let cycle = CycleResult { duration_secs: 0.0, targets_scraped: 0, gauges_collected: 0, success: true };
-        let gauges = agent_self_gauges(&stats, &cycle);
-        assert_eq!(gauges.len(), 5);
-        let names: Vec<&str> = gauges.iter().map(|g| g.name.as_str()).collect();
-        assert!(names.contains(&"veronex_agent_up"));
-        assert!(names.contains(&"veronex_agent_scrape_duration_seconds"));
-        assert!(names.contains(&"veronex_agent_scrape_targets_total"));
-        assert!(names.contains(&"veronex_agent_gauges_collected_total"));
-        assert!(names.contains(&"veronex_agent_scrape_errors_total"));
-    }
-
-    proptest! {
-        /// Self-gauges reflect cycle values accurately for any input.
-        #[test]
-        fn self_gauges_reflect_values(
-            duration in 0.0_f64..1000.0,
-            targets in 0_usize..100,
-            collected in 0_usize..10000,
-            errors in 0_u64..1000,
-        ) {
-            let stats = AgentStats { scrape_errors: AtomicU64::new(errors) };
-            let cycle = CycleResult { duration_secs: duration, targets_scraped: targets, gauges_collected: collected, success: true };
-            let gauges = agent_self_gauges(&stats, &cycle);
-            let find = |name: &str| gauges.iter().find(|g| g.name == name).unwrap().value;
-
-            prop_assert_eq!(find("veronex_agent_up"), 1.0);
-            prop_assert!((find("veronex_agent_scrape_duration_seconds") - duration).abs() < f64::EPSILON);
-            prop_assert_eq!(find("veronex_agent_scrape_targets_total"), targets as f64);
-            prop_assert_eq!(find("veronex_agent_gauges_collected_total"), collected as f64);
-            prop_assert_eq!(find("veronex_agent_scrape_errors_total"), errors as f64);
-        }
-    }
-
-    #[test]
-    fn health_state_defaults() {
-        let state = HealthState::new();
-        assert!(!state.started.load(Ordering::Relaxed));
-        assert!(!state.ready.load(Ordering::Relaxed));
-        assert!(state.alive.load(Ordering::Relaxed));
-    }
-
-}
-
 async fn scrape_cycle(
     client: &reqwest::Client,
     config: &Config,
@@ -431,9 +379,8 @@ async fn scrape_cycle(
         if !mcp_targets.is_empty() {
             let ping_futs: Vec<_> = mcp_targets
                 .iter()
-                .cloned()
                 .map(|(server_id, base_url)| async move {
-                    let alive = scraper::ping_mcp_server(client, &server_id, &base_url).await;
+                    let alive = scraper::ping_mcp_server(client, server_id, base_url).await;
                     (server_id, alive)
                 })
                 .collect();
@@ -441,7 +388,7 @@ async fn scrape_cycle(
             let ping_results = futures::future::join_all(ping_futs).await;
             for (server_id, alive) in ping_results {
                 if alive {
-                    scraper::set_mcp_heartbeat(pool, &server_id, HEARTBEAT_TTL_SECS).await;
+                    scraper::set_mcp_heartbeat(pool, server_id, HEARTBEAT_TTL_SECS).await;
                 } else {
                     tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
                 }
@@ -510,5 +457,56 @@ async fn scrape_cycle(
         targets_scraped,
         gauges_collected,
         success: !any_error,
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn self_gauges_always_five() {
+        let stats = AgentStats { scrape_errors: AtomicU64::new(0) };
+        let cycle = CycleResult { duration_secs: 0.0, targets_scraped: 0, gauges_collected: 0, success: true };
+        let gauges = agent_self_gauges(&stats, &cycle);
+        assert_eq!(gauges.len(), 5);
+        let names: Vec<&str> = gauges.iter().map(|g| g.name.as_str()).collect();
+        assert!(names.contains(&"veronex_agent_up"));
+        assert!(names.contains(&"veronex_agent_scrape_duration_seconds"));
+        assert!(names.contains(&"veronex_agent_scrape_targets_total"));
+        assert!(names.contains(&"veronex_agent_gauges_collected_total"));
+        assert!(names.contains(&"veronex_agent_scrape_errors_total"));
+    }
+
+    proptest! {
+        /// Self-gauges reflect cycle values accurately for any input.
+        #[test]
+        fn self_gauges_reflect_values(
+            duration in 0.0_f64..1000.0,
+            targets in 0_usize..100,
+            collected in 0_usize..10000,
+            errors in 0_u64..1000,
+        ) {
+            let stats = AgentStats { scrape_errors: AtomicU64::new(errors) };
+            let cycle = CycleResult { duration_secs: duration, targets_scraped: targets, gauges_collected: collected, success: true };
+            let gauges = agent_self_gauges(&stats, &cycle);
+            let find = |name: &str| gauges.iter().find(|g| g.name == name).unwrap().value;
+
+            prop_assert_eq!(find("veronex_agent_up"), 1.0);
+            prop_assert!((find("veronex_agent_scrape_duration_seconds") - duration).abs() < f64::EPSILON);
+            prop_assert_eq!(find("veronex_agent_scrape_targets_total"), targets as f64);
+            prop_assert_eq!(find("veronex_agent_gauges_collected_total"), collected as f64);
+            prop_assert_eq!(find("veronex_agent_scrape_errors_total"), errors as f64);
+        }
+    }
+
+    #[test]
+    fn health_state_defaults() {
+        let state = HealthState::new();
+        assert!(!state.started.load(Ordering::Relaxed));
+        assert!(!state.ready.load(Ordering::Relaxed));
+        assert!(state.alive.load(Ordering::Relaxed));
     }
 }

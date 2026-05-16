@@ -1,5 +1,8 @@
+#![allow(clippy::collapsible_if)]
+
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
 use std::net::SocketAddr;
+use tracing::instrument;
 
 use axum::extract::{ConnectInfo, State};
 use axum::http::{StatusCode, header::SET_COOKIE, HeaderMap};
@@ -70,17 +73,9 @@ pub(crate) struct ResolvedRole {
 /// `web/lib/route-permissions.ts`); this server no longer returns a separate
 /// `menus` set so the two cannot drift.
 pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uuid) -> Result<ResolvedRole, AppError> {
-    let rows = sqlx::query_as::<_, (String, Vec<String>, bool)>(
-        "SELECT r.name, r.permissions, r.is_system
-         FROM roles r
-         JOIN account_roles ar ON ar.role_id = r.id
-         WHERE ar.account_id = $1
-         LIMIT 50"
-    )
-    .bind(account_id)
-    .fetch_all(pg)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
+    let rows = crate::infrastructure::outbound::persistence::role_queries::list_assignments_for_account(pg, account_id)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
 
     if rows.is_empty() {
         return Err(AppError::Internal(anyhow::anyhow!("no roles assigned to account")));
@@ -90,7 +85,7 @@ pub(crate) async fn resolve_roles_for_account(pg: &sqlx::PgPool, account_id: Uui
     let mut is_super = false;
     let mut role_names = Vec::new();
 
-    for (name, perms, is_system) in &rows {
+    for (_id, name, perms, is_system) in &rows {
         if *is_system && name == "super" {
             is_super = true;
         }
@@ -290,6 +285,8 @@ fn extract_refresh_cookie(headers: &axum::http::HeaderMap) -> Option<String> {
 
 // ── POST /v1/auth/login ───────────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn login(
     State(state): State<AppState>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
@@ -382,6 +379,8 @@ pub async fn login(
 
 // ── POST /v1/auth/logout ──────────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn logout(
     State(state): State<AppState>,
     req: axum::extract::Request,
@@ -413,6 +412,8 @@ pub async fn logout(
 }
 
 // ── POST /v1/auth/refresh ─────────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn refresh(
     State(state): State<AppState>,
@@ -473,6 +474,8 @@ pub async fn refresh(
 
 // ── POST /v1/auth/reset-password ─────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn reset_password(
     State(state): State<AppState>,
     Json(req): Json<ResetPasswordRequest>,
@@ -522,6 +525,7 @@ pub struct SetupRequest {
 /// Create the initial super admin account.
 /// Returns 409 Conflict if any account already exists.
 /// No authentication required (only callable before setup is complete).
+#[instrument(skip_all)]
 pub async fn setup(
     State(state): State<AppState>,
     Json(req): Json<SetupRequest>,
@@ -535,29 +539,21 @@ pub async fn setup(
 
     let hash = encryption::hash_password(&req.password)?;
 
-    // Use a PG advisory lock to serialise the check-then-insert so two
-    // concurrent requests cannot both pass the "no accounts exist" guard.
-    // Lock 0xBEE6_0001 is an arbitrary namespace constant for "setup".
+    // PG advisory lock serialises the check-then-insert so concurrent setup
+    // attempts cannot both pass the "no accounts exist" guard.
+    use crate::infrastructure::outbound::persistence::auth_queries as auth_q;
     let mut tx = state.pg_pool.begin().await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("begin tx: {e}")))?;
-    sqlx::query("SELECT pg_advisory_xact_lock(3203399681)")   // 0xBEE6_0001
-        .execute(&mut *tx)
-        .await
+    auth_q::acquire_setup_lock(&mut tx).await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("advisory lock: {e}")))?;
 
-    // Guard: only allowed before any account exists (now serialised).
-    let row: (i64,) = sqlx::query_as("SELECT count(*) FROM accounts WHERE deleted_at IS NULL")
-        .fetch_one(&mut *tx)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))?;
-    if row.0 > 0 {
+    if auth_q::count_live_accounts(&mut tx).await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("count accounts: {e}")))? > 0
+    {
         return Err(AppError::Conflict("setup already completed".into()));
     }
 
-    // Look up the super role (seeded by migration 000007).
-    let super_role_id: (Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE name = 'super'")
-        .fetch_one(&mut *tx)
-        .await
+    let super_role_id = auth_q::get_super_role_id(&mut tx).await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("super role not found: {e}")))?;
 
     let account = Account {
@@ -575,32 +571,23 @@ pub async fn setup(
         deleted_at: None,
     };
 
-    sqlx::query(
-        "INSERT INTO accounts
-         (id, username, password_hash, name, email, department, position,
-          is_active, created_by, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+    auth_q::insert_setup_account(
+        &mut tx,
+        account.id,
+        &account.username,
+        &account.password_hash,
+        &account.name,
+        account.email.as_deref(),
+        account.department.as_deref(),
+        account.position.as_deref(),
+        account.is_active,
+        account.created_by,
+        account.created_at,
     )
-    .bind(account.id)
-    .bind(&account.username)
-    .bind(&account.password_hash)
-    .bind(&account.name)
-    .bind(&account.email)
-    .bind(&account.department)
-    .bind(&account.position)
-    .bind(account.is_active)
-    .bind(account.created_by)
-    .bind(account.created_at)
-    .execute(&mut *tx)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("insert account: {e}")))?;
 
-    // Assign super role via account_roles join table
-    sqlx::query("INSERT INTO account_roles (account_id, role_id) VALUES ($1, $2)")
-        .bind(account.id)
-        .bind(super_role_id.0)
-        .execute(&mut *tx)
-        .await
+    auth_q::assign_role(&mut tx, account.id, super_role_id).await
         .map_err(|e| AppError::Internal(anyhow::anyhow!("assign super role: {e}")))?;
 
     tx.commit().await
@@ -636,5 +623,4 @@ pub async fn setup(
         permissions: resolved.permissions.clone(),
     })))
 }
-
 

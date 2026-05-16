@@ -192,14 +192,8 @@ async fn async_main() -> Result<()> {
             circuit_breaker,
             analytics_repo: repos.analytics_repo.clone(),
         };
-        #[derive(sqlx::FromRow)]
-        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String, timeout_secs: i16 }
-        let servers: Vec<McpServerStartup> = sqlx::query_as(
-            "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true"
-        )
-        .fetch_all(&pg_pool)
-        .await
-        .unwrap_or_default();
+        let servers = veronex::infrastructure::outbound::persistence::mcp_server_queries::
+            list_enabled_for_session(&pg_pool).await;
         // Connect to every enabled MCP server concurrently — startup wall-clock
         // becomes max(per-server) instead of sum.
         futures::future::join_all(servers.iter().map(|s| async {
@@ -332,19 +326,18 @@ async fn async_main() -> Result<()> {
                             if let Some(ref b) = state_clone.mcp_bridge {
                                 reconcile_mcp_sessions(&state_clone, b).await;
                                 for server_id in b.session_manager.server_ids() {
-                                    if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
-                                        if let Some(ref indexer) = state_clone.mcp_tool_indexer {
-                                            let indexer = indexer.clone();
-                                            let environment = state_clone.vespa_environment.to_string();
-                                            let tenant_id = state_clone.vespa_tenant_id.to_string();
-                                            use tracing::Instrument as _;
-                                            tokio::spawn(
-                                                async move {
-                                                    indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
-                                                }
-                                                .instrument(tracing::debug_span!("mcp.tool_indexer.index_server")),
-                                            );
-                                        }
+                                    if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await
+                                        && let Some(ref indexer) = state_clone.mcp_tool_indexer {
+                                        let indexer = indexer.clone();
+                                        let environment = state_clone.vespa_environment.to_string();
+                                        let tenant_id = state_clone.vespa_tenant_id.to_string();
+                                        use tracing::Instrument as _;
+                                        tokio::spawn(
+                                            async move {
+                                                indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
+                                            }
+                                            .instrument(tracing::debug_span!("mcp.tool_indexer.index_server")),
+                                        );
                                     }
                                 }
                             }
@@ -460,19 +453,8 @@ async fn reconcile_mcp_sessions(
         .into_iter()
         .collect();
 
-    #[derive(sqlx::FromRow)]
-    struct McpServerRow {
-        id: uuid::Uuid,
-        slug: String,
-        url: String,
-        timeout_secs: i16,
-    }
-    let rows: Vec<McpServerRow> = sqlx::query_as(
-        "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true",
-    )
-    .fetch_all(&state.pg_pool)
-    .await
-    .unwrap_or_default();
+    let rows = veronex::infrastructure::outbound::persistence::mcp_server_queries::
+        list_enabled_for_session(&state.pg_pool).await;
 
     for row in rows {
         if active.contains(&row.id) {

@@ -1,3 +1,5 @@
+#![allow(clippy::doc_lazy_continuation, clippy::map_identity, clippy::needless_borrow)]
+
 //! Background reaper tasks for multi-instance crash recovery.
 //!
 //! - **Heartbeat**: refreshes instance liveness key every 10s (EX 30s).
@@ -331,13 +333,8 @@ async fn reenqueue_reaped_jobs_batch(
     let ids: Vec<uuid::Uuid> = reaped.iter().map(|(id, _)| *id).collect();
 
     // Single SELECT for all model names.
-    let rows: Vec<(uuid::Uuid, String)> = sqlx::query_as(
-        "SELECT id, model_name FROM inference_jobs WHERE id = ANY($1::uuid[])",
-    )
-    .bind(&ids as &[uuid::Uuid])
-    .fetch_all(pg_pool)
-    .await
-    .unwrap_or_default();
+    use crate::infrastructure::outbound::persistence::reaper_queries as reaper_q;
+    let rows = reaper_q::fetch_model_names(pg_pool, &ids).await.unwrap_or_default();
 
     // Build id → model_name lookup.
     let model_map: std::collections::HashMap<uuid::Uuid, String> = rows
@@ -346,12 +343,7 @@ async fn reenqueue_reaped_jobs_batch(
         .collect();
 
     // Single batch UPDATE: reset all reaped running jobs to pending.
-    if let Err(e) = sqlx::query(
-        "UPDATE inference_jobs SET status = 'pending', started_at = NULL WHERE id = ANY($1::uuid[]) AND status = 'running'",
-    )
-    .bind(&ids as &[uuid::Uuid])
-    .execute(pg_pool)
-    .await {
+    if let Err(e) = reaper_q::reset_reaped_to_pending(pg_pool, &ids).await {
         tracing::warn!(error = %e, "reaper: failed to reset reaped jobs to pending");
     }
 

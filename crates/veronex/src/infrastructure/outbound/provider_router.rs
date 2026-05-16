@@ -211,44 +211,54 @@ async fn pick_llama_server_provider(
     prefix_hint: Option<&str>,
 ) -> Result<LlmProvider> {
     use futures::future::join_all;
-    const SLOT_WEIGHT: i64 = 1;
-    const MATCH_WEIGHT: i64 = 1000;
 
     let mut sorted = candidates;
     sorted.sort_by_key(|b| b.id);
-
-    let preferred_id: Option<uuid::Uuid> = prefix_hint
-        .filter(|h| !h.is_empty())
-        .filter(|_| !sorted.is_empty())
-        .map(|h| {
-            let idx = (hash_u64(h) as usize) % sorted.len();
-            sorted[idx].id
-        });
 
     let client = reqwest::Client::new();
     let scored: Vec<(LlmProvider, i64)> = join_all(sorted.into_iter().map(|b| {
         let client = client.clone();
         let url = b.url.clone();
-        let is_match = preferred_id == Some(b.id);
         async move {
             let slots = match crate::infrastructure::outbound::llama_server::health::get_health(&client, &url).await {
                 Ok(s) if s.is_ok() => s.slots_idle as i64,
                 _ => 0,
             };
-            let score = if slots == 0 {
-                0
-            } else {
-                slots * SLOT_WEIGHT + if is_match { MATCH_WEIGHT } else { 0 }
-            };
-            (b, score)
+            (b, slots)
         }
     }))
     .await;
 
+    pick_llama_server_from_slots(scored, prefix_hint)
+}
+
+fn pick_llama_server_from_slots(
+    mut scored: Vec<(LlmProvider, i64)>,
+    prefix_hint: Option<&str>,
+) -> Result<LlmProvider> {
+    const SLOT_WEIGHT: i64 = 1;
+    const MATCH_WEIGHT: i64 = 1000;
+
+    scored.sort_by_key(|(b, _)| b.id);
+    let preferred_id = prefix_hint
+        .filter(|h| !h.is_empty())
+        .filter(|_| !scored.is_empty())
+        .map(|h| {
+            let idx = (hash_u64(h) as usize) % scored.len();
+            scored[idx].0.id
+        });
+
     scored
         .into_iter()
-        .filter(|(_, v)| *v > 0)
-        .max_by_key(|(_, v)| *v)
+        .filter_map(|(b, slots)| {
+            if slots <= 0 {
+                None
+            } else {
+                let score = slots * SLOT_WEIGHT + if preferred_id == Some(b.id) { MATCH_WEIGHT } else { 0 };
+                Some((b, score))
+            }
+        })
+        .max_by_key(|(_, score)| *score)
         .map(|(b, _)| b)
         .ok_or_else(|| anyhow::anyhow!("no llama-server provider with idle slots"))
 }
@@ -553,7 +563,7 @@ impl crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort fo
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::useless_vec)]
 mod tests {
     use super::*;
     use crate::domain::entities::LlmProvider;
@@ -663,44 +673,18 @@ mod tests {
 
     /// Match-bonus dominates `slots_idle` so kv-cache locality wins over a
     /// modestly less busy peer. Idle-slot ties still go to the matched one.
-    #[tokio::test]
-    async fn pick_llama_match_beats_higher_slots() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        // Two servers: matched=1 idle slot, unmatched=8 idle slots.
-        let matched_srv = MockServer::start().await;
-        let unmatched_srv = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/health"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok", "slots_idle": 1, "slots_processing": 7,
-            })))
-            .mount(&matched_srv)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/health"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok", "slots_idle": 8, "slots_processing": 0,
-            })))
-            .mount(&unmatched_srv)
-            .await;
-
-        // Make the providers' IDs deterministic so we can engineer the hint
-        // to land on the lower-slot one.
-        let mut a = make_llama_provider(&matched_srv.uri());
-        let mut b = make_llama_provider(&unmatched_srv.uri());
+    #[test]
+    fn pick_llama_match_beats_higher_slots() {
+        let mut a = make_llama_provider("http://matched");
+        let mut b = make_llama_provider("http://unmatched");
         a.id = Uuid::from_u128(1);
         b.id = Uuid::from_u128(2);
 
-        // The router sorts candidates by id, then maps `hash(hint) % len`
-        // to pick the affinity target. Try a couple of hints and verify
-        // that whichever URL is returned, it's the matched one for that hint.
         for hint in ["conv-a", "conv-b", "conv-c", "conv-d"] {
-            let picked = pick_llama_server_provider(vec![a.clone(), b.clone()], Some(hint))
-                .await
-                .unwrap();
-            // Recompute the affinity locally to know who *should* win.
+            let picked = pick_llama_server_from_slots(
+                vec![(a.clone(), 1), (b.clone(), 8)],
+                Some(hint),
+            ).unwrap();
             let mut sorted = vec![a.clone(), b.clone()];
             sorted.sort_by_key(|p| p.id);
             let idx = (hash_u64(hint) as usize) % sorted.len();
@@ -714,33 +698,11 @@ mod tests {
 
     /// Without a hint the router falls back to the highest-`slots_idle`
     /// candidate — same behaviour as before Phase 1-3.
-    #[tokio::test]
-    async fn pick_llama_no_hint_picks_max_slots() {
-        use wiremock::matchers::{method, path};
-        use wiremock::{Mock, MockServer, ResponseTemplate};
-
-        let lo = MockServer::start().await;
-        let hi = MockServer::start().await;
-        Mock::given(method("GET"))
-            .and(path("/health"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok", "slots_idle": 1,
-            })))
-            .mount(&lo)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/health"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "status": "ok", "slots_idle": 4,
-            })))
-            .mount(&hi)
-            .await;
-
-        let candidates = vec![
-            make_llama_provider(&lo.uri()),
-            make_llama_provider(&hi.uri()),
-        ];
-        let picked = pick_llama_server_provider(candidates, None).await.unwrap();
-        assert_eq!(picked.url, hi.uri());
+    #[test]
+    fn pick_llama_no_hint_picks_max_slots() {
+        let lo = make_llama_provider("http://lo");
+        let hi = make_llama_provider("http://hi");
+        let picked = pick_llama_server_from_slots(vec![(lo, 1), (hi.clone(), 4)], None).unwrap();
+        assert_eq!(picked.url, hi.url);
     }
 }

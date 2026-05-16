@@ -1,3 +1,5 @@
+#![allow(clippy::doc_overindented_list_items)]
+
 use anyhow::Result;
 use axum::extract::{Path, Query, State};
 use axum::http::StatusCode;
@@ -6,6 +8,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::domain::constants::LLAMA_SERVER_HEALTH_CHECK_TIMEOUT;
 use crate::domain::entities::LlmProvider;
@@ -210,6 +213,7 @@ pub(super) async fn get_provider(state: &AppState, id: Uuid) -> Result<LlmProvid
 /// `POST /v1/providers/verify` — validate llama-server URL format,
 /// duplicate check, and connectivity. The `/health` endpoint is the
 /// llama.cpp readiness probe (Phase 1).
+#[instrument(skip_all)]
 pub async fn verify_provider(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -226,20 +230,14 @@ pub async fn verify_provider(
     }
 
     // Duplicate check.
-    let count_result: Result<(i64,), _> = sqlx::query_as(
-        "SELECT COUNT(*) FROM llm_providers WHERE url = $1 AND provider_type = 'llama_server'",
-    )
-    .bind(&url)
-    .fetch_one(&state.pg_pool)
-    .await;
-
-    match count_result {
-        Ok((c,)) if c > 0 => {
+    use crate::infrastructure::outbound::persistence::llm_provider_queries as prov_q;
+    match prov_q::llama_server_url_is_registered(&state.pg_pool, &url).await {
+        Ok(true) => {
             return AppError::Conflict("a provider with this URL is already registered".into())
                 .into_response();
         }
         Err(e) => return db_error(e).into_response(),
-        _ => {}
+        Ok(false) => {}
     }
 
     // Connectivity check — llama.cpp `/health` returns 200 when the
@@ -273,6 +271,7 @@ pub async fn verify_provider(
 /// `POST /v1/providers` — register a new llama_server or Gemini provider.
 ///
 /// Immediately runs a health check and sets the initial status.
+#[instrument(skip_all)]
 pub async fn register_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -416,6 +415,8 @@ pub struct ListProvidersParams {
     pub provider_type: Option<String>,
 }
 
+#[instrument(skip_all)]
+
 pub async fn list_providers(
     State(state): State<AppState>,
     Query(params): Query<ListProvidersParams>,
@@ -438,6 +439,7 @@ pub async fn list_providers(
 }
 
 /// `DELETE /v1/providers/{id}` — soft-delete (deactivate) a provider.
+#[instrument(skip_all)]
 pub async fn delete_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -469,6 +471,7 @@ pub async fn delete_provider(
 ///
 /// All fields are optional; only provided (non-null) fields are applied.
 /// Passing `api_key: ""` leaves the existing key unchanged.
+#[instrument(skip_all)]
 pub async fn update_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -539,6 +542,7 @@ pub async fn update_provider(
 /// Returns the cached model list if available (TTL: 1 h).
 /// On cache miss, fetches live from the configured provider or the Gemini models API,
 /// stores the result in Valkey, and returns it.
+#[instrument(skip_all)]
 pub async fn list_provider_models(
     State(state): State<AppState>,
     Path(pid): Path<ProviderId>,
@@ -564,6 +568,7 @@ pub async fn list_provider_models(
 /// `GET /v1/providers/{id}/key` — return the decrypted API key for a Gemini provider.
 ///
 /// Requires admin auth. Returns `{"key": "AIza..."}`.
+#[instrument(skip_all)]
 pub async fn reveal_provider_key(
     _claims: RequireProviderManage,
     State(state): State<AppState>,
@@ -587,6 +592,7 @@ pub async fn reveal_provider_key(
 ///
 /// For llama_server providers: ignores Valkey cache, fetches live, stores the fresh list.
 /// For Gemini providers: returns 400 — use `POST /v1/gemini/models/sync` instead.
+#[instrument(skip_all)]
 pub async fn sync_provider_models(
     State(state): State<AppState>,
     Path(pid): Path<ProviderId>,
@@ -638,6 +644,7 @@ pub async fn sync_provider_models(
 /// driven by live `/health` slot counts. This endpoint reduces to a
 /// model-list refresh; the response is synchronous because the work is
 /// bounded by one HTTP round-trip.
+#[instrument(skip_all)]
 pub async fn sync_single_provider(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,
@@ -662,6 +669,7 @@ pub async fn sync_single_provider(
 }
 
 /// `POST /v1/providers/sync` — unified sync for all active llama_server providers.
+#[instrument(skip_all)]
 pub async fn sync_all_providers_handler(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,

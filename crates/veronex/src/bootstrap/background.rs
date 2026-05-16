@@ -212,14 +212,9 @@ pub async fn spawn_background_tasks(
     // ── Startup reconciliation: seed Valkey job counters from DB ──
     if let Some(ref vk) = infra.valkey_pool {
         use fred::interfaces::KeysInterface;
+        use veronex::infrastructure::outbound::persistence::job_status_queries;
         use veronex::infrastructure::outbound::valkey_keys as vkeys;
-        let rows: Vec<(String, i64)> = sqlx::query_as(
-            "SELECT status::text, COUNT(*) FROM inference_jobs \
-             WHERE status IN ('pending','running') GROUP BY status"
-        )
-        .fetch_all(&infra.pg_pool)
-        .await
-        .unwrap_or_default();
+        let rows = job_status_queries::count_active_by_status(&infra.pg_pool).await;
         let mut pending = 0i64;
         let mut running = 0i64;
         for (status, cnt) in &rows {
@@ -349,14 +344,9 @@ pub async fn spawn_background_tasks(
                             let r: i64 = vk.get(vkeys2::jobs_running_counter()).await.unwrap_or(0);
 
                             // Periodic reconciliation: every 60 ticks, verify against DB
-                            if tick_count % 60 == 0 {
-                                let rows: Vec<(String, i64)> = sqlx::query_as(
-                                    "SELECT status::text, COUNT(*) FROM inference_jobs \
-                                     WHERE status IN ('pending','running') GROUP BY status"
-                                )
-                                .fetch_all(&pg)
-                                .await
-                                .unwrap_or_default();
+                            if tick_count.is_multiple_of(60) {
+                                let rows = veronex::infrastructure::outbound::persistence::
+                                    job_status_queries::count_active_by_status(&pg).await;
                                 let mut db_p = 0i64;
                                 let mut db_r = 0i64;
                                 for (status, cnt) in &rows {
@@ -383,13 +373,8 @@ pub async fn spawn_background_tasks(
                         } else {
                             // No Valkey — fall back to DB query, cached for 10 ticks (10s)
                             if tick_count % 10 == 1 {
-                                let rows: Vec<(String, i64)> = sqlx::query_as(
-                                    "SELECT status::text, COUNT(*) FROM inference_jobs \
-                                     WHERE status IN ('pending','running') GROUP BY status"
-                                )
-                                .fetch_all(&pg)
-                                .await
-                                .unwrap_or_default();
+                                let rows = veronex::infrastructure::outbound::persistence::
+                                    job_status_queries::count_active_by_status(&pg).await;
                                 let mut p = 0u32;
                                 let mut r = 0u32;
                                 for (status, cnt) in &rows {

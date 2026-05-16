@@ -122,6 +122,12 @@ impl ConversationRecord {
     }
 }
 
+impl Default for ConversationRecord {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 // ── Port ─────────────────────────────────────────────────────────────────────
 
 /// Object storage port for full LLM conversation records.

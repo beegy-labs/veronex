@@ -1,6 +1,7 @@
 use axum::extract::{Path, State};
 use axum::Json;
 use serde::{Deserialize, Serialize};
+use tracing::instrument;
 
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireModelManage;
 use super::audit_helpers::emit_audit;
@@ -19,6 +20,7 @@ pub struct SetEnabledBody {
 }
 
 /// GET /v1/models/global-settings — List all global model settings.
+#[instrument(skip_all)]
 pub async fn list_global_model_settings(
     RequireModelManage(_): RequireModelManage,
     State(state): State<AppState>,
@@ -31,6 +33,7 @@ pub async fn list_global_model_settings(
 }
 
 /// GET /v1/models/global-disabled — List globally disabled model names.
+#[instrument(skip_all)]
 pub async fn list_global_disabled_models(
     RequireModelManage(_): RequireModelManage,
     State(state): State<AppState>,
@@ -40,6 +43,7 @@ pub async fn list_global_disabled_models(
 }
 
 /// PATCH /v1/models/global-settings/{model_name} — Set global enable/disable.
+#[instrument(skip_all)]
 pub async fn set_global_model_enabled(
     RequireModelManage(claims): RequireModelManage,
     State(state): State<AppState>,

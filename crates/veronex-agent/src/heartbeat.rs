@@ -76,7 +76,7 @@ pub async fn connect(url: &str) -> Option<Pool> {
         }
     };
     // connect() spawns background tasks and returns a JoinHandle — drop it.
-    let _ = pool.connect();
+    std::mem::drop(pool.connect());
     if let Err(e) = pool.wait_for_connect().await {
         tracing::warn!(error = %e, "heartbeat: Valkey wait_for_connect failed");
         return None;
@@ -84,4 +84,3 @@ pub async fn connect(url: &str) -> Option<Pool> {
     tracing::info!(url = %url, "heartbeat: connected to Valkey");
     Some(pool)
 }
-

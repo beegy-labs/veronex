@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::manual_clamp)]
+
 //! Conversation API handlers.
 //!
 //! GET /v1/conversations                                 — paginated conversation list
@@ -11,6 +13,7 @@ use axum::Json;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use super::error::AppError;
 use super::middleware::jwt_auth::{RequireAccountManage, RequireDashboardView};
@@ -167,12 +170,13 @@ struct TurnInternalsResponse {
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 /// `GET /v1/conversations`
+#[instrument(skip_all)]
 pub async fn list_conversations(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
     Query(params): Query<ListConversationsQuery>,
 ) -> HandlerResult<Json<ConversationListResponse>> {
-    use sqlx::Row;
+    use crate::infrastructure::outbound::persistence::conversation_queries as conv_q;
 
     let limit = params.limit.max(1).min(200);
     let offset = params.offset.max(0);
@@ -180,46 +184,30 @@ pub async fn list_conversations(
         .filter(|s| !s.is_empty())
         .map(|s| format!("%{}%", s.to_lowercase()));
 
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM conversations
-         WHERE ($1::text IS NULL OR source = $1)
-           AND ($2::text IS NULL OR LOWER(title) LIKE $2)"
-    )
-    .bind(&params.source)
-    .bind(&search_pat)
-    .fetch_one(&state.pg_pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("count failed: {e}")))?;
+    let total = conv_q::count(&state.pg_pool, params.source.as_deref(), search_pat.as_deref())
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("count failed: {e}")))?;
 
-    let rows = sqlx::query(
-        "SELECT id, title, model_name, source, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at
-         FROM conversations
-         WHERE ($1::text IS NULL OR source = $1)
-           AND ($2::text IS NULL OR LOWER(title) LIKE $2)
-         ORDER BY updated_at DESC
-         LIMIT $3 OFFSET $4"
+    let rows = conv_q::list_page(
+        &state.pg_pool,
+        params.source.as_deref(),
+        search_pat.as_deref(),
+        limit,
+        offset,
     )
-    .bind(&params.source)
-    .bind(&search_pat)
-    .bind(limit)
-    .bind(offset)
-    .fetch_all(&state.pg_pool)
     .await
     .map_err(|e| AppError::Internal(anyhow::anyhow!("list failed: {e}")))?;
 
-    let conversations = rows.iter().map(|r| {
-        let uuid: Uuid = r.get("id");
-        ConversationSummary {
-            id: ConvId::from_uuid(uuid),
-            title: r.get("title"),
-            model_name: r.get("model_name"),
-            source: r.get::<Option<String>, _>("source").unwrap_or_else(|| "api".to_string()),
-            turn_count: r.get("turn_count"),
-            total_prompt_tokens: r.get("total_prompt_tokens"),
-            total_completion_tokens: r.get("total_completion_tokens"),
-            created_at: r.get("created_at"),
-            updated_at: r.get("updated_at"),
-        }
+    let conversations = rows.into_iter().map(|r| ConversationSummary {
+        id: ConvId::from_uuid(r.id),
+        title: r.title,
+        model_name: r.model_name,
+        source: r.source.unwrap_or_else(|| "api".to_string()),
+        turn_count: r.turn_count,
+        total_prompt_tokens: r.total_prompt_tokens,
+        total_completion_tokens: r.total_completion_tokens,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
     }).collect();
 
     Ok(Json(ConversationListResponse { conversations, total }))
@@ -228,35 +216,27 @@ pub async fn list_conversations(
 /// `GET /v1/conversations/{id}`
 ///
 /// Accepts `conv_{base62}` public ID (e.g. "conv_3X4aB...").
+#[instrument(skip_all)]
 pub async fn get_conversation(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
     Path(id_str): Path<String>,
 ) -> HandlerResult<Json<ConversationDetailResponse>> {
-    use sqlx::Row;
+    use crate::infrastructure::outbound::persistence::conversation_queries as conv_q;
 
     let conv_id = id_str
         .parse::<ConvId>()
         .map(|c| c.0)
         .map_err(|_| AppError::BadRequest("invalid conversation id".into()))?;
 
-    // Fetch conversation metadata
-    let conv_row = sqlx::query(
-        "SELECT id, title, model_name, source, turn_count, total_prompt_tokens, total_completion_tokens, created_at, updated_at, account_id, api_key_id
-         FROM conversations WHERE id = $1"
-    )
-    .bind(conv_id)
-    .fetch_optional(&state.pg_pool)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("fetch failed: {e}")))?
-    .ok_or_else(|| AppError::NotFound("conversation not found".into()))?;
+    let conv = conv_q::get_detail(&state.pg_pool, conv_id)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("fetch failed: {e}")))?
+        .ok_or_else(|| AppError::NotFound("conversation not found".into()))?;
 
-    // Fetch full conversation record from S3 only (Valkey-cached, 5 min TTL).
-    // No DB query for turns — S3 has the complete data.
-    let owner_id: Uuid = conv_row.get::<Option<Uuid>, _>("account_id")
-        .or_else(|| conv_row.get::<Option<Uuid>, _>("api_key_id"))
-        .unwrap_or(conv_id);
-    let date = conv_row.get::<DateTime<Utc>, _>("created_at").date_naive();
+    // Full conversation record comes from S3 (Valkey-cached, 5 min TTL).
+    let owner_id: Uuid = conv.account_id.or(conv.api_key_id).unwrap_or(conv_id);
+    let date = conv.created_at.date_naive();
     let s3_record = fetch_conv_s3_cached(&state, owner_id, date, conv_id).await;
 
     let turns: Vec<ConversationTurn> = s3_record
@@ -270,17 +250,16 @@ pub async fn get_conversation(
         }).collect())
         .unwrap_or_default();
 
-    let uuid: Uuid = conv_row.get("id");
     Ok(Json(ConversationDetailResponse {
-        id: ConvId::from_uuid(uuid),
-        title: conv_row.get("title"),
-        model_name: conv_row.get("model_name"),
-        source: conv_row.get::<Option<String>, _>("source").unwrap_or_else(|| "api".to_string()),
-        turn_count: conv_row.get("turn_count"),
-        total_prompt_tokens: conv_row.get("total_prompt_tokens"),
-        total_completion_tokens: conv_row.get("total_completion_tokens"),
-        created_at: conv_row.get("created_at"),
-        updated_at: conv_row.get("updated_at"),
+        id: ConvId::from_uuid(conv.id),
+        title: conv.title,
+        model_name: conv.model_name,
+        source: conv.source.unwrap_or_else(|| "api".to_string()),
+        turn_count: conv.turn_count,
+        total_prompt_tokens: conv.total_prompt_tokens,
+        total_completion_tokens: conv.total_completion_tokens,
+        created_at: conv.created_at,
+        updated_at: conv.updated_at,
         turns,
     }))
 }
@@ -291,6 +270,7 @@ pub async fn get_conversation(
 ///
 /// Returns compression and vision analysis metadata for a single turn.
 /// Requires `account_manage` permission (admin-only).
+#[instrument(skip_all)]
 pub async fn get_turn_internals(
     RequireAccountManage(_): RequireAccountManage,
     State(state): State<AppState>,
@@ -314,25 +294,13 @@ pub async fn get_turn_internals(
         return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"error": "message store not configured"}))).into_response();
     }
 
-    use sqlx::Row as _;
-    let row = sqlx::query(
-        "SELECT account_id, api_key_id, created_at
-         FROM inference_jobs
-         WHERE conversation_id = $1
-         ORDER BY created_at ASC
-         LIMIT 1"
-    )
-    .bind(conv_uuid)
-    .fetch_optional(&state.pg_pool)
-    .await;
+    use crate::infrastructure::outbound::persistence::conversation_queries as conv_q;
+    let row = conv_q::first_job_owner(&state.pg_pool, conv_uuid).await;
 
     let (owner_id, date) = match row {
         Ok(Some(r)) => {
-            let created_at: DateTime<Utc> = r.get("created_at");
-            let date = created_at.date_naive();
-            let account_id: Option<Uuid> = r.get("account_id");
-            let api_key_id: Option<Uuid> = r.get("api_key_id");
-            let owner = account_id.or(api_key_id).unwrap_or(conv_uuid);
+            let date = r.created_at.date_naive();
+            let owner = r.account_id.or(r.api_key_id).unwrap_or(conv_uuid);
             (owner, date)
         }
         Ok(None) => return (StatusCode::NOT_FOUND, Json(serde_json::json!({"error": "conversation not found"}))).into_response(),
