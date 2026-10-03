@@ -117,10 +117,6 @@ impl McpResultCache {
         debug!(key = %key, ttl = ttl_secs, "McpResultCache: stored");
     }
 
-    /// Compute the args hash for analytics (so the hash is consistent).
-    pub fn compute_hash(tool_name: &str, args: &serde_json::Value) -> String {
-        args_hash(tool_name, args)
-    }
 }
 
 #[cfg(test)]

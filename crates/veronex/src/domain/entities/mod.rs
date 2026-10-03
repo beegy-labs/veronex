@@ -259,11 +259,6 @@ pub struct LlmProvider {
 }
 
 impl LlmProvider {
-    /// True for Gemini-typed providers (cloud).
-    pub fn is_gemini(&self) -> bool {
-        self.provider_type == ProviderType::Gemini
-    }
-
     /// True for llama-server-typed providers (local GPU host).
     pub fn is_llama_server(&self) -> bool {
         self.provider_type == ProviderType::LlamaServer

@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import type { Job, UsageAggregate, ModelBreakdown } from '@/lib/types'
+import type { UsageAggregate, ModelBreakdown } from '@/lib/types'
 import {
   AreaChart, Area, BarChart, Bar, Cell,
   XAxis, YAxis, Tooltip, ResponsiveContainer, Legend,
@@ -9,15 +9,12 @@ import {
 import {
   TOOLTIP_STYLE, TOOLTIP_LABEL_STYLE, TOOLTIP_ITEM_STYLE,
   AXIS_TICK, LEGEND_STYLE, CURSOR_FILL,
-  fmtMsNullable, fmtCompact,
+  fmtCompact,
 } from '@/lib/chart-theme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Badge } from '@/components/ui/badge'
 import { ArrowRight } from 'lucide-react'
 import { useTranslation } from '@/i18n'
-import { fmtDatetimeShort } from '@/lib/date'
-import { STATUS_STYLES, PROVIDER_GEMINI } from '@/lib/constants'
+import { PROVIDER_GEMINI } from '@/lib/constants'
 import { tokens } from '@/lib/design-tokens'
 
 /* ─── Request Trend (24h area chart) ──────────────────────── */
@@ -115,59 +112,6 @@ export function TopModelsSection({ modelBarData, geminiEnabled }: {
           </BarChart>
         </ResponsiveContainer>
       </CardContent>
-    </Card>
-  )
-}
-
-/* ─── Recent Jobs ─────────────────────────────────────────── */
-export function RecentJobsSection({ recentJobs, tz }: {
-  recentJobs: Job[]
-  tz: string
-}) {
-  const { t } = useTranslation()
-
-  return (
-    <Card>
-      <CardHeader className="vds-flex vds-flex-row vds-items-center vds-justify-between vds-pb-3">
-        <CardTitle className="vds-text-base">{t('overview.recentJobs')}</CardTitle>
-        <Link href="/jobs" className="vds-text-xs vds-text-dim vds-hover:text-primary vds-flex vds-items-center vds-gap-1 vds-transition-colors">
-          {t('overview.viewAllJobs')} <ArrowRight className="vds-h-3 vds-w-3" />
-        </Link>
-      </CardHeader>
-      {recentJobs.length === 0 ? (
-        <CardContent className="vds-pb-6 vds-text-center vds-text-sm vds-text-dim">
-          {t('jobs.noJobs')}
-        </CardContent>
-      ) : (
-        <div className="vds-overflow-x-auto">
-          <Table style={{ minWidth: '560px' }} className="vds-text-sm">
-            <TableHeader>
-              <TableRow className="vds-border-b-1 vds-border-subtle">
-                <TableHead className="vds-h-11 vds-px-4 vds-pl-6 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.model')}</TableHead>
-                <TableHead className="vds-h-11 vds-px-4 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.provider')}</TableHead>
-                <TableHead className="vds-h-11 vds-px-4 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.status')}</TableHead>
-                <TableHead className="vds-h-11 vds-px-4 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.latency')}</TableHead>
-                <TableHead className="vds-h-11 vds-px-4 vds-pr-6 vds-text-left vds-text-xs vds-font-500 vds-text-dim">{t('jobs.createdAt')}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {recentJobs.map((job) => (
-                <TableRow key={job.id} className="vds-border-b-1 vds-border-subtle last:border-0">
-                  <TableCell className="vds-py-3 vds-px-4 vds-pl-6 vds-font-mono vds-text-xs vds-max-w-[180px] vds-truncate">{job.model_name}</TableCell>
-                  <TableCell className="vds-py-3 vds-px-4 vds-text-xs vds-text-dim vds-max-w-[120px] vds-truncate">{job.provider_type}</TableCell>
-                  <TableCell className="vds-py-3 vds-px-4">
-                    <Badge variant="outline" className={`vds-text-xs ${STATUS_STYLES[job.status] ?? 'vds-bg-muted/20 vds-text-dim vds-border-muted/30'}`}>
-                      {t(`jobs.statuses.${job.status}` as Parameters<typeof t>[0])}
-                    </Badge>
-                  </TableCell>
-                  <TableCell className="vds-py-3 vds-px-4 vds-text-xs vds-tabular-nums">{fmtMsNullable(job.latency_ms)}</TableCell>
-                  <TableCell className="vds-py-3 vds-px-4 vds-pr-6 vds-text-xs vds-text-dim vds-whitespace-nowrap">{fmtDatetimeShort(job.created_at, tz)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
     </Card>
   )
 }

@@ -84,6 +84,32 @@ veronex:
   # Extra environment variables (key: value)
   env: {}
 
+# App builder is opt-in. Requires a pre-created ReadWriteMany PVC and a
+# separately supplied runner token. Keep disabled for inference-only installs.
+builder:
+  enabled: false
+  namespace: ""
+  pvc: ""
+  runnerImage: ""
+  runnerToken: ""
+  previewToken: ""
+  existingSecretName: ""
+  gitToken: ""
+  gitHosts: ""
+  browserOrigin: ""
+  previewDomain: ""
+  previewTlsSecret: ""
+  maxActiveWorkspaces: 2
+  maxPreviewsPerWorkspace: 4
+  cliMemoryLimit: 2Gi
+  previewMemoryLimit: 2Gi
+  storage:
+    nfs:
+      enabled: false
+      server: ""
+      path: ""
+      capacity: 100Gi
+
 veronexAnalytics:
   image:
     repository: gitea.girok.dev/beegy-labs/veronex-analytics

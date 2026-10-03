@@ -13,12 +13,6 @@ use std::sync::Arc;
 use anyhow::{anyhow, Result};
 use dashmap::DashSet;
 
-/// Default range — `11430..=11530` gives 101 slots, well above the
-/// realistic concurrent-process count per node (Mac mini has 16-32 GB
-/// unified memory, so ~2-4 simultaneous models). The range starts above
-/// 11434 so a co-resident upstream service doesn't conflict.
-pub const DEFAULT_RANGE: RangeInclusive<u16> = 11430..=11530;
-
 /// Allocator state. Cheap to clone (`Arc`-of-state).
 #[derive(Clone)]
 pub struct PortPool {
@@ -40,11 +34,6 @@ impl PortPool {
                 in_use: DashSet::new(),
             }),
         }
-    }
-
-    /// Use [`DEFAULT_RANGE`].
-    pub fn default_range() -> Self {
-        Self::new(DEFAULT_RANGE)
     }
 
     /// Total slots in the range.

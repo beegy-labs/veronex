@@ -6,6 +6,7 @@ pub mod audit_handlers;
 pub mod role_handlers;
 pub mod audit_helpers;
 pub mod auth_handlers;
+pub mod builder_handlers;
 pub mod constants;
 pub mod error;
 pub mod cancel_guard;

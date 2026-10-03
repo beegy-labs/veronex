@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useMemo, useEffect, useCallback } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery} from '@tanstack/react-query'
 import type { GpuServer } from '@/lib/types'
 import { Plus, Trash2, RefreshCw, Server, ListFilter, Pencil, BarChart2, ChevronLeft, ChevronRight, Search } from 'lucide-react'
 import { ServerMetricsCompact } from '@/components/server-metrics-cell'
@@ -31,7 +31,7 @@ import { useTimezone } from '@/components/timezone-provider'
 import { fmtDateOnly } from '@/lib/date'
 import { providersQuery } from '@/lib/queries'
 import { extractHost, StatusBadge } from './shared'
-import { LlamaServerProviderModelsModal } from './modals'
+import { ProviderModelsModal } from './modals'
 import type { Provider } from '@/lib/types'
 import { PAGE_SIZE, LlamaServerSyncSection, LlamaServerCapacitySection } from './llama-server-sections'
 import { LlamaServerLabSection } from './llama-server-lab-section'
@@ -383,7 +383,7 @@ function ProvidersListTab({
       <LlamaServerSyncSection />
 
       {viewModelsProvider && (
-        <LlamaServerProviderModelsModal
+        <ProviderModelsModal
           provider={viewModelsProvider}
           onClose={() => setViewModelsProvider(null)}
         />

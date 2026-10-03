@@ -31,6 +31,7 @@ pub enum Permission {
     /// (LLM providers) and `settings_manage` (system-wide config) so MCP can be
     /// delegated without granting either.
     McpManage,
+    BuilderManage,
 }
 
 impl Permission {
@@ -46,6 +47,7 @@ impl Permission {
             Self::RoleManage => "role_manage",
             Self::ModelManage => "model_manage",
             Self::McpManage => "mcp_manage",
+            Self::BuilderManage => "builder_manage",
         }
     }
 }
@@ -54,7 +56,7 @@ impl Permission {
 pub const ALL_PERMISSIONS: &[&str] = &[
     "dashboard_view", "api_test", "provider_manage",
     "key_manage", "account_manage", "audit_view", "settings_manage",
-    "role_manage", "model_manage", "mcp_manage",
+    "role_manage", "model_manage", "mcp_manage", "builder_manage",
 ];
 
 impl AccountRole {

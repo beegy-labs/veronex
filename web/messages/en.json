@@ -19,6 +19,7 @@
     "capacity": "Concurrency",
     "health": "Health",
     "mcp": "MCP",
+    "builder": "App Builder",
     "observe": "Observe",
     "operate": "Operate",
     "govern": "Govern",

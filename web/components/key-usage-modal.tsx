@@ -23,7 +23,7 @@ import { DataTable } from '@/components/data-table'
 import StatsCard from '@/components/stats-card'
 import { useTranslation } from '@/i18n'
 import { TimeRangeSelector, type TimeRange } from '@/components/time-range-selector'
-import { fmtHourLabel } from '@/lib/date'
+import { toUsageChartData } from '@/lib/usage-chart'
 import { useTimezone } from '@/components/timezone-provider'
 import { tokens } from '@/lib/design-tokens'
 import { SectionLabel } from '@/components/section-label'
@@ -44,27 +44,19 @@ export function KeyUsageModal({
   const { data: models } = useQuery(keyModelBreakdownQuery(apiKey.id, hours))
 
   const chartData = useMemo(() =>
-    (hourly ?? []).map((h) => ({
-      hour:     fmtHourLabel(h.hour, tz),
-      tokens:   h.total_tokens,
-      prompt:   h.prompt_tokens,
-      compl:    h.completion_tokens,
-      requests: h.request_count,
-      success:  h.success_count,
-      errors:   h.error_count,
-    })),
+    toUsageChartData(hourly, tz),
     [hourly, tz],
   )
 
   // Aggregate KPIs from hourly data
-  const { totalRequests, totalTokens, totalSuccess, totalErrors, successRate } = useMemo(() => {
+  const { totalRequests, totalTokens, totalErrors, successRate } = useMemo(() => {
     const totalRequests = chartData.reduce((s, h) => s + h.requests, 0)
     const totalTokens   = chartData.reduce((s, h) => s + h.tokens, 0)
     const totalSuccess  = chartData.reduce((s, h) => s + h.success, 0)
     const totalErrors   = chartData.reduce((s, h) => s + h.errors, 0)
     const successRate   = totalRequests > 0
       ? calcPercentage(totalSuccess, totalRequests) : 0
-    return { totalRequests, totalTokens, totalSuccess, totalErrors, successRate }
+    return { totalRequests, totalTokens, totalErrors, successRate }
   }, [chartData])
 
   return (

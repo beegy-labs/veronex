@@ -8,10 +8,6 @@ import { Input } from '@/components/ui/input'
 import { useTranslation } from '@/i18n'
 import type { Provider } from '@/lib/types'
 
-// ── Status Pill ─────────────────────────────────────────────────────────────────
-
-export { StatusPill } from '@/components/status-pill'
-
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 export function extractHost(url: string): string {

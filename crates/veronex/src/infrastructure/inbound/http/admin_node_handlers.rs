@@ -19,6 +19,7 @@ use tracing::instrument;
 use crate::domain::entities::{
     DeploymentKind, GpuAccel, HostArch, HostOs, LlmNode,
 };
+use crate::infrastructure::inbound::http::handlers::internal_json_error;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::inbound::http::state::AppState;
 
@@ -158,11 +159,7 @@ pub async fn register_node(
 
     match repo.register(&node).await {
         Ok(_) => (StatusCode::CREATED, Json(node_to_json(&node))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "register_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("register_failed", &e),
     }
 }
 
@@ -181,11 +178,7 @@ pub async fn list_nodes(
             (StatusCode::OK, Json(json!({ "nodes": items, "total": items.len() })))
                 .into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "list_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("list_failed", &e),
     }
 }
 
@@ -206,11 +199,7 @@ pub async fn get_node(
             Json(json!({ "error": "node_not_found", "id": id })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "get_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("get_failed", &e),
     }
 }
 
@@ -231,11 +220,7 @@ pub async fn delete_node(
             Json(json!({ "error": "node_not_found", "id": id })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "delete_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("delete_failed", &e),
     }
 }
 

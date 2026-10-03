@@ -19,6 +19,7 @@
     "capacity": "同時実行制御",
     "health": "ヘルス",
     "mcp": "MCP",
+    "builder": "アプリビルダー",
     "observe": "観測",
     "operate": "運用",
     "govern": "ガバナンス",

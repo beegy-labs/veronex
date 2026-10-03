@@ -81,7 +81,6 @@ export const REFETCH_INTERVAL_SLOW = 60_000
 export const STALE_TIME_LIVE = 2_000
 
 /** Refetch interval for live-polled data (queue depth — 3s). */
-export const REFETCH_INTERVAL_LIVE = 3_000
 
 /** Refetch interval for historical data (power history, metric history). */
 export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
@@ -172,11 +171,6 @@ export const SERVICE_STATUS_DOT: Record<string, string> = {
 }
 
 /** Service health status → text colour class. */
-export const SERVICE_STATUS_TEXT: Record<string, string> = {
-  ok:          'vds-text-success',
-  degraded:    'vds-text-warning',
-  unavailable: 'vds-text-error',
-}
 
 /** Job source → Tailwind badge class. SSOT for source origin badges. */
 export const SOURCE_STYLES: Record<string, string> = {

@@ -182,11 +182,7 @@ pub async fn register_model(
     };
 
     if let Err(e) = registry.create(&model).await {
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "create_failed", "message": e.to_string() })),
-        )
-            .into_response();
+        return internal_err("create_failed", e);
     }
     (StatusCode::CREATED, Json(json!({ "model_id": model_id }))).into_response()
 }

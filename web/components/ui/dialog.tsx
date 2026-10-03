@@ -63,8 +63,6 @@ export function Dialog({ open: openProp, defaultOpen, onOpenChange, children }: 
   )
 }
 
-export const DialogPortal: React.FC<{ children?: React.ReactNode }> = ({ children }) => <>{children}</>
-export const DialogOverlay: React.FC<React.HTMLAttributes<HTMLDivElement>> = () => null
 
 export interface DialogTriggerProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   asChild?: boolean
@@ -87,29 +85,6 @@ export function DialogTrigger({ asChild, children, onClick, ...rest }: DialogTri
     } as Record<string, unknown>)
   }
   return <button type="button" onClick={open} {...rest}>{children}</button>
-}
-
-export function DialogClose({
-  asChild,
-  children,
-  onClick,
-  ...rest
-}: React.ButtonHTMLAttributes<HTMLButtonElement> & { asChild?: boolean }) {
-  const ctx = React.useContext(DialogCtx)
-  function close(e: React.MouseEvent<HTMLButtonElement>) {
-    onClick?.(e as React.MouseEvent<HTMLButtonElement>)
-    ctx?.setOpen(false)
-  }
-  if (asChild && React.isValidElement(children)) {
-    const child = children as React.ReactElement<{ onClick?: React.MouseEventHandler }>
-    return React.cloneElement(child, {
-      onClick: (e: React.MouseEvent) => {
-        child.props.onClick?.(e)
-        ctx?.setOpen(false)
-      },
-    } as Record<string, unknown>)
-  }
-  return <button type="button" onClick={close} {...rest}>{children}</button>
 }
 
 export interface DialogContentProps extends React.HTMLAttributes<HTMLDivElement> {

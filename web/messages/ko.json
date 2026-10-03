@@ -19,6 +19,7 @@
     "capacity": "동시성 제어",
     "health": "헬스",
     "mcp": "MCP",
+    "builder": "앱 빌더",
     "observe": "관측",
     "operate": "운영",
     "govern": "통제",

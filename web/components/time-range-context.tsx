@@ -9,9 +9,11 @@ const STORAGE_KEY = 'veronex:timeRange'
 const DEFAULT_RANGE: TimeRange = { hours: 24 }
 
 function loadRange(): TimeRange {
-  if (typeof window === 'undefined') return DEFAULT_RANGE
+  if (typeof window === 'undefined' || typeof window.localStorage?.getItem !== 'function') {
+    return DEFAULT_RANGE
+  }
   try {
-    const raw = localStorage.getItem(STORAGE_KEY)
+    const raw = window.localStorage.getItem(STORAGE_KEY)
     if (!raw) return DEFAULT_RANGE
     return JSON.parse(raw) as TimeRange
   } catch {
@@ -20,7 +22,7 @@ function loadRange(): TimeRange {
 }
 
 function saveRange(range: TimeRange) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(range)) } catch {}
+  try { window.localStorage?.setItem(STORAGE_KEY, JSON.stringify(range)) } catch {}
 }
 
 // ── Context ───────────────────────────────────────────────────────────────────

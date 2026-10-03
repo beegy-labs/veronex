@@ -7,6 +7,7 @@ members = [
     "crates/veronex-llm-agent",
     "crates/veronex-mcp",
     "crates/veronex-embed",
+    "crates/veronex-builder-runner",
     "workspace-hack",
 ]
 # Default build target — selected by `cargo build` / `cargo chef cook` when no

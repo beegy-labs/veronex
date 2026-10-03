@@ -28,6 +28,7 @@ use tracing::instrument;
 use crate::application::ports::outbound::app_config_repository::{
     self as cfg, AppConfigRepository, AppConfigUpsert, ALL_KEYS,
 };
+use crate::infrastructure::inbound::http::handlers::internal_json_error;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::inbound::http::state::AppState;
 
@@ -241,11 +242,7 @@ pub async fn setup_storage(
 
     if let Err(e) = repo.upsert_many(&entries, by).await {
         tracing::error!(error = %e, "setup_storage upsert failed");
-        return (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "upsert_failed", "message": e.to_string() })),
-        )
-            .into_response();
+        return internal_json_error("upsert_failed", &e);
     }
 
     // The new config is in DB but the live AppState still holds the old
@@ -278,13 +275,7 @@ pub async fn list_config(
     };
     let rows = match repo.list_all().await {
         Ok(r) => r,
-        Err(e) => {
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(json!({ "error": "list_failed", "message": e.to_string() })),
-            )
-                .into_response();
-        }
+        Err(e) => return internal_json_error("list_failed", &e),
     };
     // Index by key for easy lookup; fold in canonical keys that don't yet
     // have a row so the UI can render an empty input for them.
@@ -349,11 +340,7 @@ pub async fn upsert_config(
     match repo.upsert(&entry, Some(claims.sub)).await {
         Ok(_) => (StatusCode::OK, Json(json!({ "ok": true, "key": key })))
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "upsert_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("upsert_failed", &e),
     }
 }
 
@@ -374,11 +361,7 @@ pub async fn delete_config(
             Json(json!({ "error": "key_not_found", "key": key })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "delete_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("delete_failed", &e),
     }
 }
 

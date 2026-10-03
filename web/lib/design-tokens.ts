@@ -85,5 +85,3 @@ export const tokens = {
     fill: 'var(--vds-theme-shadow-fill)',
   },
 } as const
-
-export type ThemeToken = (typeof tokens)[keyof typeof tokens][keyof (typeof tokens)[keyof typeof tokens]]

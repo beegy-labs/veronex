@@ -2,7 +2,7 @@
 
 import { useQuery, useQueries } from '@tanstack/react-query'
 import {
-  dashboardOverviewQuery, recentJobsQuery, performanceQuery,
+  dashboardOverviewQuery, performanceQuery,
   usageAggregateQuery, usageBreakdownQuery,
   providersQuery, serversQuery, serverMetricsBatchQuery, serverMetricsHistoryQuery,
 } from '@/lib/queries'
@@ -37,7 +37,6 @@ export default function OverviewPage() {
   const { data: perf30d } = useQuery(performanceQuery(720))
   const { data: usage }   = useQuery(usageAggregateQuery(24))
   const { data: breakdown } = useQuery(usageBreakdownQuery(24))
-  const { data: recentJobsData } = useQuery(recentJobsQuery)
 
   if (overviewError) {
     return (
@@ -71,7 +70,6 @@ export default function OverviewPage() {
         perf30d={perf30d}
         usage={usage}
         breakdown={breakdown}
-        recentJobsData={recentJobsData}
       />
     </div>
   )

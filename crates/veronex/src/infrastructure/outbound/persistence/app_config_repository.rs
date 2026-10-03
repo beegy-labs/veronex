@@ -10,7 +10,6 @@
 
 use anyhow::{Context, Result};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
@@ -148,10 +147,4 @@ impl AppConfigRepository for PostgresAppConfigRepository {
             .await?;
         Ok(r.rows_affected() > 0)
     }
-}
-
-// `_` to silence the unused-import warning when feature flags differ.
-#[allow(dead_code)]
-fn _unused_datetime_marker() -> DateTime<Utc> {
-    Utc::now()
 }

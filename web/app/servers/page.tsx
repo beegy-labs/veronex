@@ -5,7 +5,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { serversQuery } from '@/lib/queries'
 import { api } from '@/lib/api'
-import type { GpuServer, RegisterGpuServerRequest, UpdateGpuServerRequest } from '@/lib/types'
+import type { GpuServer} from '@/lib/types'
 import { useVerifyUrl } from '@/hooks/use-verify-url'
 import {
   Plus, Trash2, BarChart2, Pencil,

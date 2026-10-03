@@ -5,6 +5,7 @@ use chrono::{DateTime, Utc};
 /// Snapshot of all lab (experimental) feature flags.
 #[derive(Debug, Clone)]
 pub struct LabSettings {
+    pub builder_enabled: bool,
     // ── Existing image settings ──────────────────────────────────────────────
     /// Gemini function-calling (tool use) support.
     pub gemini_function_calling: bool,
@@ -49,6 +50,7 @@ pub struct LabSettings {
 impl Default for LabSettings {
     fn default() -> Self {
         Self {
+            builder_enabled: false,
             gemini_function_calling: false,
             max_images_per_request: 4,
             max_image_b64_bytes: 2 * 1024 * 1024,
@@ -74,6 +76,7 @@ impl Default for LabSettings {
 /// For nullable text fields (e.g. `compression_model`), `Some(None)` clears the value.
 #[derive(Debug, Default)]
 pub struct LabSettingsUpdate {
+    pub builder_enabled: Option<bool>,
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,

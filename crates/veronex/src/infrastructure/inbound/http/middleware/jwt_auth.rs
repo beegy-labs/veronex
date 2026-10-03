@@ -196,6 +196,7 @@ define_require_permission!(RequireSettingsManage, "settings_manage");
 define_require_permission!(RequireRoleManage,     "role_manage");
 define_require_permission!(RequireModelManage,    "model_manage");
 define_require_permission!(RequireMcpManage,      "mcp_manage");
+define_require_permission!(RequireBuilderManage,  "builder_manage");
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]

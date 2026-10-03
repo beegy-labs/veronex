@@ -177,25 +177,6 @@ impl McpSessionManager {
         }
     }
 
-    /// Check liveness of all connected servers (parallel).
-    pub async fn ping_all(&self) -> Vec<(Uuid, bool)> {
-        // Snapshot to avoid holding DashMap Refs across .await (shard lock violation).
-        let entries: Vec<(Uuid, McpSession)> = self
-            .sessions
-            .iter()
-            .map(|e| (*e.key(), e.value().session.clone()))
-            .collect();
-
-        let client = Arc::clone(&self.client);
-        let futs = entries.into_iter().map(|(id, session)| {
-            let client = Arc::clone(&client);
-            async move {
-                let alive = client.ping(&session).await.is_ok();
-                (id, alive)
-            }
-        });
-        futures::future::join_all(futs).await
-    }
 
     /// Returns IDs of all currently tracked servers.
     pub fn server_ids(&self) -> Vec<Uuid> {

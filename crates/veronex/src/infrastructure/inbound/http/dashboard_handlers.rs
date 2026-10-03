@@ -345,6 +345,7 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
 #[derive(Serialize)]
 pub struct LabSettingsResponse {
+    pub builder_enabled: bool,
     pub gemini_function_calling: bool,
     pub max_images_per_request: i32,
     pub max_image_b64_bytes: i32,
@@ -687,6 +688,7 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 
 fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings_repository::LabSettings) -> LabSettingsResponse {
     LabSettingsResponse {
+        builder_enabled: s.builder_enabled,
         gemini_function_calling: s.gemini_function_calling,
         max_images_per_request: s.max_images_per_request,
         max_image_b64_bytes: s.max_image_b64_bytes,
@@ -733,6 +735,7 @@ where
 
 #[derive(serde::Deserialize)]
 pub struct PatchLabSettingsBody {
+    pub builder_enabled: Option<bool>,
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
@@ -761,6 +764,7 @@ pub async fn patch_lab_settings(
 ) -> impl axum::response::IntoResponse {
     use crate::application::ports::outbound::lab_settings_repository::LabSettingsUpdate;
     let patch = LabSettingsUpdate {
+        builder_enabled: body.builder_enabled,
         gemini_function_calling: body.gemini_function_calling,
         max_images_per_request: body.max_images_per_request,
         max_image_b64_bytes: body.max_image_b64_bytes,
@@ -849,4 +853,3 @@ pub async fn trigger_session_grouping(
     )
         .into_response()
 }
-

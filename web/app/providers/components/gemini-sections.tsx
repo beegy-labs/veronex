@@ -113,7 +113,7 @@ export function GeminiSyncSection() {
   function refreshGeminiData() {
     queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.models })
     queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.policies })
-    // Also refresh per-provider model selections so ModelSelectionModal picks up new models
+    // Also refresh per-provider model selections so ProviderModelsModal picks up new models
     queryClient.invalidateQueries({ queryKey: GEMINI_QUERY_KEYS.selectedModels })
   }
 

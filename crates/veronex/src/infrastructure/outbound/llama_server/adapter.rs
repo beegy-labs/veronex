@@ -13,8 +13,7 @@
 //!   process. Phase 3 ProcessManager owns the actual lifecycle.
 
 use std::pin::Pin;
-use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use anyhow::{Context as _, Result};
 use async_trait::async_trait;
@@ -349,17 +348,6 @@ impl InferenceProviderPort for LlamaServerAdapter {
         })
     }
 }
-
-// `Arc<LlamaServerAdapter>` is what callers hold in the registry. The blanket
-// `LlmProviderPort` impl in `inference_provider.rs` covers this — no explicit
-// trait wiring needed here.
-#[allow(dead_code)]
-pub(crate) type ArcAdapter = Arc<LlamaServerAdapter>;
-
-// Keep the unused import lint quiet for the `Duration` import — it's intended
-// to remain available for future timeout overrides on infer/stream paths.
-#[allow(dead_code)]
-const _UNUSED_DURATION_TYPE: fn() -> Duration = || PROVIDER_REQUEST_TIMEOUT;
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used, clippy::useless_conversion)]

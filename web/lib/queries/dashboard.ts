@@ -1,6 +1,6 @@
 import { queryOptions } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import { STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_LIVE, REFETCH_INTERVAL_SLOW, withJitter } from '@/lib/constants'
+import { STALE_TIME_FAST, STALE_TIME_LIVE, REFETCH_INTERVAL_FAST, REFETCH_INTERVAL_SLOW, withJitter } from '@/lib/constants'
 
 // ── Dashboard overview (aggregated snapshot) ──────────────────────────────────
 
@@ -17,16 +17,6 @@ export const dashboardOverviewQuery = queryOptions({
 export const dashboardStatsQuery = queryOptions({
   queryKey: ['dashboard-stats'] as const,
   queryFn: () => api.stats(),
-  staleTime: STALE_TIME_FAST,
-  refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
-  refetchIntervalInBackground: false,
-})
-
-// ── Recent jobs (overview sidebar) ────────────────────────────────────────────
-
-export const recentJobsQuery = queryOptions({
-  queryKey: ['recent-jobs'] as const,
-  queryFn: () => api.jobs('limit=10'),
   staleTime: STALE_TIME_FAST,
   refetchInterval: () => withJitter(REFETCH_INTERVAL_FAST),
   refetchIntervalInBackground: false,

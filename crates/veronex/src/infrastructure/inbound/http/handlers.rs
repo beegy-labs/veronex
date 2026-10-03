@@ -43,6 +43,19 @@ pub(super) fn sanitize_sse_error(e: &dyn std::fmt::Display) -> String {
     safe.replace('\r', "\\r").replace('\n', "\\n")
 }
 
+/// Shared 500 JSON response for admin/config-style handlers.
+pub(super) fn internal_json_error(
+    kind: &'static str,
+    error: &dyn std::fmt::Display,
+) -> Response {
+    tracing::error!(kind, error = %error, "http handler error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": kind, "message": error.to_string() })),
+    )
+        .into_response()
+}
+
 /// RAII guard that decrements the SSE connection counter on drop.
 pub(super) struct SseDropGuard(pub(super) Arc<AtomicU32>);
 

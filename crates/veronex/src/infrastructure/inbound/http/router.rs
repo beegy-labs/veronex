@@ -15,6 +15,7 @@ use super::account_handlers;
 use super::conversation_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
+use super::builder_handlers;
 use super::role_handlers;
 use super::setup_handlers;
 use super::admin_modelfile_handlers;
@@ -91,6 +92,24 @@ pub fn build_api_router() -> Router<AppState> {
 /// Build the JWT-protected admin router.
 fn build_jwt_router() -> Router<AppState> {
     Router::new()
+        .route("/v1/builder/repositories", get(builder_handlers::list_repositories).post(builder_handlers::create_repository))
+        .route("/v1/builder/workspaces", get(builder_handlers::list_workspaces).post(builder_handlers::create_workspace))
+        .route("/v1/builder/workspaces/{id}", get(builder_handlers::get_workspace))
+        .route("/v1/builder/workspaces/{id}/start", post(builder_handlers::start_workspace))
+        .route("/v1/builder/workspaces/{id}/stop", post(builder_handlers::stop_workspace))
+        .route("/v1/builder/workspaces/{id}/switch", post(builder_handlers::switch_cli))
+        .route("/v1/builder/workspaces/{id}/terminal", get(builder_handlers::terminal))
+        .route("/v1/builder/workspaces/{id}/terminal/resize", post(builder_handlers::resize_terminal))
+        .route("/v1/builder/workspaces/{id}/git/{action}", post(builder_handlers::git_action))
+        .route("/v1/builder/workspaces/{id}/previews", get(builder_handlers::list_previews).post(builder_handlers::start_preview))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/stop", post(builder_handlers::stop_preview))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/logs", get(builder_handlers::preview_logs))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/ticket", post(builder_handlers::preview_ticket))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/view", get(builder_handlers::view_preview_root))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/view/{*path}", get(builder_handlers::view_preview_path))
+        .route("/v1/builder/workspaces/{id}/events", get(builder_handlers::list_events))
+        .route("/v1/builder/workspaces/{id}/pull", get(builder_handlers::get_pull).post(builder_handlers::create_pull))
+        .route("/v1/builder/workspaces/{id}/pull/merge", post(builder_handlers::merge_pull))
         // Role management (super-only)
         .route("/v1/roles", get(role_handlers::list_roles).post(role_handlers::create_role))
         .route("/v1/roles/{id}", patch(role_handlers::update_role).delete(role_handlers::delete_role))
@@ -277,10 +296,13 @@ async fn security_headers(mut response: axum::response::Response) -> axum::respo
         axum::http::header::X_CONTENT_TYPE_OPTIONS,
         "nosniff".parse().expect("static"),
     );
-    headers.insert(
-        axum::http::header::X_FRAME_OPTIONS,
-        "DENY".parse().expect("static"),
-    );
+    if !headers.contains_key("x-veronex-preview") {
+        headers.insert(
+            axum::http::header::X_FRAME_OPTIONS,
+            "DENY".parse().expect("static"),
+        );
+    }
+    headers.remove("x-veronex-preview");
     headers.insert(
         axum::http::header::REFERRER_POLICY,
         "strict-origin-when-cross-origin".parse().expect("static"),
@@ -443,5 +465,6 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             axum::http::header::PROXY_AUTHORIZATION,
             axum::http::HeaderName::from_static("x-api-key"),
         ]))
+        .layer(middleware::from_fn_with_state(state.clone(), builder_handlers::preview_host_middleware))
         .with_state(state)
 }

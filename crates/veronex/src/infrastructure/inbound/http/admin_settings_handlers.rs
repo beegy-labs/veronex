@@ -15,6 +15,7 @@ use serde_json::json;
 use tracing::instrument;
 
 use crate::application::ports::outbound::system_settings_repository::default_for;
+use crate::infrastructure::inbound::http::handlers::internal_json_error;
 use crate::infrastructure::inbound::http::middleware::jwt_auth::RequireProviderManage;
 use crate::infrastructure::inbound::http::state::AppState;
 
@@ -64,11 +65,7 @@ pub async fn list_settings(
             (StatusCode::OK, Json(json!({ "settings": items, "total": items.len() })))
                 .into_response()
         }
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "list_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("list_failed", &e),
     }
 }
 
@@ -116,11 +113,7 @@ pub async fn get_setting(
             )
                 .into_response(),
         },
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "get_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("get_failed", &e),
     }
 }
 
@@ -140,11 +133,7 @@ pub async fn upsert_setting(
         .await
     {
         Ok(_) => (StatusCode::OK, Json(json!({ "ok": true, "key": key }))).into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "upsert_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("upsert_failed", &e),
     }
 }
 
@@ -165,10 +154,6 @@ pub async fn delete_setting(
             Json(json!({ "error": "key_not_found", "key": key })),
         )
             .into_response(),
-        Err(e) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(json!({ "error": "delete_failed", "message": e.to_string() })),
-        )
-            .into_response(),
+        Err(e) => internal_json_error("delete_failed", &e),
     }
 }

@@ -59,7 +59,6 @@ pub fn queue_jobs_paid() -> String { pk(d::QUEUE_JOBS_PAID) }
 pub fn queue_jobs_test() -> String { pk(d::QUEUE_JOBS_TEST) }
 pub fn queue_processing() -> String { pk(d::QUEUE_PROCESSING) }
 pub fn queue_active() -> String { pk(d::QUEUE_ACTIVE) }
-pub fn queue_active_attempts() -> String { pk(d::QUEUE_ACTIVE_ATTEMPTS) }
 pub fn queue_zset() -> String { pk(d::QUEUE_ZSET) }
 pub fn queue_enqueue_at() -> String { pk(d::QUEUE_ENQUEUE_AT) }
 pub fn queue_model_map() -> String { pk(d::QUEUE_MODEL_MAP) }
@@ -116,7 +115,6 @@ pub fn pubsub_cancel_prefix() -> String { pk(d::PUBSUB_CANCEL_PREFIX_KEY) }
 // ── Provider liveness (agent heartbeat) ─────────────────────────────────────
 
 pub fn provider_heartbeat(provider_id: Uuid) -> String { pk(&d::provider_heartbeat_key(provider_id)) }
-pub fn provider_capacity_state(provider_id: Uuid) -> String { pk(&d::provider_capacity_state_key(provider_id)) }
 pub fn providers_online_counter() -> String { pk(d::PROVIDERS_ONLINE_COUNTER_KEY) }
 pub fn jobs_pending_counter() -> String { pk(d::JOBS_PENDING_COUNTER_KEY) }
 pub fn jobs_running_counter() -> String { pk(d::JOBS_RUNNING_COUNTER_KEY) }

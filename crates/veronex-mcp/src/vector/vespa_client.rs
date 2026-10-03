@@ -225,11 +225,6 @@ impl VespaClient {
         Ok(hits)
     }
 
-    /// Health check — returns `true` if the Vespa query API responds.
-    pub async fn is_healthy(&self) -> bool {
-        let url = format!("{}/ApplicationStatus", self.base_url.replace(":8080", ":19071"));
-        self.client.get(&url).send().await.map(|r| r.status().is_success()).unwrap_or(false)
-    }
 }
 
 // ── Response parser ────────────────────────────────────────────────────────────

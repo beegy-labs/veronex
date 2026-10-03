@@ -647,3 +647,74 @@ BEGIN
 END $$;
 
 ALTER TABLE roles DROP COLUMN IF EXISTS menus;
+
+-- App builder: isolated from the existing inference and account tables.
+ALTER TABLE lab_settings ADD COLUMN IF NOT EXISTS builder_enabled BOOLEAN NOT NULL DEFAULT false;
+UPDATE roles SET permissions = ARRAY(SELECT DISTINCT unnest(permissions || ARRAY['builder_manage']))
+ WHERE name = 'super' AND NOT ('builder_manage' = ANY(permissions));
+
+CREATE TABLE IF NOT EXISTS builder_repositories (
+    id UUID PRIMARY KEY,
+    owner_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    remote_url TEXT NOT NULL,
+    author_name TEXT NOT NULL,
+    author_email TEXT NOT NULL,
+    default_branch TEXT NOT NULL DEFAULT 'main',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (owner_id, remote_url)
+);
+
+CREATE TABLE IF NOT EXISTS builder_workspaces (
+    id UUID PRIMARY KEY,
+    owner_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    repository_id UUID NOT NULL REFERENCES builder_repositories(id) ON DELETE RESTRICT,
+    name TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    cli TEXT NOT NULL DEFAULT 'codex' CHECK (cli IN ('codex','claude','gemini','local')),
+    status TEXT NOT NULL DEFAULT 'pending',
+    pod_name TEXT,
+    pod_ip TEXT,
+    generation BIGINT NOT NULL DEFAULT 1,
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (repository_id, branch)
+);
+CREATE INDEX IF NOT EXISTS idx_builder_workspaces_owner ON builder_workspaces(owner_id, updated_at DESC);
+
+CREATE TABLE IF NOT EXISTS builder_events (
+    id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES builder_workspaces(id) ON DELETE CASCADE,
+    cli TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload JSONB NOT NULL,
+    source_format TEXT NOT NULL DEFAULT 'runner-v1',
+    source_path TEXT,
+    source_hash TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_builder_events_workspace ON builder_events(workspace_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_builder_event_native ON builder_events(workspace_id,cli,source_path,source_hash) WHERE source_path IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS builder_previews (
+    id UUID PRIMARY KEY,
+    workspace_id UUID NOT NULL REFERENCES builder_workspaces(id) ON DELETE CASCADE,
+    owner_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    command TEXT NOT NULL,
+    port INTEGER NOT NULL CHECK (port BETWEEN 1024 AND 65535),
+    status TEXT NOT NULL DEFAULT 'pending',
+    last_error TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (workspace_id, port)
+);
+
+CREATE TABLE IF NOT EXISTS builder_pull_requests (
+    workspace_id UUID PRIMARY KEY REFERENCES builder_workspaces(id) ON DELETE CASCADE,
+    remote_number BIGINT NOT NULL,
+    url TEXT NOT NULL,
+    head_sha TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'open',
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

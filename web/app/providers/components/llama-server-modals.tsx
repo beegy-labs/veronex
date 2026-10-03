@@ -3,9 +3,9 @@
 import { useState, useOptimistic, startTransition } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Provider, ProviderSelectedModel, LlamaServerProviderForModel } from '@/lib/types'
-import { selectedModelsQuery, llamaServerModelProvidersQuery } from '@/lib/queries'
-import { Search, Cpu, ChevronLeft, ChevronRight, ListFilter } from 'lucide-react'
+import type { LlamaServerProviderForModel } from '@/lib/types'
+import { llamaServerModelProvidersQuery } from '@/lib/queries'
+import { Search, Cpu, ChevronLeft, ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
@@ -179,96 +179,6 @@ export function LlamaServerModelProvidersModal({ modelName, onClose }: { modelNa
 
         <DialogFooter>
           <Button variant="outline" size="sm" onClick={onClose}>{t('common.close')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
-
-// ── LlamaServerProviderModelsModal ───────────────────────────────────────────────────
-
-// Optimistic toggle for a single model within a provider
-function LlamaServerProviderModelItemToggle({
-  providerId,
-  model,
-}: {
-  providerId: string
-  model: ProviderSelectedModel
-}) {
-  const queryClient = useQueryClient()
-  const [optimistic, setOptimistic] = useOptimistic(model.is_enabled, (_, v: boolean) => v)
-  const mutation = useMutation({
-    mutationFn: (enabled: boolean) => api.setModelEnabled(providerId, model.model_name, enabled),
-    onError: () => setOptimistic(model.is_enabled),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: ['selected-models', providerId] })
-    },
-  })
-  return (
-    <Switch
-      checked={optimistic}
-      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); mutation.mutate(checked) })}
-      disabled={mutation.isPending}
-      aria-label={model.model_name}
-    />
-  )
-}
-
-export function LlamaServerProviderModelsModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
-  const { t } = useTranslation()
-
-  const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
-
-  const models = data?.models ?? []
-  const enabledCount = models.filter((m) => m.is_enabled).length
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="vds-max-w-md">
-        <DialogHeader>
-          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
-            <ListFilter className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
-            {t('providers.llama_server.modelSelection')}
-            <span className="vds-text-dim vds-font-400 vds-text-sm">— {provider.name}</span>
-          </DialogTitle>
-        </DialogHeader>
-
-        <p className="vds-text-xs vds-text-dim vds--mt-1">
-          {t('providers.llama_server.modelSelectionDesc')}
-        </p>
-
-        {isLoading && (
-          <div className="vds-flex vds-h-20 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
-            {t('common.loading')}
-          </div>
-        )}
-
-        {!isLoading && models.length === 0 && (
-          <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center">
-            {t('providers.llama_server.noProviderModels')}
-          </p>
-        )}
-
-        {models.length > 0 && (
-          <div className="vds-space-y-1 vds-max-h-80 vds-overflow-y-auto vds-pr-1">
-            {models.map((m) => (
-              <div key={m.model_name}
-                className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-3 vds-py-2">
-                <span className="vds-font-mono vds-text-sm vds-text-bright">{m.model_name}</span>
-                <LlamaServerProviderModelItemToggle providerId={provider.id} model={m} />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {models.length > 0 && (
-          <p className="vds-text-xs vds-text-dim vds-text-right">
-            {t('providers.llama_server.enabledCount', { enabled: enabledCount, total: models.length })}
-          </p>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{t('common.close')}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

@@ -86,17 +86,6 @@ pub fn db_error(e: impl std::fmt::Display) -> AppError {
     AppError::Internal(anyhow::anyhow!(super::constants::ERR_DATABASE))
 }
 
-/// Build a JSON error response tuple `(StatusCode, Json)` for handlers that
-/// return `impl IntoResponse` instead of `Result<T, AppError>`.
-///
-/// Produces `{"error": "<message>"}` — the same shape as `AppError::into_response`.
-pub fn error_json(
-    status: StatusCode,
-    message: impl Into<String>,
-) -> (StatusCode, Json<serde_json::Value>) {
-    (status, Json(json!({"error": message.into()})))
-}
-
 impl From<sqlx::Error> for AppError {
     fn from(e: sqlx::Error) -> Self {
         db_error(e)

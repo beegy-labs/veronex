@@ -136,9 +136,6 @@ struct TreeEntry {
 struct LfsInfo {
     /// SHA-256 of the file body (hex). Same value as the CAS sha256.
     oid: String,
-    #[serde(default)]
-    #[allow(dead_code)] // we read `oid`; size is available for future progress hooks
-    size: Option<u64>,
 }
 
 #[async_trait::async_trait]

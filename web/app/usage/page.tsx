@@ -13,7 +13,7 @@ import {
   Hash, Coins, CheckCircle, XCircle, AlertTriangle,
   Bot, Server, Key, DollarSign, Search,
 } from 'lucide-react'
-import StatsCard from '@/components/stats-card'
+import StatsCard, { StatsCardSkeleton } from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -74,10 +74,7 @@ export default function UsagePage() {
       {aggLoading && (
         <div className="vds-grid vds-grid-cols-2 vds-xl:grid-cols-4 vds-gap-4">
           {Array.from({ length: 4 }).map((_, i) => (
-            <Card key={i}><CardContent className="vds-p-6">
-              <div className="vds-h-3 vds-w-24 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-4" />
-              <div className="vds-h-8 vds-w-16 vds-rounded vds-bg-muted vds-animate-pulse" />
-            </CardContent></Card>
+            <StatsCardSkeleton key={i} />
           ))}
         </div>
       )}

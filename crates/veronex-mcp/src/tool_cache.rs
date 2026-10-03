@@ -185,10 +185,6 @@ impl McpToolCache {
     }
 
     /// Returns all currently known namespaced tool names (from the reverse map).
-    /// Fast, sync — does NOT check liveness.
-    pub fn all_namespaced_names(&self) -> Vec<String> {
-        self.name_to_server.iter().map(|e| e.key().clone()).collect()
-    }
 
     /// Retrieve a single tool definition by namespaced name (L1 only, sync).
     /// Returns `None` on cache miss or if the server entry is stale.

@@ -341,9 +341,6 @@ pub fn slot_leases_key(provider_id: uuid::Uuid, model: &str) -> String {
 pub fn provider_heartbeat_key(provider_id: uuid::Uuid) -> String {
     format!("veronex:provider:hb:{provider_id}")
 }
-pub fn provider_capacity_state_key(provider_id: uuid::Uuid) -> String {
-    format!("veronex:provider:{provider_id}:capacity_state")
-}
 pub fn provider_models_key(provider_id: uuid::Uuid) -> String {
     format!("veronex:models:{provider_id}")
 }

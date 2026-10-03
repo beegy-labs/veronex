@@ -623,6 +623,7 @@ export interface PatchSyncSettings {
 }
 
 export interface LabSettings {
+  builder_enabled: boolean
   gemini_function_calling: boolean
   max_images_per_request: number
   max_image_b64_bytes: number
@@ -642,6 +643,7 @@ export interface LabSettings {
 }
 
 export interface PatchLabSettings {
+  builder_enabled?: boolean
   gemini_function_calling?: boolean
   max_images_per_request?: number
   max_image_b64_bytes?: number
@@ -657,11 +659,6 @@ export interface PatchLabSettings {
   vision_model?: string | null
   handoff_enabled?: boolean
   handoff_threshold?: number
-}
-
-export interface MultiturnWarning {
-  code: 'model_too_small' | 'context_too_small' | 'model_not_allowed'
-  message: string
 }
 
 /** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */

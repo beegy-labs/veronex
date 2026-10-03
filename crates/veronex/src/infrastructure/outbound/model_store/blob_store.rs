@@ -125,22 +125,6 @@ impl BlobStore {
         Ok(())
     }
 
-    /// Stream the blob bytes from Garage. Caller pipes the stream to the
-    /// node's Local PV (`.tmp.{uuid}` → atomic rename to `{sha256}.gguf`)
-    /// and may verify sha256 incidentally.
-    pub async fn get_stream(&self, sha256: &str) -> Result<ByteStream> {
-        let client = self.client.as_ref().ok_or_else(|| anyhow::anyhow!("BlobStore test stub has no client"))?;
-        let key = Self::key_for(sha256);
-        let resp = client
-            .get_object()
-            .bucket(&self.bucket)
-            .key(&key)
-            .send()
-            .await
-            .map_err(|e| anyhow::anyhow!("GET {key}: {e}"))?;
-        Ok(resp.body)
-    }
-
     /// Delete a single CAS object. Used by admin manual GC for orphan blobs
     /// (`ref_count = 0`). Tolerates `NotFound` so repeated deletes are no-ops.
     pub async fn delete(&self, sha256: &str) -> Result<()> {
@@ -156,7 +140,7 @@ impl BlobStore {
             {
                 Ok(())
             }
-            Err(e) => Err(anyhow::anyhow!("DELETE {key}: {e}")),
+            Err(e) => Err(anyhow::anyhow!("delete blob {key}: {e}")),
         }
     }
 }

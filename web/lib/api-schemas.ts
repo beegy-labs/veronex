@@ -46,8 +46,6 @@ export const ProviderTypeSchema = z.enum(['llama_server', 'gemini'])
 
 export const LlmProviderStatusSchema = z.enum(['online', 'degraded', 'offline'])
 
-export const AccountRoleSchema = z.enum(['super', 'admin'])
-
 // ── Keys ────────────────────────────────────────────────────────────────────
 
 export const ApiKeySchema = z.object({

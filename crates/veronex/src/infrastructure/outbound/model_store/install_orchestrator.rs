@@ -23,8 +23,6 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
-#[cfg(test)]
-use std::time::Duration;
 use std::time::Instant;
 
 use anyhow::Result;
@@ -749,10 +747,4 @@ mod tests {
         }
     }
 
-    #[allow(dead_code)]
-    fn _unused_duration() -> Duration {
-        // Placeholder so `Duration` import isn't a dead use when the rest
-        // of the module compiles unchanged.
-        Duration::from_secs(0)
-    }
 }

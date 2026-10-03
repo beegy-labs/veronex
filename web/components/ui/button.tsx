@@ -68,10 +68,3 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
   },
 )
 Button.displayName = 'Button'
-
-export const buttonVariants = ({
-  variant = 'default',
-  size = 'default',
-  className,
-}: { variant?: Variant; size?: Size; className?: string } = {}) =>
-  cn(BASE, variantClass(variant), sizeClass(size), className)

@@ -9,7 +9,7 @@ import { SERVICE_STATUS_DOT } from '@/lib/constants'
 import { fmtCompact } from '@/lib/chart-theme'
 import { Database, Server, HardDrive, Activity, Search, ChevronDown, ChevronUp, AlertTriangle, Package } from 'lucide-react'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import type { PodItem, TopicPipelineStats } from '@/lib/types'
+import type { PodItem} from '@/lib/types'
 
 const SVC_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   postgresql: Database,
@@ -46,12 +46,6 @@ function lagColor(lag: number, isActive: boolean, lastPollSecs: number | null, h
   if (lag > 1000) return 'vds-text-error'
   if (lag > 100) return 'vds-text-warning'
   return 'vds-text-success'
-}
-
-const POD_STATUS_COLOR: Record<string, string> = {
-  online: 'vds-bg-success-bg',
-  offline: 'vds-bg-error',
-  degraded: 'vds-bg-warning',
 }
 
 function PodGrid({ pods }: { pods: PodItem[] }) {

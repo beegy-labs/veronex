@@ -7,8 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { useTranslation } from '@/i18n'
 import { useLabSettings } from '@/components/lab-settings-provider'
-import { VisionModelSelector } from './vision-model-selector'
-import { CompressionModelSelector } from './compression-model-selector'
+import { EnabledModelSelector } from './enabled-model-selector'
 import { MultiturnAllowedModelsSelector } from './multiturn-allowed-models-selector'
 import { DEFAULT_MAX_IMAGES, MAX_IMAGES_LIMIT } from '@/lib/constants'
 import { api } from '@/lib/api'
@@ -96,7 +95,8 @@ export function LlamaServerLabSection() {
           <div className="vds-space-y-1.5">
             <p className="vds-text-xs vds-font-500">{t('common.labVisionModel')}</p>
             <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('common.labVisionModelDesc')}</p>
-            <VisionModelSelector
+            <EnabledModelSelector
+              preferVision
               value={labSettings?.vision_model ?? null}
               disabled={disabled}
               onChange={(v) => patch('vision_model', v)}
@@ -126,7 +126,7 @@ export function LlamaServerLabSection() {
           <div className="vds-space-y-1.5">
             <p className="vds-text-xs vds-font-500">{t('common.labCompressionModel')}</p>
             <p className="vds-text-2xs vds-text-dim vds-leading-snug">{t('providers.llama_server.labCompressionModelDesc')}</p>
-            <CompressionModelSelector
+            <EnabledModelSelector
               value={labSettings?.compression_model ?? null}
               disabled={disabled}
               onChange={(v) => patch('compression_model', v)}

@@ -6,15 +6,18 @@ import {
 import { useTranslation } from '@/i18n'
 import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama-server-models'
 
-interface CompressionModelSelectorProps {
+interface EnabledModelSelectorProps {
   value: string | null
   onChange: (v: string | null) => void
   disabled?: boolean
+  preferVision?: boolean
 }
 
-export function CompressionModelSelector({ value, onChange, disabled }: CompressionModelSelectorProps) {
+export function EnabledModelSelector({ value, onChange, disabled, preferVision = false }: EnabledModelSelectorProps) {
   const { t } = useTranslation()
   const { models } = useEnabledLlamaServerModels()
+  const visionModels = preferVision ? models.filter((model) => model.is_vision) : []
+  const displayModels = visionModels.length > 0 ? visionModels : models
 
   return (
     <Select
@@ -27,7 +30,7 @@ export function CompressionModelSelector({ value, onChange, disabled }: Compress
       </SelectTrigger>
       <SelectContent>
         <SelectItem value="__none__" className="vds-text-xs vds-text-dim">{t('common.none')}</SelectItem>
-        {models.map((m) => (
+        {displayModels.map((m) => (
           <SelectItem key={m.model_name} value={m.model_name} className="vds-text-xs vds-font-mono">
             {m.model_name}
           </SelectItem>

@@ -7,7 +7,7 @@ import {
   LayoutDashboard, List, Key, Server, Activity,
   BarChart2, Gauge, Sun, Moon,
   BookOpen, HardDrive, Sparkles, ChevronDown,
-  Users, Shield, LogOut, Settings2, Plug,
+  Users, Shield, LogOut, Settings2, Plug, Hammer,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useTheme } from '@/components/theme-provider'
@@ -94,6 +94,7 @@ const navItems: NavItem[] = [
     ],
   },
   { type: 'link', href: '/mcp', labelKey: 'nav.mcp', icon: Plug, permission: 'mcp_manage', section: 'mcp' },
+  { type: 'link', href: '/builder', labelKey: 'nav.builder', icon: Hammer, permission: 'builder_manage' },
 ]
 
 // ── Nav props ───────────────────────────────────────────────────────────────────
@@ -186,6 +187,7 @@ function NavContent({ collapsed, onToggle }: NavContentProps) {
 
   const visibleItems = navItems
     .filter(item => hasPermission(item.permission))
+    .filter(item => !('href' in item) || item.href !== '/builder' || (labSettings?.builder_enabled ?? false))
     .filter(item => !('section' in item) || !item.section || !nav404.has(item.section))
     .map(item => {
       if (item.type === 'group') {

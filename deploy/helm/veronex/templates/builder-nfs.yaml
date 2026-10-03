@@ -1,0 +1,31 @@
+{{- if and .Values.builder.enabled .Values.builder.storage.nfs.enabled }}
+{{- if or (not .Values.builder.storage.nfs.server) (not .Values.builder.storage.nfs.path) }}
+{{- fail "builder.storage.nfs requires server and path" }}
+{{- end }}
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ .Release.Name }}-builder-workspaces
+spec:
+  capacity:
+    storage: {{ .Values.builder.storage.nfs.capacity }}
+  accessModes: [ReadWriteMany]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  nfs:
+    server: {{ .Values.builder.storage.nfs.server | quote }}
+    path: {{ .Values.builder.storage.nfs.path | quote }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ .Values.builder.pvc }}
+  namespace: {{ .Values.builder.namespace | default .Release.Namespace }}
+spec:
+  accessModes: [ReadWriteMany]
+  storageClassName: ""
+  volumeName: {{ .Release.Name }}-builder-workspaces
+  resources:
+    requests:
+      storage: {{ .Values.builder.storage.nfs.capacity }}
+{{- end }}

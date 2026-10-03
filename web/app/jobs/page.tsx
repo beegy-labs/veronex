@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo} from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
 import { DASHBOARD_JOBS_QUERY_KEY } from '@/lib/queries/dashboard'
@@ -24,7 +24,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { StatusPill } from '@/components/status-pill'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtNumber } from '@/lib/date'
-import { api } from '@/lib/api'
+
 
 const PAGE_SIZE = 50
 
