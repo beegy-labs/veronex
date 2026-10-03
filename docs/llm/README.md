@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-05-02
+> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-09-27
 
 ## Policies (Cross-Cutting)
 
@@ -25,6 +25,12 @@
 | Vespa Isolation | `policies/vespa-isolation.md` | environment, tenant_id, schema, field filter, isolation hierarchy, ES vs Vespa |
 
 ---
+
+## App Builder (`app-builder/`) — Planned
+
+| Document | Path | Keywords |
+|----------|------|---------|
+| Requirements | `app-builder/requirements.md` | Rust backend, actual CLI terminal, workspace, Codex, Claude Code, Gemini, local CLI, context handoff, N previews |
 
 ## Auth (`auth/`)
 

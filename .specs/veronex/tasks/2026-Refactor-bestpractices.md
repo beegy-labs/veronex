@@ -23,7 +23,11 @@
   - 스택 인벤토리/버전 changelog → `.add/skills.md`
 - [ ] WHY + 적용 조건 포함, 간결하게. `Last Updated` 갱신. `docs/en|kr/` 손대지 말 것(C9)
 
-## Phase 2 — 의존성 major 포함 최신화
+## Phase 2 — 의존성 major 포함 최신화  ⚠️ DEFERRED (2026-05-16)
+
+> 이 환경은 호스트·샌드박스 모두 네트워크 차단 → crate/npm fetch·버전 web search 불가.
+> 사용자 결정으로 Phase 2 연기. 네트워크 가용 환경에서 별도 수행. Phase 3·4 먼저 진행.
+
 
 - [ ] `.add/dependency-upgrade.md` Step 0 실행: 현재 버전 수집 + latest stable web search(Rust+npm) + CVE 스캔
 - [ ] Rust: axum/sqlx/fred/reqwest/jsonwebtoken/opentelemetry(4종 동시)/tokio/thiserror 등 major 포함 최신화.

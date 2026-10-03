@@ -1,6 +1,6 @@
 # Veronex
 
-> CDD Layer 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-03-15
+> CDD Layer 1 — Entry Point (≤50 lines) | **Last Updated**: 2026-09-27
 
 ## Project
 
@@ -22,6 +22,7 @@ Three Rust crates:
 |--------|------|
 | Core rules | `.ai/rules.md` |
 | Architecture | `.ai/architecture.md` |
+| App builder requirements | `docs/llm/app-builder/requirements.md` — terminal workspaces, central prompts, app/web plan |
 | Security | `.ai/security.md` |
 | Code patterns (2026) | `docs/llm/policies/patterns.md` |
 | **ID encoding policy** | **`docs/llm/policies/id-encoding.md`** |
