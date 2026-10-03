@@ -116,13 +116,13 @@ Located in `web/app/jobs/components/conversation-list.tsx`. Collapsible panel sh
 
 ### `estimated_cost_usd: number | null`
 
-Present on both `Job` and `JobDetail`. Computed via LATERAL JOIN on `model_pricing` (not stored). `0.0` = Ollama (self-hosted), `> 0` = Gemini, `null` = no pricing data.
+Present on both `Job` and `JobDetail`. Computed via LATERAL JOIN on `model_pricing` (not stored). `0.0` = llama-server (self-hosted), `> 0` = Gemini, `null` = no pricing data.
 
 See `docs/llm/inference/model-pricing.md` for pricing schema.
 
 ### `provider_name: string | null`
 
-Present on both `Job` and `JobDetail`. The human-readable name of the provider (Ollama server) that processed the job. Resolved via LEFT JOIN on `llm_providers`. `null` when provider has been deleted or job is still pending.
+Present on both `Job` and `JobDetail`. The human-readable name of the provider (llama-server node) that processed the job. Resolved via LEFT JOIN on `llm_providers`. `null` when provider has been deleted or job is still pending.
 
 ### `image_keys: string[] | null` / `image_urls: string[] | null`
 

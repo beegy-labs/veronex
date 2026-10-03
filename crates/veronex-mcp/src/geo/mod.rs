@@ -15,8 +15,8 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-use serde::{Deserialize, Serialize};
-use unicode_normalization::UnicodeNormalization;
+mod data;
+use data::{City, GeoData, normalize};
 
 // ── Data source ───────────────────────────────────────────────────────────────
 //
@@ -40,26 +40,6 @@ fn read_geo_bytes() -> Result<Vec<u8>, GeoError> {
     std::fs::read(&path).map_err(|e| {
         GeoError::Init(format!("read {} ({}); set GEO_DATA_PATH to override", path, e))
     })
-}
-
-// ── Internal types ────────────────────────────────────────────────────────────
-
-#[derive(Serialize, Deserialize)]
-struct City {
-    name: String,
-    ascii_name: String,
-    latitude: f32,
-    longitude: f32,
-    country_code: String,
-    admin1_name: String,
-    population: u32,
-    timezone: String,
-}
-
-#[derive(Serialize, Deserialize)]
-struct GeoData {
-    cities: Vec<City>,
-    index: Vec<(String, Vec<u32>)>,
 }
 
 // ── Public types ──────────────────────────────────────────────────────────────
@@ -112,18 +92,6 @@ fn get_index() -> &'static GeoIndex {
         let index: HashMap<String, Vec<u32>> = data.index.into_iter().collect();
         GeoIndex { cities: data.cities, index }
     })
-}
-
-// ── Normalization ─────────────────────────────────────────────────────────────
-
-fn normalize(s: &str) -> String {
-    s.nfd()
-        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
-        .collect::<String>()
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 // ── Search ────────────────────────────────────────────────────────────────────

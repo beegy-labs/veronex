@@ -34,7 +34,7 @@ Main orchestrator. Responsibilities:
 
 Registration modal. Fields: `name`, `slug` (auto-derived from name), `url`, `timeout_secs`.
 - Slug auto-derive: `name.toLowerCase().replace(/[^a-z0-9]/g, '_').replace(/_+/g, '_').replace(/^_|_$/g, '')`
-- No 2-Step Verify Flow — MCP servers are not verified at registration (unlike GPU servers/Ollama)
+- No 2-Step Verify Flow — MCP servers are not verified at registration (unlike GPU servers/llama-server)
 - `onSettled` used correctly for cache invalidation
 - `canSubmit` gates the register button
 

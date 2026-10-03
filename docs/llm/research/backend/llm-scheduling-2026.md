@@ -2,21 +2,21 @@
 
 > **CDD Layer 2** | Editable | **Last Updated**: 2026-03-11
 >
-> Web-searched findings on queue-aware model assignment for N-server, M-model Ollama clusters.
+> Web-searched findings on queue-aware model assignment for N-server, M-model llama-server clusters.
 > Status: `research` — not yet implemented in Veronex.
 
 ---
 
 ## Problem Statement
 
-- **N** Ollama servers with heterogeneous VRAM (e.g., 16 GB, 32 GB, 64 GB)
+- **N** llama-server nodes with heterogeneous VRAM (e.g., 16 GB, 32 GB, 64 GB)
 - **M** models with different weight sizes
 - Requests arrive in a Valkey priority queue (LPUSH/RPUSH)
 - Goals: scan queue demand, assign models to servers, preload proactively, maximize goodput
 
 ---
 
-## 1. Disaggregated Prefill/Decode — Applicability to Ollama
+## 1. Disaggregated Prefill/Decode — Applicability to llama-server
 
 ### What It Is
 
@@ -27,9 +27,9 @@ Prefill (prompt processing) and decode (token generation) have vastly different 
 Systems like **Mooncake** (Moonshot AI, FAST'25 Best Paper), **Splitwise**, **DistServe**, and
 **NVIDIA Dynamo** disaggregate these phases onto separate GPU pools.
 
-### Does It Apply to Ollama?
+### Does It Apply to llama-server?
 
-**No, not at the engine level.** Ollama does not expose prefill/decode separation in its API.
+**No, not at the engine level.** llama-server does not expose prefill/decode separation in its API.
 The entire request lifecycle is a black box from the scheduler's perspective.
 
 **However**, the *routing insight* is applicable at the outer layer:
@@ -54,10 +54,10 @@ Continuous batching (Orca, vLLM, SGLang) allows new requests to join an in-fligh
 at iteration boundaries rather than waiting for all prior requests to complete. This eliminates
 the "convoy effect" where long requests block short ones.
 
-### Ollama's Behavior
+### llama-server's Behavior
 
-Ollama handles batching internally per-server. The `num_parallel` setting controls how many
-requests it batches simultaneously. As of 2025, Ollama does NOT expose iteration-level
+llama-server handles batching internally per-server. The `num_parallel` setting controls how many
+requests it batches simultaneously. As of 2025, llama-server does NOT expose iteration-level
 scheduling externally.
 
 ### Multi-Model, Multi-Server (vLLM Router, SGLang Router)
@@ -161,15 +161,15 @@ else:
     route to min_load(candidate_A, candidate_B)  # power-of-two fallback
 ```
 
-### Ollama-Specific KV Cache Limitation
+### llama-server-Specific KV Cache Limitation
 
-Ollama does NOT expose KV cache state via API. There is no way to query "does server X
+llama-server does NOT expose KV cache state via API. There is no way to query "does server X
 have the prefix cached for model Y?" externally.
 
 **Workaround**: Implement **sticky routing by session/prefix hash**:
 - Hash the first N tokens of the system prompt + conversation context
 - Always route that hash to the same server (consistent hashing ring)
-- This ensures KV cache reuse without requiring Ollama to expose cache state
+- This ensures KV cache reuse without requiring llama-server to expose cache state
 
 ### Practical Recommendation
 

@@ -133,7 +133,6 @@ impl ModelCapacityRepository for PostgresModelCapacityRepository {
         model: &str,
         window_hours: u32,
     ) -> Result<Option<ThroughputStats>> {
-        #[allow(dead_code)]
         #[derive(sqlx::FromRow)]
         struct StatsRow {
             avg_tokens_per_sec: Option<f64>,

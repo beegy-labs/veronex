@@ -1,4 +1,6 @@
-//! McpBridgeAdapter — wraps the Ollama inference loop with MCP tool execution.
+#![allow(clippy::doc_lazy_continuation, clippy::collapsible_if, clippy::unnecessary_cast)]
+
+//! McpBridgeAdapter — wraps the upstream inference loop with MCP tool execution.
 //!
 //! # Flow (per request)
 //!
@@ -39,7 +41,6 @@ use crate::domain::constants::{
 };
 use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::JobId;
-use crate::infrastructure::inbound::http::inference_helpers::validate_tool_call;
 use crate::infrastructure::inbound::http::middleware::infer_auth::InferCaller;
 use crate::infrastructure::inbound::http::state::AppState;
 
@@ -58,7 +59,7 @@ const RESULT_CACHE_TTL_SECS: i64 = 300;
 /// + warmup. Active until a `StreamToken::phase_boundary()` arrives from the
 /// runner (S14 Lifecycle SoD post-`ensure_ready` signal). SSOT in
 /// [`crate::domain::constants::MCP_LIFECYCLE_LOAD_TIMEOUT`] — coupled with the
-/// `ollama::lifecycle` reqwest cold-load timeout (must stay equal).
+/// upstream cold-load reqwest timeout (must stay equal).
 const LIFECYCLE_TIMEOUT: tokio::time::Duration = MCP_LIFECYCLE_LOAD_TIMEOUT;
 
 /// Phase 2 first-token timeout — applies only after the runner emits the
@@ -105,29 +106,13 @@ pub struct McpBridgeAdapter {
 
 /// Outcome of a single agentic loop run.
 ///
-/// All rounds are collected synchronously by `collect_round` (S20 — see
-/// `.specs/veronex/bridge-mcp-loop-correctness.md`). When the caller passes
-/// a `sse_tap_tx` to `run_loop`, content tokens of text rounds are streamed
-/// to the client AS they arrive; the fields below carry round-end summary
-/// info (totals, finish_reason, last-round tool_calls if non-MCP).
+/// Constrained-decoding rounds are collected before emitting the final answer.
 pub struct McpLoopResult {
-    /// Final assistant text content. May duplicate text already streamed via
-    /// the tap (tap is a copy, not a move). Caller should NOT re-emit `content`
-    /// when `streamed_via_tap` is true — see SDD §4 caller integration.
+    /// Final assistant text, emitted once by the SSE handler.
     pub content: String,
-    /// Final round tool_calls — non-empty when the model finished with non-MCP
-    /// tools (passthrough to client) or with no MCP servers in scope.
-    pub tool_calls: Vec<Value>,
     pub prompt_tokens: u32,
     pub completion_tokens: u32,
     pub finish_reason: String,
-    /// How many MCP tool-call rounds were executed.
-    pub rounds: u8,
-    /// True iff at least one round's content was forwarded via the `sse_tap_tx`
-    /// passed to `run_loop`. When true, the caller MUST NOT emit `content` as
-    /// an SSE chunk (already streamed) — only emit the trailing `finish` /
-    /// `usage` / `[DONE]` chunks.
-    pub streamed_via_tap: bool,
 }
 
 // ── McpBridgeAdapter impl ──────────────────────────────────────────────────────
@@ -150,16 +135,8 @@ impl McpBridgeAdapter {
 
     /// Run the full agentic MCP loop.
     ///
-    /// `base_messages` must be in Ollama format already.
+    /// `base_messages` must be in chat-completion format already.
     /// `base_tools` are caller-supplied tools (injected before MCP tools, up to cap).
-    ///
-    /// `sse_tap_tx` is the **stream-tap** sender (SDD `.specs/veronex/bridge-mcp-loop-correctness.md`):
-    /// when `Some`, the bridge forwards content tokens of text rounds to the
-    /// caller's SSE writer as they arrive (chatGPT-style token streaming).
-    /// Tool-call rounds remain silent on the tap — the bridge intercepts and
-    /// executes MCP tools server-side, then runs the next round. All rounds
-    /// are collected synchronously regardless of `sse_tap_tx`; the tap only
-    /// controls user-visible streaming, not loop correctness.
     #[instrument(skip_all, fields(model = %model))]
     #[allow(clippy::too_many_arguments)]
     pub async fn run_loop(
@@ -172,10 +149,8 @@ impl McpBridgeAdapter {
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
-        response_format: Option<Value>,
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
-        sse_tap_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
     ) -> Option<McpLoopResult> {
         // ── Per-key ACL + cap_points + top_k — fetched in parallel ───────────
         // JWT session callers (no api_key_id) bypass all key-level limits.
@@ -286,8 +261,6 @@ impl McpBridgeAdapter {
             // chat completion path.
             return None;
         }
-        let _ = sse_tap_tx; // Reserved for future final-answer streaming (SDD §3.7).
-        let _ = response_format; // Overridden by the constrained-decoding schema.
         self.run_loop_forced_json(
             state,
             caller,
@@ -297,7 +270,6 @@ impl McpBridgeAdapter {
             conversation_id,
             stop,
             seed,
-            None,
             frequency_penalty,
             presence_penalty,
             allowed_servers,
@@ -311,7 +283,7 @@ impl McpBridgeAdapter {
     // Mirror of `run_loop` for models without native `tool_calls`. Injects a
     // minimal system prompt + tool catalogue, builds an `oneOf` JSON-Schema
     // covering every available tool plus a `final` terminator, and forwards
-    // the schema as Ollama's `format` parameter. Constrained decoding (GBNF
+    // the schema as the upstream `format` parameter. Constrained decoding (GBNF
     // grammar) guarantees the model's output is always a valid JSON object
     // matching one of the branches — so even tool-incapable models like
     // qwen3:8b can drive MCP deterministically. Replaces the prior text-template
@@ -330,7 +302,6 @@ impl McpBridgeAdapter {
         conversation_id: Option<uuid::Uuid>,
         stop: Option<Value>,
         seed: Option<u32>,
-        _user_response_format: Option<Value>,
         frequency_penalty: Option<f64>,
         presence_penalty: Option<f64>,
         allowed_servers: Option<Arc<HashSet<Uuid>>>,
@@ -357,7 +328,6 @@ impl McpBridgeAdapter {
         let mut total_prompt_tokens: u32 = 0;
         let mut total_completion_tokens: u32 = 0;
         let mut content = String::new();
-        let mut rounds: u8 = 0;
         let mut first_job_id: Option<JobId> = None;
         let mut intermediate_job_ids: Vec<Uuid> = Vec::new();
         let mut call_sig_counts: HashMap<(String, String), u8> = HashMap::new();
@@ -412,7 +382,7 @@ impl McpBridgeAdapter {
             let job_id = match state.use_case.submit(SubmitJobRequest {
                 prompt,
                 model_name: model.clone(),
-                provider_type: ProviderType::Ollama,
+                provider_type: ProviderType::LlamaServer,
                 gemini_tier: None,
                 api_key_id: caller.api_key_id(),
                 account_id: caller.account_id(),
@@ -450,24 +420,22 @@ impl McpBridgeAdapter {
             // No SSE tap: per-round output is a structural JSON object intended
             // for tool-dispatch, not for end-user streaming. Final-answer text
             // is emitted by the caller after the loop terminates.
-            let round_result = match collect_round(state, &job_id, None).await {
+            let round_result = match collect_round(state, &job_id).await {
                 Ok(r) => r,
                 Err(e) => {
                     warn!(round, error = ?e, "forced-JSON round failed");
                     return Some(McpLoopResult {
                         content: format!("Error: round {round} failed ({e:?})"),
-                        tool_calls: Vec::new(),
+
                         prompt_tokens: total_prompt_tokens,
                         completion_tokens: total_completion_tokens,
                         finish_reason: "error".into(),
-                        rounds: round,
-                        streamed_via_tap: false,
+
                     });
                 }
             };
             total_prompt_tokens = total_prompt_tokens.saturating_add(round_result.prompt_tokens);
             total_completion_tokens = total_completion_tokens.saturating_add(round_result.completion_tokens);
-            rounds = round + 1;
 
             // ── Parse the model's JSON action ─────────────────────────────────
             // `allow_final_for_round` (in forced_json.rs) keeps round 0
@@ -500,7 +468,7 @@ impl McpBridgeAdapter {
                             &[tc_value],
                             caller.api_key_id(),
                             tenant_id.clone(),
-                            rounds - 1,
+                            round,
                             mcp_loop_id,
                             job_id.0,
                             allowed_servers.clone(),
@@ -564,20 +532,18 @@ impl McpBridgeAdapter {
         // + bridge-owned consolidated S3 turn write + turn_count bump ───────
         if let Some(ref fid) = first_job_id {
             let pg = &state.pg_pool;
-            let _ = sqlx::query(
-                "UPDATE inference_jobs SET prompt_tokens = $1, completion_tokens = $2 WHERE id = $3",
+            use crate::infrastructure::outbound::persistence::mcp_bridge_queries as bridge_q;
+            let _ = bridge_q::roll_up_first_job_tokens(
+                pg,
+                fid.0,
+                total_prompt_tokens.min(i32::MAX as u32) as i32,
+                total_completion_tokens.min(i32::MAX as u32) as i32,
             )
-            .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-            .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-            .bind(fid.0)
-            .execute(pg)
             .await
             .map_err(|e| warn!(job_id = %fid.0, error = %e, "ReAct: failed to update job tokens"));
 
             if !intermediate_job_ids.is_empty() {
-                let _ = sqlx::query("DELETE FROM inference_jobs WHERE id = ANY($1)")
-                    .bind(&intermediate_job_ids)
-                    .execute(pg)
+                let _ = bridge_q::delete_intermediate_jobs(pg, &intermediate_job_ids)
                     .await
                     .map_err(|e| warn!(error = %e, "ReAct: failed to cleanup intermediate jobs"));
             }
@@ -624,33 +590,26 @@ impl McpBridgeAdapter {
             }
 
             if let Some(conv_id) = conversation_id {
-                let _ = sqlx::query(
-                    "UPDATE conversations \
-                        SET turn_count = turn_count + 1, \
-                            total_prompt_tokens = total_prompt_tokens + $1, \
-                            total_completion_tokens = total_completion_tokens + $2, \
-                            model_name = COALESCE(model_name, $3), \
-                            updated_at = now() \
-                      WHERE id = $4"
-                )
-                .bind(total_prompt_tokens.min(i32::MAX as u32) as i32)
-                .bind(total_completion_tokens.min(i32::MAX as u32) as i32)
-                .bind(&model)
-                .bind(conv_id)
-                .execute(pg)
-                .await
-                .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "ReAct: turn_count increment failed"));
+                let _ = crate::infrastructure::outbound::persistence::mcp_bridge_queries::
+                    bump_conversation_turn(
+                        pg,
+                        conv_id,
+                        total_prompt_tokens.min(i32::MAX as u32) as i32,
+                        total_completion_tokens.min(i32::MAX as u32) as i32,
+                        &model,
+                    )
+                    .await
+                    .map_err(|e| warn!(conversation_id = %conv_id, error = %e, "ReAct: turn_count increment failed"));
             }
         }
 
         Some(McpLoopResult {
             content,
-            tool_calls: Vec::new(),
+
             prompt_tokens: total_prompt_tokens,
             completion_tokens: total_completion_tokens,
             finish_reason: "stop".into(),
-            rounds,
-            streamed_via_tap: false,
+
         })
     }
 
@@ -670,7 +629,7 @@ impl McpBridgeAdapter {
     ) -> Vec<(String, ToolCallRecord)> {
         use futures::stream::{self, StreamExt};
 
-        // `buffered`: preserves submission order (required for Ollama index-based mapping)
+        // `buffered`: preserves submission order (required for index-based mapping)
         // while capping in-flight calls at MAX_CONCURRENT_TOOL_CALLS.
         // Each future owns clones of the cheap Arc fields — no borrowed lifetime issues.
         stream::iter(calls.iter().cloned())
@@ -863,20 +822,8 @@ impl ToolCallRecord {
 
 struct RoundResult {
     content: String,
-    /// Populated by `collect_round` for OpenAI-spec parity; the unified
-    /// constrained-decoding path only reads `content`. Retained so that a
-    /// future `final.answer` token-streaming SDD can reuse the round-collector
-    /// without re-plumbing fields. SDD `.specs/veronex/mcp-constrained-decoding-unification.md` §3.7.
-    #[allow(dead_code)]
-    tool_calls: Vec<Value>,
     prompt_tokens: u32,
     completion_tokens: u32,
-    /// See `tool_calls` doc — populated for future use, not currently read.
-    #[allow(dead_code)]
-    finish_reason: String,
-    /// See `tool_calls` doc — populated for future use, not currently read.
-    #[allow(dead_code)]
-    passthrough_streamed: bool,
 }
 
 /// Collect all tokens from a submitted job into a `RoundResult`.
@@ -936,33 +883,15 @@ impl std::fmt::Display for RoundError {
     }
 }
 
-/// Synchronously collect one round of streamed tokens into a `RoundResult`.
-///
-/// `sse_tx` is the **stream-tap** (SDD `.specs/veronex/bridge-mcp-loop-correctness.md`
-/// §3.2): when `Some`, content tokens are forwarded to the caller's SSE writer
-/// AS they arrive — preserving chatGPT-style token-by-token UX for final-round
-/// text. The tap follows OpenAI's round-level XOR: first non-empty delta
-/// decides the mode (tool_calls → silent intercept, content → passthrough)
-/// and that mode holds for the rest of the round.
+/// Collect a constrained-decoding round without forwarding its JSON envelope.
 async fn collect_round(
     state: &AppState,
     job_id: &JobId,
-    sse_tx: Option<&tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<RoundResult, RoundError> {
     let mut token_stream = state.use_case.stream(job_id);
     let mut content = String::new();
-    let mut tool_calls: Vec<Value> = Vec::new();
     let mut prompt_tokens: u32 = 0;
     let mut completion_tokens: u32 = 0;
-    let mut finish_reason = "stop".to_string();
-    // Stream-tap mode (only meaningful when sse_tx is Some).
-    // - undecided: haven't seen the first meaningful delta yet
-    // - intercept: tool_calls came first → never forward, bridge will execute
-    // - passthrough: content came first → forward all subsequent content tokens
-    #[derive(PartialEq)]
-    enum TapMode { Undecided, Intercept, Passthrough }
-    let mut tap_mode = TapMode::Undecided;
-    let mut passthrough_streamed = false;
     // Phase-aware state — see SDD §3.3.
     // - in_phase_1=true: still in `ensure_ready` (Phase 1). Active until a
     //   `phase_boundary` token arrives. Timeout = LIFECYCLE_TIMEOUT.
@@ -1005,42 +934,12 @@ async fn collect_round(
                     // is_final is checked first — a final token with tool_calls still ends the round.
                     prompt_tokens = token.prompt_tokens.unwrap_or(prompt_tokens);
                     completion_tokens = token.completion_tokens.unwrap_or(completion_tokens);
-                    finish_reason = token.finish_reason.unwrap_or_else(|| {
-                        if tool_calls.is_empty() { "stop".into() } else { "tool_calls".into() }
-                    });
                     break;
                 }
-                let has_tool_calls = token.tool_calls.is_some();
-                let has_content = !token.value.is_empty();
-
-                // Stream-tap decision (only on first meaningful delta of the round)
-                if sse_tx.is_some() && tap_mode == TapMode::Undecided {
-                    if has_tool_calls {
-                        tap_mode = TapMode::Intercept;
-                    } else if has_content {
-                        tap_mode = TapMode::Passthrough;
-                    }
-                }
-
-                if has_tool_calls {
-                    if let Some(calls) = token.tool_calls.as_ref().and_then(|v| v.as_array()) {
-                        for (i, c) in calls.iter().enumerate() {
-                            if validate_tool_call(c) {
-                                tool_calls.push(convert_ollama_tool_call(i, c));
-                            }
-                        }
-                    }
-                } else if has_content {
+                // Preserve the native tool-call/content XOR while collecting only
+                // the constrained JSON content consumed by the forced-JSON loop.
+                if token.tool_calls.is_none() && !token.value.is_empty() {
                     content.push_str(&token.value);
-                    // Forward to client SSE if in passthrough mode (SDD §3.2).
-                    if tap_mode == TapMode::Passthrough {
-                        if let Some(tx) = sse_tx {
-                            // Channel disconnected (client gone) → tap stays silent;
-                            // collect_round still completes for invariant maintenance.
-                            let _ = tx.send(token.value.clone());
-                            passthrough_streamed = true;
-                        }
-                    }
                 }
             }
             Ok(Some(Err(e))) => return Err(RoundError::Stream(e.to_string())),
@@ -1051,25 +950,7 @@ async fn collect_round(
         }
     }
 
-    Ok(RoundResult { content, tool_calls, prompt_tokens, completion_tokens, finish_reason, passthrough_streamed })
-}
-
-/// Convert an Ollama tool_call to OpenAI format, preserving index as ID.
-fn convert_ollama_tool_call(i: usize, c: &Value) -> Value {
-    let name = c.get("function")
-        .and_then(|f| f.get("name"))
-        .and_then(|n| n.as_str())
-        .unwrap_or("");
-    let args = c.get("function")
-        .and_then(|f| f.get("arguments"))
-        .map(|a| serde_json::to_string(a).unwrap_or_default())
-        .unwrap_or_default();
-    serde_json::json!({
-        "index": i,
-        "id": format!("call_{i}"),
-        "type": "function",
-        "function": { "name": name, "arguments": args }
-    })
+    Ok(RoundResult { content, prompt_tokens, completion_tokens })
 }
 
 /// Extract the last user message as a plain string prompt.
@@ -1135,13 +1016,8 @@ pub(crate) async fn fetch_mcp_acl(state: &AppState, key_id: Uuid) -> Vec<Uuid> {
     }
 
     // ── L2: DB (cache miss) ────────────────────────────────────────────────────
-    let ids: Vec<Uuid> = sqlx::query_scalar(
-        "SELECT server_id FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true"
-    )
-    .bind(key_id)
-    .fetch_all(&state.pg_pool)
-    .await
-    .unwrap_or_default();
+    let ids = crate::infrastructure::outbound::persistence::mcp_key_access_queries::
+        list_allowed_server_ids(&state.pg_pool, key_id).await;
 
     // Populate cache — empty array is also cached (negative cache).
     if let Some(ref pool) = state.valkey_pool && let Ok(json) = serde_json::to_string(&ids) {
@@ -1204,7 +1080,7 @@ async fn fetch_mcp_cap_points(state: &AppState, key_id: Uuid) -> Option<u8> {
     cached_mcp_int_lookup(
         state,
         crate::infrastructure::outbound::valkey_keys::mcp_key_cap_points(key_id),
-        "SELECT mcp_cap_points FROM api_keys WHERE id = $1",
+        crate::infrastructure::outbound::persistence::mcp_bridge_queries::SELECT_MCP_CAP_POINTS,
         key_id,
         "cap_points",
     ).await.map(|v| v as u8)
@@ -1216,7 +1092,7 @@ async fn fetch_mcp_top_k(state: &AppState, key_id: Uuid) -> Option<usize> {
     cached_mcp_int_lookup(
         state,
         crate::infrastructure::outbound::valkey_keys::mcp_key_top_k(key_id),
-        "SELECT MIN(top_k) FROM mcp_key_access WHERE api_key_id = $1 AND is_allowed = true AND top_k IS NOT NULL",
+        crate::infrastructure::outbound::persistence::mcp_bridge_queries::SELECT_MIN_TOP_K_FOR_KEY,
         key_id,
         "top_k",
     ).await.map(|v| v as usize)
@@ -1271,6 +1147,7 @@ impl McpBridgeAdapter {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
 
@@ -1297,39 +1174,7 @@ mod tests {
     // (SHA256 determinism and collision resistance are library guarantees; only
     // our output format and capping behaviour need testing)
 
-    // ── convert_ollama_tool_call ──────────────────────────────────────────────
 
-    #[test]
-    fn convert_ollama_tool_call_produces_openai_format() {
-        let tc = serde_json::json!({
-            "function": { "name": "get_weather", "arguments": {"city": "Seoul"} }
-        });
-        let result = convert_ollama_tool_call(0, &tc);
-        assert_eq!(result["type"].as_str(), Some("function"));
-        assert_eq!(result["id"].as_str(), Some("call_0"));
-        assert_eq!(result["index"].as_u64(), Some(0));
-        assert_eq!(result["function"]["name"].as_str(), Some("get_weather"));
-        // arguments must be JSON string (not an object)
-        assert!(result["function"]["arguments"].is_string());
-        let args: serde_json::Value =
-            serde_json::from_str(result["function"]["arguments"].as_str().unwrap()).unwrap();
-        assert_eq!(args["city"].as_str(), Some("Seoul"));
-    }
-
-    #[test]
-    fn convert_ollama_tool_call_index_used_as_id() {
-        let tc = serde_json::json!({ "function": { "name": "tool", "arguments": {} } });
-        let r3 = convert_ollama_tool_call(3, &tc);
-        assert_eq!(r3["id"].as_str(), Some("call_3"));
-        assert_eq!(r3["index"].as_u64(), Some(3));
-    }
-
-    #[test]
-    fn convert_ollama_tool_call_missing_name_gives_empty_string() {
-        let tc = serde_json::json!({ "function": {} });
-        let result = convert_ollama_tool_call(0, &tc);
-        assert_eq!(result["function"]["name"].as_str(), Some(""));
-    }
 
     // ── extract_last_user_prompt ──────────────────────────────────────────────
 
@@ -1349,23 +1194,7 @@ mod tests {
         assert_eq!(extract_last_user_prompt(&msgs), "");
     }
 
-    // ── convert_ollama_tool_call — edge cases ─────────────────────────────────
 
-    #[test]
-    fn convert_ollama_tool_call_invalid_args_string_becomes_empty() {
-        // When arguments is a JSON string, it passes through as-is.
-        let tc = serde_json::json!({ "function": { "name": "t", "arguments": "NOT_JSON" } });
-        let r = convert_ollama_tool_call(0, &tc);
-        // "NOT_JSON" is a valid JSON string value, serialised as `"NOT_JSON"`
-        assert_eq!(r["function"]["arguments"].as_str(), Some("\"NOT_JSON\""));
-    }
-
-    #[test]
-    fn convert_ollama_tool_call_no_arguments_field_empty_string() {
-        let tc = serde_json::json!({ "function": { "name": "t" } });
-        let r = convert_ollama_tool_call(0, &tc);
-        assert_eq!(r["function"]["arguments"].as_str(), Some(""));
-    }
 
     // ── quick_args_hash — always 8 hex chars ─────────────────────────────────
 
@@ -1432,8 +1261,8 @@ mod tests {
 
     #[test]
     fn round_error_stream_passes_through_provider_message() {
-        let s = RoundError::Stream("ollama 502 bad gateway".into()).to_string();
-        assert!(s.contains("ollama 502 bad gateway"), "msg = {s}");
+        let s = RoundError::Stream("upstream 502 bad gateway".into()).to_string();
+        assert!(s.contains("upstream 502 bad gateway"), "msg = {s}");
     }
 
     // ── Timeout constants — sanity invariants ─────────────────────────────────
@@ -1529,93 +1358,4 @@ mod tests {
         );
     }
 
-    // ── S20 structural invariants — fast-path drop + stream-tap ────────────────
-    //
-    // SDD: `.specs/veronex/bridge-mcp-loop-correctness.md`. These tests lock the
-    // structural shape of the loop-result and round-result types so a future
-    // refactor cannot silently re-introduce the round-bypass fast-path.
-
-    #[test]
-    fn round_result_carries_passthrough_streamed_signal() {
-        // collect_round must signal to run_loop whether the tap forwarded
-        // content this round. If this field disappears, the mixed-delta
-        // safety branch in run_loop (SDD §3.3) silently breaks — content
-        // already streamed to client AND tool_calls would be re-executed.
-        let r = RoundResult {
-            content: String::new(),
-            tool_calls: Vec::new(),
-            prompt_tokens: 0,
-            completion_tokens: 0,
-            finish_reason: "stop".into(),
-            passthrough_streamed: true,
-        };
-        assert!(r.passthrough_streamed);
-    }
-
-    #[test]
-    fn mcp_loop_result_uses_streamed_via_tap_not_final_job_id() {
-        // S20 removed the `final_job_id` field that signalled the legacy
-        // fast-path bypass. Replacement is `streamed_via_tap`. This struct
-        // literal is the compile-time sentinel: the test fails to build if
-        // either field is renamed/removed without coordinated update of the
-        // run_loop bookkeeping (`streamed_via_tap |= round_result.passthrough_streamed`).
-        let r = McpLoopResult {
-            content: "hi".into(),
-            tool_calls: Vec::new(),
-            prompt_tokens: 1,
-            completion_tokens: 1,
-            finish_reason: "stop".into(),
-            rounds: 0,
-            streamed_via_tap: true,
-        };
-        assert!(r.streamed_via_tap);
-        assert_eq!(r.rounds, 0);
-    }
-
-    #[test]
-    fn run_loop_signature_accepts_optional_sse_tap() {
-        // S20: `run_loop` must accept an optional sse_tap_tx parameter for
-        // token forwarding. We can't run the full loop in a unit test
-        // (requires AppState/runner), but we can confirm the type at
-        // function-pointer level — the assignment fails to compile if the
-        // signature drifts away from the SDD-mandated shape.
-        type TapSender = tokio::sync::mpsc::UnboundedSender<String>;
-        // If the parameter type changes from Option<TapSender>, this fails:
-        let _accepts: Option<TapSender> = None;
-        let _accepts2: Option<TapSender> = {
-            let (tx, _rx) = tokio::sync::mpsc::unbounded_channel::<String>();
-            Some(tx)
-        };
-    }
-
-    // ── Constrained-decoding loop invariants ──────────────────────────────────
-    //
-    // S23 (convergence boundary) and S24 (synthesis fallback) tests removed
-    // alongside the legacy native path. Their failure modes are prevented
-    // structurally by the unified forced-JSON path: the schema's
-    // `allow_final` gating + grammar mask makes "I don't have access" prose,
-    // empty content, and tool_call mimicry impossible to emit.
-    // SDD: `.specs/veronex/mcp-constrained-decoding-unification.md`.
-
-    #[test]
-    fn tap_mode_xor_invariant_holds_per_openai_spec() {
-        // OpenAI spec (and live observation): within a single round, the
-        // first non-empty delta is EITHER tool_calls XOR content. Mixed
-        // deltas in the same round are bug territory (vLLM #36435/#40816).
-        // SDD §3.2 / §3.3 codify this as the tap's decision rule.
-        // This test documents the expected first-delta classifications.
-        struct FirstDelta { has_content: bool, has_tool_calls: bool }
-        fn classify(d: FirstDelta) -> &'static str {
-            match (d.has_content, d.has_tool_calls) {
-                (false, false) => "heartbeat",     // continue waiting
-                (true,  false) => "passthrough",   // tap forwards
-                (false, true ) => "intercept",     // tap silent, bridge executes
-                (true,  true ) => "mixed_warn",    // §3.3 — passthrough wins, log warn
-            }
-        }
-        assert_eq!(classify(FirstDelta { has_content: false, has_tool_calls: false }), "heartbeat");
-        assert_eq!(classify(FirstDelta { has_content: true,  has_tool_calls: false }), "passthrough");
-        assert_eq!(classify(FirstDelta { has_content: false, has_tool_calls: true  }), "intercept");
-        assert_eq!(classify(FirstDelta { has_content: true,  has_tool_calls: true  }), "mixed_warn");
-    }
 }

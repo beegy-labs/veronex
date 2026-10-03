@@ -157,8 +157,25 @@ export function NavSettingsDialog({ open, onClose, resetToLocaleDefault }: Props
             </div>
             <p className="vds-text-xs vds-text-dim vds-mb-3 vds-pl-6">{t('common.labFeaturesDesc')}</p>
 
-            {/* Gemini function calling (only truly global flag — Ollama-scoped features moved to /providers → Ollama tab → Lab) */}
+            {/* Gemini function calling (only truly global flag — llama-server-scoped features moved to /providers → llama-server tab → Lab) */}
             <div className="vds-pl-6 vds-space-y-3">
+              <div className="vds-flex vds-items-center vds-justify-between vds-gap-2">
+                <div className="vds-flex-1 vds-min-w-0">
+                  <p className="vds-text-xs vds-font-500">App Builder</p>
+                  <p className="vds-text-2xs vds-text-dim vds-leading-snug vds-mt-0.5">Remote CLI workspaces and previews</p>
+                </div>
+                <Switch
+                  checked={labSettings?.builder_enabled ?? false}
+                  disabled={labLoading || labSettings === null}
+                  aria-label="App Builder"
+                  onCheckedChange={(checked) => {
+                    setLabLoading(true)
+                    api.patchLabSettings({ builder_enabled: checked })
+                      .then(refetchLabSettings)
+                      .finally(() => setLabLoading(false))
+                  }}
+                />
+              </div>
               <div className="vds-flex vds-items-center vds-justify-between vds-gap-2">
                 <div className="vds-flex-1 vds-min-w-0">
                   <p className="vds-text-xs vds-font-500">{t('common.labGeminiFunctionCalling')}</p>

@@ -53,7 +53,7 @@ Main dashboard — single-screen system health view. Aggregates KPIs, infrastruc
   - Mini sparkline: hourly avg latency (24h AreaChart)
 
 ### Section 5: Provider Status + API Keys (2 cards)
-- **Provider Status**: Ollama + Gemini labels (i18n: `overview.localProviders` = "Ollama", `overview.apiProviders` = "Gemini"), gated by `gemini_function_calling` lab flag
+- **Provider Status**: llama-server + Gemini labels (i18n: `overview.localProviders` = "llama-server", `overview.apiProviders` = "Gemini"), gated by `gemini_function_calling` lab flag
   - `ProviderRow` component: online/degraded/offline dot counts
 - **API Keys**: active_keys count + total_keys subtitle
 
@@ -63,7 +63,7 @@ Main dashboard — single-screen system health view. Aggregates KPIs, infrastruc
 
 ### Section 7: Top Models (horizontal BarChart)
 - Top 8 models by request count (24h)
-- Color-coded: Ollama = primary, Gemini = info
+- Color-coded: llama-server = primary, Gemini = info
 - Gemini models filtered out when lab flag disabled
 
 ### Section 8: Token Summary + Recent Jobs
@@ -75,7 +75,7 @@ Main dashboard — single-screen system health view. Aggregates KPIs, infrastruc
 - **Lab gating**: Gemini providers/models hidden when `gemini_function_calling` disabled via `useLabSettings()`
 - **Skeleton loading**: `StatSkeleton` component during stats fetch
 - **Error state**: Full-page error card when `dashboardStatsQuery` fails
-- **Constants**: `PROVIDER_OLLAMA`, `PROVIDER_GEMINI`, `STATUS_STYLES` from `lib/constants.ts`
+- **Constants**: `PROVIDER_LLAMA_SERVER`, `PROVIDER_GEMINI`, `STATUS_STYLES` from `lib/constants.ts`
 - **Chart theme**: All chart styling from `lib/chart-theme.ts` (TOOLTIP_STYLE, AXIS_TICK, etc.)
 - **Timezone**: `useTimezone()` for hour labels via `fmtHourLabel()`
 

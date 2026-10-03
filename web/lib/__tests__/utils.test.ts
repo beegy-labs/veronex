@@ -1,32 +1,32 @@
 import { describe, it, expect } from 'vitest'
-import { getOllamaProviders, getGeminiProviders, countByStatus, calcPercentage, successRateCls } from '../utils'
+import { getLlamaServerProviders, getGeminiProviders, countByStatus, calcPercentage, successRateCls } from '../utils'
 import type { Provider } from '../types'
 
 // Minimal Provider stub — only fields used by the filter functions
-function makeProvider(type: 'ollama' | 'gemini'): Provider {
+function makeProvider(type: 'llama_server' | 'gemini'): Provider {
   return { provider_type: type } as Provider
 }
 
-describe('getOllamaProviders', () => {
-  it('returns only ollama providers', () => {
-    const providers = [makeProvider('ollama'), makeProvider('gemini'), makeProvider('ollama')]
-    const filtered = getOllamaProviders(providers)
+describe('getLlamaServerProviders', () => {
+  it('returns only llama_server providers', () => {
+    const providers = [makeProvider('llama_server'), makeProvider('gemini'), makeProvider('llama_server')]
+    const filtered = getLlamaServerProviders(providers)
     expect(filtered).toHaveLength(2)
-    expect(filtered.every(p => p.provider_type === 'ollama')).toBe(true)
+    expect(filtered.every(p => p.provider_type === 'llama_server')).toBe(true)
   })
 
   it('returns empty array when none match', () => {
-    expect(getOllamaProviders([makeProvider('gemini')])).toEqual([])
+    expect(getLlamaServerProviders([makeProvider('gemini')])).toEqual([])
   })
 
   it('returns empty array for undefined input', () => {
-    expect(getOllamaProviders(undefined)).toEqual([])
+    expect(getLlamaServerProviders(undefined)).toEqual([])
   })
 })
 
 describe('getGeminiProviders', () => {
   it('returns only gemini providers', () => {
-    const providers = [makeProvider('ollama'), makeProvider('gemini')]
+    const providers = [makeProvider('llama_server'), makeProvider('gemini')]
     expect(getGeminiProviders(providers)).toHaveLength(1)
     expect(getGeminiProviders(providers)[0].provider_type).toBe('gemini')
   })

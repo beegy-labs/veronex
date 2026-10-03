@@ -2,6 +2,7 @@ use std::convert::Infallible;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
+use tracing::instrument;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -14,7 +15,7 @@ use crate::application::ports::inbound::inference_use_case::SubmitJobRequest;
 use crate::domain::enums::{ApiFormat, ProviderType};
 use crate::domain::value_objects::{JobId, pub_id_encode};
 
-use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_OLLAMA, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
+use super::constants::{GEMINI_TIER_FREE, PROVIDER_GEMINI, PROVIDER_LLAMA_SERVER, SSE_KEEP_ALIVE, SSE_MAX_CONNECTIONS, SSE_TIMEOUT};
 use super::middleware::infer_auth::InferCaller;
 use super::error::AppError;
 use super::openai_sse_types::CompletionChunk;
@@ -40,6 +41,19 @@ pub(super) fn sanitize_sse_error(e: &dyn std::fmt::Display) -> String {
     };
     // Escape CRLF to prevent SSE frame injection
     safe.replace('\r', "\\r").replace('\n', "\\n")
+}
+
+/// Shared 500 JSON response for admin/config-style handlers.
+pub(super) fn internal_json_error(
+    kind: &'static str,
+    error: &dyn std::fmt::Display,
+) -> Response {
+    tracing::error!(kind, error = %error, "http handler error");
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        Json(serde_json::json!({ "error": kind, "message": error.to_string() })),
+    )
+        .into_response()
 }
 
 /// RAII guard that decrements the SSE connection counter on drop.
@@ -150,7 +164,7 @@ pub struct SubmitRequest {
 }
 
 fn default_provider_type() -> String {
-    PROVIDER_OLLAMA.to_string()
+    PROVIDER_LLAMA_SERVER.to_string()
 }
 
 #[derive(Serialize, Deserialize)]
@@ -167,6 +181,7 @@ pub struct StatusResponse {
 // ── Handlers ───────────────────────────────────────────────────────
 
 /// POST /v1/inference - Submit a new inference request.
+#[instrument(skip_all)]
 pub async fn submit_inference(
     State(state): State<AppState>,
     axum::extract::Extension(caller): axum::extract::Extension<InferCaller>,
@@ -182,7 +197,7 @@ pub async fn submit_inference(
     let (provider_type, gemini_tier) = match req.provider_type.as_str() {
         "gemini-free" => (ProviderType::Gemini, Some(GEMINI_TIER_FREE.to_string())),
         PROVIDER_GEMINI => (ProviderType::Gemini, None),
-        _ => (ProviderType::Ollama, None),
+        _ => (ProviderType::LlamaServer, None),
     };
 
     let job_id = state
@@ -212,6 +227,7 @@ pub async fn submit_inference(
 }
 
 /// GET /v1/inference/:job_id/stream - SSE token streaming.
+#[instrument(skip_all)]
 pub async fn stream_inference(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -242,6 +258,7 @@ pub async fn stream_inference(
 }
 
 /// GET /v1/inference/:job_id/status - Get job status.
+#[instrument(skip_all)]
 pub async fn get_status(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -261,6 +278,7 @@ pub async fn get_status(
 ///
 /// Streams a job's tokens in the same OpenAI chunk format as `/v1/chat/completions`.
 /// Completed jobs are replayed from the DB; in-progress jobs stream live tokens.
+#[instrument(skip_all)]
 pub async fn stream_job_openai(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -303,6 +321,7 @@ pub async fn stream_job_openai(
 }
 
 /// DELETE /v1/inference/:job_id - Cancel a job.
+#[instrument(skip_all)]
 pub async fn cancel_inference(
     Path(jid): Path<JobId>,
     State(state): State<AppState>,
@@ -329,7 +348,7 @@ mod tests {
         let body = serde_json::json!({
             "prompt": "Hello world",
             "model": "llama3.2",
-            "provider_type": "ollama"
+            "provider_type": "llama_server"
         });
 
         let request = Request::builder()

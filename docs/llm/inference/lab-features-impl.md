@@ -140,10 +140,10 @@ export interface LabSettings {
 
 Settings → Lab Features:
 - `context_compression_enabled` toggle
-- `compression_model` dropdown (`CompressionModelSelector` — all Ollama models)
+- `compression_model` dropdown (`CompressionModelSelector` — all llama-server models)
 - `handoff_enabled` toggle
 - `handoff_threshold` number input (0–1)
 - `multiturn_min_params`, `multiturn_min_ctx`, `multiturn_allowed_models` (comma-separated)
-- `vision_model` dropdown (`VisionModelSelector` — Ollama models with `is_vision=true`)
+- `vision_model` dropdown (`VisionModelSelector` — llama-server models with `is_vision=true`)
 
 Uses `useOptimistic` + `startTransition` for compression/handoff switches.

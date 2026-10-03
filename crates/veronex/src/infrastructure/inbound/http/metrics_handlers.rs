@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -15,10 +16,10 @@ use super::state::AppState;
 // veronex-agent polls this endpoint each scrape cycle to discover scrape
 // targets.  Two independent target types are returned:
 //
-//   type=server  — node-exporter endpoints (hardware: CPU, mem, GPU)
-//   type=ollama  — Ollama endpoints (loaded models, VRAM per model)
+//   type=server        — node-exporter endpoints (hardware: CPU, mem, GPU)
+//   type=llama_server  — llama-server endpoints (loaded models, VRAM per model)
 //
-// When an Ollama provider is linked to a GpuServer (server_id FK), both
+// When a llama_server provider is linked to a GpuServer (server_id FK), both
 // targets carry matching server_id labels so analytics can correlate them.
 
 #[derive(Serialize)]
@@ -29,9 +30,10 @@ struct SdTarget {
 
 /// `GET /v1/metrics/targets`
 ///
-/// Returns scrape targets for veronex-agent.  Server and Ollama targets are
+/// Returns scrape targets for veronex-agent.  Server and llama-server targets are
 /// returned independently — each is collected on its own, linked via
 /// `server_id` when associated.
+#[instrument(skip_all)]
 pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoResponse {
     let mut targets: Vec<SdTarget> = Vec::new();
 
@@ -60,7 +62,7 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
         targets.push(SdTarget { targets: vec![ne_url.to_string()], labels });
     }
 
-    // ── Ollama targets ──────────────────────────────────────────────────
+    // ── llama-server targets ────────────────────────────────────────────
     let providers = match state.provider_registry.list_all().await {
         Ok(p) => p,
         Err(e) => {
@@ -74,11 +76,11 @@ pub async fn list_metrics_targets(State(state): State<AppState>) -> impl IntoRes
     };
 
     for p in providers {
-        if p.provider_type != ProviderType::Ollama {
+        if p.provider_type != ProviderType::LlamaServer {
             continue;
         }
         let mut labels = HashMap::new();
-        labels.insert("type".into(), "ollama".into());
+        labels.insert("type".into(), "llama_server".into());
         labels.insert("provider_id".into(), p.id.to_string());
         labels.insert("provider_name".into(), p.name.clone());
         labels.insert("total_vram_mb".into(), p.total_vram_mb.to_string());

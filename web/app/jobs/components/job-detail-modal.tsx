@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import type { JobDetail, RetryParams, ChatMessage } from '@/lib/types'
+import type { RetryParams, ChatMessage } from '@/lib/types'
 import { api } from '@/lib/api'
 import { Button } from '@/components/ui/button'
 import { RotateCcw, X, Loader2, Info, Wrench, ChevronDown, ChevronRight } from 'lucide-react'

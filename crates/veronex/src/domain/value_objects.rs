@@ -181,11 +181,11 @@ pub struct StreamToken {
     /// Only populated on the final token when the provider reports real counts.
     pub completion_tokens: Option<u32>,
     /// Tokens served from cache (Gemini `cachedContentTokenCount`).
-    /// Only populated on the final token; `None` for Ollama.
+    /// Only populated on the final token; `None` for llama_server.
     pub cached_tokens: Option<u32>,
-    /// Tool calls returned by the model (Ollama `/api/chat` format).
+    /// Tool calls returned by the model (chat-completion `tool_calls` format).
     /// When Some, this token carries tool call data instead of text content.
-    /// Handlers must convert to the appropriate wire format (OpenAI vs Ollama NDJSON).
+    /// Handlers must convert to the appropriate wire format (OpenAI vs Gemini).
     pub tool_calls: Option<serde_json::Value>,
     /// Finish reason from the provider ("stop", "length", "tool_calls").
     /// Only set on the final token. `None` for intermediate tokens.
@@ -356,9 +356,9 @@ pub enum ModelInstanceState {
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvictionReason {
-    /// ollama unloaded the model to make room for another.
+    /// upstream unloaded the model to make room for another.
     VramPressure,
-    /// ollama TTL expired (low-power keep-alive policy).
+    /// upstream TTL expired (low-power keep-alive policy).
     KeepAliveExpired,
     /// Explicit `evict()` call (operator action / model unenrollment).
     Operator,
@@ -395,6 +395,7 @@ impl ModelInstanceState {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

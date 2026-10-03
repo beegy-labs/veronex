@@ -66,7 +66,7 @@ pub struct JobStatusEvent {
     pub id: String,
     pub status: String,        // "pending" | "running" | "completed" | "failed" | "cancelled"
     pub model_name: String,
-    pub provider_type: String, // provider type (e.g. "ollama" | "gemini")
+    pub provider_type: String, // provider type (e.g. "llama_server" | "gemini")
     pub latency_ms: Option<i32>,
 }
 ```
@@ -108,7 +108,7 @@ pub struct JobSummary {
     pub account_name: Option<String>, // LEFT JOIN accounts (test run jobs)
     pub request_path: Option<String>, // e.g. "/v1/chat/completions"
     pub has_tool_calls: bool,         // true when model emitted tool/function calls (DB column)
-    pub estimated_cost_usd: Option<f64>, // NULL = no pricing data; 0.0 = Ollama; >0 = Gemini
+    pub estimated_cost_usd: Option<f64>, // NULL = no pricing data; 0.0 = llama-server; >0 = Gemini
     pub provider_name: Option<String>,   // LEFT JOIN llm_providers (server name)
 }
 ```
@@ -137,7 +137,7 @@ pub struct JobDetail {
 >
 > Cancel / stream-error paths preserve whatever was accumulated: `runner::run_job` calls `persist_partial_conversation` before returning `Ok(None)`, so a cancelled job that emitted only `tool_calls` (or only partial text) still yields a `tool_calls_json` (or `result_text`) on this endpoint. MCP-loop rounds follow the same contract — runner persists each round individually, with the turn tagged by that round's `job_id`. The dashboard detail GET resolves the round-specific turn: intermediate tool-call rounds expose `tool_calls_json` (and `result_text=None`), the final-text round exposes `result_text` (and `tool_calls_json=None`). Pre-Tier-B (PR #100) these paths silently dropped state and the UI showed "(no result stored)".
 
-> **`estimated_cost_usd`**: Computed via a LATERAL JOIN on `model_pricing`. Ollama always returns `0.0` (self-hosted = no cost). Gemini returns the actual cost per 1M tokens x token counts. `NULL` means no pricing row found (unknown provider or no seed data). See `docs/llm/inference/model-pricing.md`.
+> **`estimated_cost_usd`**: Computed via a LATERAL JOIN on `model_pricing`. llama-server always returns `0.0` (self-hosted = no cost). Gemini returns the actual cost per 1M tokens x token counts. `NULL` means no pricing row found (unknown provider or no seed data). See `docs/llm/inference/model-pricing.md`.
 
 ---
 

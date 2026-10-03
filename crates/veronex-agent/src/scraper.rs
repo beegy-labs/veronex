@@ -1,5 +1,5 @@
-/// Scrapes node-exporter and Ollama API independently,
-/// selecting relevant metrics and forwarding raw values to OTLP.
+/// Scrapes node-exporter independently, selecting relevant metrics
+/// and forwarding raw values to OTLP.
 ///
 /// Agent policy:
 ///   - SELECT which metrics to forward (whitelist)
@@ -10,21 +10,13 @@
 /// any OTEL Collector configuration changes.
 use std::time::Duration;
 
-use serde::Deserialize;
-
 const SCRAPE_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Max response body size from node-exporter (16 MiB).
 const MAX_NODE_EXPORTER_BODY: usize = 16 * 1024 * 1024;
 
-/// Max response body size from Ollama /api/ps (1 MiB).
-const MAX_OLLAMA_BODY: usize = 1024 * 1024;
-
 /// Max labels per metric line (DOS protection).
 const MAX_LABELS: usize = 32;
-
-/// Max models from Ollama /api/ps (DOS protection).
-const MAX_OLLAMA_MODELS: usize = 256;
 
 /// Metric name prefixes to forward from node-exporter.
 /// Everything else is dropped at the agent level.
@@ -410,102 +402,6 @@ pub async fn set_mcp_heartbeat(pool: &fred::clients::Pool, server_id: &str, ttl_
     if let Err(e) = result {
         tracing::warn!(server_id, error = %e, "MCP heartbeat set failed");
     }
-}
-
-// ── Ollama ───────────────────────────────────────────────────────────────────
-
-#[derive(Deserialize)]
-struct OllamaPsResponse {
-    models: Option<Vec<OllamaPsModel>>,
-}
-
-#[derive(Deserialize)]
-pub struct OllamaPsModel {
-    pub name: Option<String>,
-    pub size_vram: Option<u64>,
-    pub size: Option<u64>,
-}
-
-/// Scrape Ollama /api/ps — returns raw model list (capped at MAX_OLLAMA_MODELS).
-/// Returns empty vec on any error.
-pub async fn scrape_ollama_raw(client: &reqwest::Client, base_url: &str) -> Vec<OllamaPsModel> {
-    let base = if base_url.starts_with("http://") || base_url.starts_with("https://") {
-        base_url.to_string()
-    } else {
-        format!("http://{}", base_url)
-    };
-    let url = format!("{}/api/ps", base.trim_end_matches('/'));
-    let resp: OllamaPsResponse = match client.get(&url).timeout(SCRAPE_TIMEOUT).send().await {
-        Ok(r) => {
-            let content_len = r.content_length().unwrap_or(0) as usize;
-            if content_len > MAX_OLLAMA_BODY {
-                tracing::warn!(url, bytes = content_len, "ollama body too large, skipping");
-                return vec![];
-            }
-            match r.bytes().await {
-                Ok(bytes) if bytes.len() > MAX_OLLAMA_BODY => {
-                    tracing::warn!(url, bytes = bytes.len(), "ollama body exceeded limit");
-                    return vec![];
-                }
-                Ok(bytes) => match serde_json::from_slice(&bytes) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::debug!("ollama parse failed: {e}");
-                        return vec![];
-                    }
-                },
-                Err(e) => {
-                    tracing::debug!("ollama read failed: {e}");
-                    return vec![];
-                }
-            }
-        }
-        Err(e) => {
-            tracing::debug!("ollama scrape failed: {e}");
-            return vec![];
-        }
-    };
-    let mut models = resp.models.unwrap_or_default();
-    if models.len() > MAX_OLLAMA_MODELS {
-        tracing::warn!(count = models.len(), "ollama returned too many models, truncating");
-        models.truncate(MAX_OLLAMA_MODELS);
-    }
-    models
-}
-
-/// Convert raw OllamaPsModel list to OTLP gauges.
-pub fn ollama_gauges_from_raw(models: &[OllamaPsModel]) -> Vec<Gauge> {
-    let mut gauges = Vec::with_capacity(models.len() * 2 + 1);
-
-    gauges.push(Gauge {
-        name: "ollama_loaded_models".into(),
-        value: models.len() as f64,
-        labels: vec![],
-    });
-
-    for model in models {
-        let model_label = vec![(
-            "model".into(),
-            model.name.as_deref().unwrap_or("unknown").to_string(),
-        )];
-
-        if let Some(vram) = model.size_vram {
-            gauges.push(Gauge {
-                name: "ollama_model_size_vram_bytes".into(),
-                value: vram as f64,
-                labels: model_label.clone(),
-            });
-        }
-        if let Some(size) = model.size {
-            gauges.push(Gauge {
-                name: "ollama_model_size_bytes".into(),
-                value: size as f64,
-                labels: model_label,
-            });
-        }
-    }
-
-    gauges
 }
 
 #[cfg(test)]

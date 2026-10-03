@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use tracing::Instrument;
+use tracing::{instrument, Instrument};
 use std::convert::Infallible;
 
 use axum::extract::{Extension, Path, Query, State};
@@ -20,8 +20,8 @@ use crate::infrastructure::outbound::capacity::thermal::ThrottleLevel;
 use crate::infrastructure::outbound::session_grouping::group_sessions_before;
 
 use super::audit_helpers::emit_audit;
-use super::constants::{PROVIDER_GEMINI, PROVIDER_OLLAMA};
-use super::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
+use super::constants::{PROVIDER_GEMINI, PROVIDER_LLAMA_SERVER};
+use crate::infrastructure::outbound::persistence::dashboard_queries::{self, DashboardStats, JobDetail, JobsResponse};
 use super::error::AppError;
 use super::handlers::{SseStream, try_acquire_sse, ListPageParams};
 use super::state::AppState;
@@ -54,6 +54,7 @@ fn default_limit() -> i64 {
 // ── Handlers ───────────────────────────────────────────────────────
 
 /// GET /v1/dashboard/stats — Overview statistics.
+#[instrument(skip_all)]
 pub async fn get_stats(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardStats>, AppError> {
@@ -64,6 +65,7 @@ pub async fn get_stats(
 ///
 /// Super admins can view any job. Regular users can only view jobs
 /// belonging to their own account (matched via `account_id` on the job).
+#[instrument(skip_all)]
 pub async fn get_job_detail(
     Extension(claims): Extension<Claims>,
     State(state): State<AppState>,
@@ -109,6 +111,7 @@ pub async fn get_job_detail(
 }
 
 /// GET /v1/dashboard/jobs — Paginated job list.
+#[instrument(skip_all)]
 pub async fn list_jobs(
     State(state): State<AppState>,
     Query(params): Query<JobsQuery>,
@@ -143,6 +146,7 @@ pub async fn list_jobs(
 }
 
 /// DELETE /v1/dashboard/jobs/{id} — Admin cancel a job (JWT-protected).
+#[instrument(skip_all)]
 pub async fn cancel_job(
     RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
@@ -159,6 +163,7 @@ pub async fn cancel_job(
 
 /// GET /v1/dashboard/performance — Latency percentiles + hourly throughput.
 /// ClickHouse primary, PostgreSQL fallback.
+#[instrument(skip_all)]
 pub async fn get_performance(
     State(state): State<AppState>,
     Query(params): Query<UsageQuery>,
@@ -340,6 +345,7 @@ async fn fetch_queue_depth(state: &AppState) -> QueueDepth {
 
 #[derive(Serialize)]
 pub struct LabSettingsResponse {
+    pub builder_enabled: bool,
     pub gemini_function_calling: bool,
     pub max_images_per_request: i32,
     pub max_image_b64_bytes: i32,
@@ -370,6 +376,7 @@ pub struct DashboardOverview {
 ///
 /// Runs stats, performance, queue depth, and lab settings queries in parallel.
 /// Capacity data is served by the dedicated `/capacity` endpoint (paginated).
+#[instrument(skip_all)]
 pub async fn get_dashboard_overview(
     State(state): State<AppState>,
 ) -> Result<Json<DashboardOverview>, AppError> {
@@ -412,6 +419,8 @@ pub async fn get_dashboard_overview(
 }
 
 // ── GET /v1/dashboard/capacity ──────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn get_capacity(
     State(state): State<AppState>,
@@ -462,6 +471,7 @@ pub struct ClusterModelInfo {
 /// Returns one row per unique model name with summed active/limit counts.
 ///
 /// Reads entirely from the in-memory VramPool (no DB scan) — safe at 10K providers.
+#[instrument(skip_all)]
 pub async fn get_capacity_cluster(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<ClusterModelInfo>>, AppError> {
@@ -487,6 +497,8 @@ pub async fn get_capacity_cluster(
 
 // ── GET /v1/dashboard/capacity/settings ────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn get_capacity_settings(
     State(state): State<AppState>,
 ) -> impl axum::response::IntoResponse {
@@ -499,6 +511,8 @@ pub async fn get_capacity_settings(
 }
 
 // ── PATCH /v1/dashboard/capacity/settings ──────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn patch_capacity_settings(
     RequireSettingsManage(claims): RequireSettingsManage,
@@ -534,9 +548,20 @@ pub async fn patch_capacity_settings(
 // ── Helper: fetch models from all registered providers ────────────
 
 async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<String>> {
-    // Ollama list is independent of lab settings + Gemini fetch — race them
-    // concurrently to halve the wall-clock for this dashboard endpoint.
-    let ollama_fut = state.ollama_model_repo.list_all();
+    use crate::application::ports::outbound::modelfile_registry::ListFilter;
+
+    let llama_fut = async {
+        match state.modelfile_registry.as_ref() {
+            Some(repo) => repo
+                .list(&ListFilter::default())
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| m.model_id)
+                .collect::<Vec<_>>(),
+            None => Vec::new(),
+        }
+    };
     let gemini_fut = async {
         let lab = state.lab_settings_repo.get().await.unwrap_or_default();
         if !lab.gemini_function_calling {
@@ -558,11 +583,11 @@ async fn fetch_all_provider_models(state: &AppState) -> HashMap<String, Vec<Stri
         gemini_models
     };
 
-    let (ollama_result, gemini_models) = tokio::join!(ollama_fut, gemini_fut);
+    let (llama_models, gemini_models) = tokio::join!(llama_fut, gemini_fut);
 
     let mut result: HashMap<String, Vec<String>> = HashMap::new();
-    if let Ok(models) = ollama_result && !models.is_empty() {
-        result.insert(PROVIDER_OLLAMA.to_string(), models);
+    if !llama_models.is_empty() {
+        result.insert(PROVIDER_LLAMA_SERVER.to_string(), llama_models);
     }
     if !gemini_models.is_empty() {
         result.insert(PROVIDER_GEMINI.to_string(), gemini_models);
@@ -582,11 +607,15 @@ pub struct QueueDepth {
     pub total: i64,
 }
 
+#[instrument(skip_all)]
+
 pub async fn get_queue_depth(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     Json(fetch_queue_depth(&state).await).into_response()
 }
 
 // ── GET /v1/dashboard/jobs/stream — Real-time job status SSE ───────
+
+#[instrument(skip_all)]
 
 pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Response {
     // Enforce global SSE connection limit — prevents resource exhaustion.
@@ -659,6 +688,7 @@ pub async fn job_events_sse(State(state): State<AppState>) -> axum::response::Re
 
 fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings_repository::LabSettings) -> LabSettingsResponse {
     LabSettingsResponse {
+        builder_enabled: s.builder_enabled,
         gemini_function_calling: s.gemini_function_calling,
         max_images_per_request: s.max_images_per_request,
         max_image_b64_bytes: s.max_image_b64_bytes,
@@ -679,6 +709,7 @@ fn lab_settings_to_response(s: crate::application::ports::outbound::lab_settings
 }
 
 /// `GET /v1/dashboard/lab` — return current lab feature flags.
+#[instrument(skip_all)]
 pub async fn get_lab_settings(State(state): State<AppState>) -> impl axum::response::IntoResponse {
     match state.lab_settings_repo.get().await {
         Ok(s) => Json(lab_settings_to_response(s)).into_response(),
@@ -704,6 +735,7 @@ where
 
 #[derive(serde::Deserialize)]
 pub struct PatchLabSettingsBody {
+    pub builder_enabled: Option<bool>,
     pub gemini_function_calling: Option<bool>,
     pub max_images_per_request: Option<i32>,
     pub max_image_b64_bytes: Option<i32>,
@@ -724,6 +756,7 @@ pub struct PatchLabSettingsBody {
 }
 
 /// `PATCH /v1/dashboard/lab` — update lab feature flags.
+#[instrument(skip_all)]
 pub async fn patch_lab_settings(
     RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
@@ -731,6 +764,7 @@ pub async fn patch_lab_settings(
 ) -> impl axum::response::IntoResponse {
     use crate::application::ports::outbound::lab_settings_repository::LabSettingsUpdate;
     let patch = LabSettingsUpdate {
+        builder_enabled: body.builder_enabled,
         gemini_function_calling: body.gemini_function_calling,
         max_images_per_request: body.max_images_per_request,
         max_image_b64_bytes: body.max_image_b64_bytes,
@@ -777,6 +811,8 @@ pub struct TriggerGroupingRequest {
     pub before_date: Option<NaiveDate>,
 }
 
+#[instrument(skip_all)]
+
 pub async fn trigger_session_grouping(
     RequireSettingsManage(claims): RequireSettingsManage,
     State(state): State<AppState>,
@@ -817,4 +853,3 @@ pub async fn trigger_session_grouping(
     )
         .into_response()
 }
-

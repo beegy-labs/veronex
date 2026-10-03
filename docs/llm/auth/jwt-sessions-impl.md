@@ -8,7 +8,7 @@
 
 ```
 Auth: Authorization: Bearer <access_token> (any role)
-Request:  { "model": "llama3.2", "messages": [...], "provider_type": "ollama" }
+Request:  { "model": "llama3.2", "messages": [...], "provider_type": "llama_server" }
 Response: SSE stream (OpenAI chunk format)
 ```
 
@@ -84,7 +84,7 @@ pub struct AuditEvent {
   pub account_id: Uuid,
   pub account_name: String,
   pub action: String,        // create|update|delete|regenerate|login|logout|reset_password|sync|trigger
-  pub resource_type: String, // api_key|ollama_provider|gemini_provider|account|gpu_server|session|lab_settings|capacity_settings
+  pub resource_type: String, // api_key|llm_provider|gemini_provider|account|gpu_server|session|lab_settings|capacity_settings
   pub resource_id: String,
   pub resource_name: String,
   pub ip_address: Option<String>,
@@ -104,7 +104,7 @@ Implemented by `HttpAuditAdapter` -- forwards to veronex-analytics. Fail-open: H
 | `account_handlers` | create, update, delete, reset_password | `account` |
 | `account_handlers` (sessions) | delete | `session` |
 | `key_handlers` | create, delete, update | `api_key` |
-| `provider_handlers` | create, delete, update | `ollama_provider` / `gemini_provider` |
+| `provider_handlers` | create, delete, update | `llm_provider` / `gemini_provider` |
 | `gpu_server_handlers` | create, update, delete | `gpu_server` |
 | `gemini_model_handlers` | update, sync | `gemini_provider` |
 | `gemini_policy_handlers` | update | `gemini_provider` |

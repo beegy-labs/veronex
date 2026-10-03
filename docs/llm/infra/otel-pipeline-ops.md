@@ -96,12 +96,12 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None`.
   { "targets": ["192.168.1.10:9100"],
     "labels": { "type": "server", "server_id": "uuid", "server_name": "gpu-node-1" } },
   { "targets": ["192.168.1.10:11434"],
-    "labels": { "type": "ollama", "provider_id": "uuid", "provider_name": "gpu-1", "server_id": "uuid" } }
+    "labels": { "type": "llama-server", "provider_id": "uuid", "provider_name": "gpu-1", "server_id": "uuid" } }
 ]
 ```
 
 - `type=server` — one per `gpu_servers` row with `node_exporter_url`, shard key = `server_id`
-- `type=ollama` — one per active Ollama provider, shard key = `provider_id`, includes `server_id` when linked
+- `type=llama-server` — one per active llama-server provider, shard key = `provider_id`, includes `server_id` when linked
 
 ---
 
@@ -116,14 +116,14 @@ If `ANALYTICS_URL` not set: `observability = None`, `audit_port = None`.
 
 ---
 
-## GPU Server Side (docker-compose.ollama.yml)
+## GPU Server Side (docker-compose.llama-server.yml)
 
-Run on each Ollama GPU server separately:
+Run on each llama-server GPU server separately:
 
 ```yaml
 services:
-  ollama:
-    image: ollama/ollama
+  llama-server:
+    image: llama-server/llama-server
     ports: ["11434:11434"]
   node-exporter:
     image: prom/node-exporter:latest

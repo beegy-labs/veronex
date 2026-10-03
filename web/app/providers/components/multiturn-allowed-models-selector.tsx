@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { useTranslation } from '@/i18n'
-import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
+import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama-server-models'
 
 interface Props {
   selected: string[]
@@ -26,7 +26,7 @@ export function MultiturnAllowedModelsSelector({
 }: Props) {
   const { t } = useTranslation()
   const [search, setSearch] = useState('')
-  const { models, isLoading } = useEnabledOllamaModels()
+  const { models, isLoading } = useEnabledLlamaServerModels()
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -52,7 +52,7 @@ export function MultiturnAllowedModelsSelector({
           <Search className="vds-absolute vds-left-2.5 vds-top-1/2 -translate-y-1/2 vds-h-3.5 vds-w-3.5 vds-text-dim vds-pointer-events-none" />
           <Input
             className="vds-h-8 vds-text-xs vds-pl-8"
-            placeholder={t('providers.ollama.ollamaSearchModels')}
+            placeholder={t('providers.llama_server.searchModels')}
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             disabled={disabled}
@@ -60,7 +60,7 @@ export function MultiturnAllowedModelsSelector({
         </div>
         <span className="vds-text-2xs vds-text-dim vds-whitespace-nowrap">
           {allSelected
-            ? t('providers.ollama.labMultiturnAllModels')
+            ? t('providers.llama_server.labMultiturnAllModels')
             : `${selected.length} / ${models.length}`}
         </span>
       </div>
@@ -71,7 +71,7 @@ export function MultiturnAllowedModelsSelector({
         )}
         {!isLoading && filtered.length === 0 && (
           <p className="vds-px-3 vds-py-3 vds-text-xs vds-text-dim vds-italic">
-            {search ? `${t('providers.ollama.noModelsMatch')} "${search}"` : t('providers.ollama.ollamaNoSync')}
+            {search ? `${t('providers.llama_server.noModelsMatch')} "${search}"` : t('providers.llama_server.noSync')}
           </p>
         )}
         {filtered.map((m) => {
@@ -98,7 +98,7 @@ export function MultiturnAllowedModelsSelector({
               )}
               {gateFail && (
                 <Badge variant="outline" className="vds-text-[10px] vds-px-1.5 vds-py-0 vds-border-warning/50 vds-text-warning">
-                  {t('providers.ollama.labMultiturnGateFail')}
+                  {t('providers.llama_server.labMultiturnGateFail')}
                 </Badge>
               )}
               <Switch

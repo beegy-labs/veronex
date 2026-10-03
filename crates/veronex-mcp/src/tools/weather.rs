@@ -72,7 +72,7 @@ impl RawEntry {
     }
     fn is_in_grace(&self) -> bool {
         let age = self.fetched_at.elapsed().as_secs();
-        age >= L2_TTL_SECS && age < L2_TTL_SECS + GRACE_SECS
+        (L2_TTL_SECS..L2_TTL_SECS + GRACE_SECS).contains(&age)
     }
 }
 
@@ -415,12 +415,12 @@ async fn get_raw(state: &WeatherState, cache_key: &str, lat: f64, lng: f64) -> R
         }
     }
 
-    if let Some(pool) = &state.valkey {
-        if let Some(raw) = valkey_get_raw(pool, cache_key).await {
-            let entry = Arc::new(raw);
-            state.l1.insert(cache_key.to_string(), entry.clone());
-            return Ok(entry);
-        }
+    if let Some(pool) = &state.valkey
+        && let Some(raw) = valkey_get_raw(pool, cache_key).await
+    {
+        let entry = Arc::new(raw);
+        state.l1.insert(cache_key.to_string(), entry.clone());
+        return Ok(entry);
     }
 
     let (tx, is_leader) = {
@@ -451,10 +451,10 @@ async fn get_raw(state: &WeatherState, cache_key: &str, lat: f64, lng: f64) -> R
 }
 
 async fn do_fetch(state: &WeatherState, cache_key: &str, lat: f64, lng: f64) -> Result<Arc<RawEntry>, String> {
-    if let Some(pool) = &state.valkey {
-        if !check_rate_limit(pool).await {
-            return Err("Weather API rate limit exceeded. Try again later.".into());
-        }
+    if let Some(pool) = &state.valkey
+        && !check_rate_limit(pool).await
+    {
+        return Err("Weather API rate limit exceeded. Try again later.".into());
     }
     let raw = fetch_raw(&state.http, lat, lng).await?;
     let entry = Arc::new(raw);
@@ -771,7 +771,7 @@ async fn handle_get_weather(state: &WeatherState, args: &Value) -> Result<Value,
         .unwrap_or(if day_offset == 0 { "now" } else { "full" });
 
     let loc = if let (Some(lat), Some(lng)) = (args["lat"].as_f64(), args["lng"].as_f64()) {
-        if lat < -90.0 || lat > 90.0 || lng < -180.0 || lng > 180.0 {
+        if !(-90.0..=90.0).contains(&lat) || !(-180.0..=180.0).contains(&lng) {
             return Err("lat must be -90..90 and lng must be -180..180".into());
         }
         let nearest = geo::nearest(lat, lng);

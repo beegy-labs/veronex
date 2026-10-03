@@ -30,3 +30,12 @@ export default function StatsCard({ title, value, subtitle, subtitleNode, icon, 
     </Card>
   )
 }
+
+export function StatsCardSkeleton() {
+  return (
+    <Card><CardContent className="vds-p-6">
+      <div className="vds-h-3 vds-w-24 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-4" />
+      <div className="vds-h-8 vds-w-16 vds-rounded vds-bg-muted vds-animate-pulse" />
+    </CardContent></Card>
+  )
+}

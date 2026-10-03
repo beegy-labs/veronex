@@ -1,3 +1,5 @@
+#![allow(clippy::too_many_arguments, clippy::expect_used, clippy::collapsible_if)]
+
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -14,7 +16,6 @@ use crate::infrastructure::outbound::gemini::adapter::GEMINI_BASE_URL;
 use crate::infrastructure::outbound::valkey_keys;
 
 use crate::domain::constants::{
-    OLLAMA_HEALTH_CHECK_TIMEOUT as OLLAMA_HEALTH_TIMEOUT,
     GEMINI_HEALTH_CHECK_TIMEOUT as GEMINI_HEALTH_TIMEOUT,
     SERVICE_PROBE_TIMEOUT,
     SERVICE_HEALTH_TTL_SECS,
@@ -26,28 +27,10 @@ use crate::domain::constants::{
 
 /// Check whether a single provider is reachable.
 ///
-/// - Ollama: `GET {url}/api/version` → 200
 /// - Gemini: lightweight models list with the stored API key → 200
+/// - LlamaServer: `GET {url}/health` → 200 (handled in the LlamaServer arm)
 pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) -> LlmProviderStatus {
     match provider.provider_type {
-        ProviderType::Ollama => {
-            let url = format!("{}/api/version", provider.url.trim_end_matches('/'));
-            match client.get(&url).timeout(OLLAMA_HEALTH_TIMEOUT).send().await {
-                Ok(r) if r.status().is_success() => LlmProviderStatus::Online,
-                Ok(r) => {
-                    tracing::warn!(
-                        provider_id = %provider.id,
-                        status = %r.status(),
-                        "Ollama health check returned non-2xx"
-                    );
-                    LlmProviderStatus::Offline
-                }
-                Err(e) => {
-                    tracing::warn!(provider_id = %provider.id, error = %e, "Ollama health check failed");
-                    LlmProviderStatus::Offline
-                }
-            }
-        }
         ProviderType::Gemini => {
             let Some(ref key) = provider.api_key_encrypted else {
                 tracing::warn!(provider_id = %provider.id, "Gemini provider has no API key");
@@ -69,6 +52,31 @@ pub async fn check_provider(client: &reqwest::Client, provider: &LlmProvider) ->
                 }
                 Err(e) => {
                     tracing::warn!(provider_id = %provider.id, error = %e, "Gemini health check failed");
+                    LlmProviderStatus::Offline
+                }
+            }
+        }
+        ProviderType::LlamaServer => {
+            // GET {url}/health → 2xx + status:"ok" ⇒ Online. Reuses the same
+            // 5s timeout as the adapter so behaviour is consistent.
+            use crate::infrastructure::outbound::llama_server::health::{get_health, HEALTH_TIMEOUT};
+            let _ = HEALTH_TIMEOUT; // import for symmetry; get_health uses it internally
+            match get_health(client, &provider.url).await {
+                Ok(s) if s.is_ok() => LlmProviderStatus::Online,
+                Ok(s) => {
+                    tracing::warn!(
+                        provider_id = %provider.id,
+                        status = %s.status,
+                        "llama-server /health returned non-ok status"
+                    );
+                    LlmProviderStatus::Offline
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        provider_id = %provider.id,
+                        error = %e,
+                        "llama-server health check failed"
+                    );
                     LlmProviderStatus::Offline
                 }
             }
@@ -192,7 +200,7 @@ async fn check_and_store_services(
         let start = std::time::Instant::now();
         let res = tokio::time::timeout(
             SERVICE_PROBE_TIMEOUT,
-            sqlx::query("SELECT 1").execute(pg_pool),
+            crate::infrastructure::outbound::persistence::health_queries::ping(pg_pool),
         ).await;
         let ms = start.elapsed().as_millis() as u32;
         let s = match res {
@@ -396,11 +404,11 @@ pub async fn run_health_checker_loop(
             }
         };
 
-        // Only auto-check Ollama providers. Gemini status is updated manually
-        // via POST /v1/gemini/sync-status to avoid unnecessary API quota usage.
+        // Only auto-check llama-server providers. Gemini status is updated
+        // manually via POST /v1/gemini/sync-status to avoid quota use.
         let active: Vec<_> = providers
             .into_iter()
-            .filter(|b| matches!(b.provider_type, ProviderType::Ollama))
+            .filter(|b| matches!(b.provider_type, ProviderType::LlamaServer))
             .collect();
 
         // ── Determine liveness ────────────────────────────────────────────────
@@ -692,13 +700,8 @@ pub async fn run_server_metrics_loop(
 
             // Persist gpu_vendor when detected and not already correct.
             if !detected_vendor.is_empty() {
-                if let Err(e) = sqlx::query(
-                    "UPDATE gpu_servers SET gpu_vendor = $1 WHERE id = $2 AND gpu_vendor != $1"
-                )
-                .bind(detected_vendor)
-                .bind(server.id)
-                .execute(&pg_pool)
-                .await
+                if let Err(e) = crate::infrastructure::outbound::persistence::health_queries::
+                    update_gpu_vendor_if_changed(&pg_pool, server.id, detected_vendor).await
                 {
                     tracing::warn!(
                         server_id = %server.id,

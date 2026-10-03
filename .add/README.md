@@ -7,6 +7,7 @@
 
 | Trigger | Workflow |
 |---------|----------|
+| **Any code-writing task once scope is approved** | [**`codex-delegate.md`**](codex-delegate.md) |
 | Code review, optimization, review of files | [`code-review.md`](code-review.md) |
 | Frontend-only review | [`frontend-review.md`](frontend-review.md) |
 | Backend-only review (Rust) | [`backend-review.md`](backend-review.md) |
@@ -35,7 +36,7 @@ All code — Rust and frontend — is written and reviewed against:
 
 | Axis | Target |
 |------|--------|
-| Providers (Ollama servers) | **10,000** |
+| Providers (llama-server nodes) | **10,000** |
 | MCP servers | **1,000+** |
 | Concurrent requests (TPS) | **1,000,000** |
 

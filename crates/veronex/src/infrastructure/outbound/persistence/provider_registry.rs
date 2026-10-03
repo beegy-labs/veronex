@@ -10,7 +10,7 @@ use crate::domain::enums::{LlmProviderStatus, ProviderType};
 use crate::domain::services::encryption::{decrypt_or_legacy, encrypt};
 
 /// Column list shared by all SELECT queries on llm_providers.
-const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, total_vram_mb, gpu_index, server_id, is_free_tier, num_parallel, status, registered_at";
+const PROVIDER_COLS: &str = "id, name, provider_type, url, api_key_encrypted, total_vram_mb, gpu_index, server_id, is_free_tier, num_parallel, status, registered_at, mode, node_id, idle_ttl_seconds_override";
 
 pub struct PostgresProviderRegistry {
     pool: PgPool,
@@ -55,6 +55,11 @@ fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result
     let num_parallel: i16 = row.try_get("num_parallel").context("num_parallel")?;
     let status_str: String = row.try_get("status").context("status")?;
     let registered_at: DateTime<Utc> = row.try_get("registered_at").context("registered_at")?;
+    let mode: String = row.try_get("mode").context("mode")?;
+    let node_id: Option<Uuid> = row.try_get("node_id").context("node_id")?;
+    let idle_ttl_seconds_override: Option<i32> = row
+        .try_get("idle_ttl_seconds_override")
+        .context("idle_ttl_seconds_override")?;
 
     // Decrypt API key at the persistence boundary; domain works with plaintext.
     let mut needs_re_encrypt = false;
@@ -77,6 +82,9 @@ fn row_to_provider(row: &sqlx::postgres::PgRow, master_key: &[u8; 32]) -> Result
         num_parallel,
         status: str_to_status(&status_str),
         registered_at,
+        mode,
+        node_id,
+        idle_ttl_seconds_override,
     }, needs_re_encrypt))
 }
 
@@ -119,8 +127,9 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
             "INSERT INTO llm_providers
                  (id, name, provider_type, url, api_key_encrypted,
                   total_vram_mb, gpu_index, server_id,
-                  is_free_tier, num_parallel, status, registered_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                  is_free_tier, num_parallel, status, registered_at,
+                  mode, node_id, idle_ttl_seconds_override)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(provider.id)
         .bind(&provider.name)
@@ -134,6 +143,9 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .bind(provider.num_parallel)
         .bind(status_to_str(&provider.status))
         .bind(provider.registered_at)
+        .bind(&provider.mode)
+        .bind(provider.node_id)
+        .bind(provider.idle_ttl_seconds_override)
         .execute(&self.pool)
         .await
         .context("failed to register provider")?;
@@ -279,8 +291,11 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
                  gpu_index = $5,
                  server_id = $6,
                  is_free_tier = $7,
-                 num_parallel = $8
-             WHERE id = $9",
+                 num_parallel = $8,
+                 mode = $9,
+                 node_id = $10,
+                 idle_ttl_seconds_override = $11
+             WHERE id = $12",
         )
         .bind(&provider.name)
         .bind(&provider.url)
@@ -290,6 +305,9 @@ impl LlmProviderRegistry for PostgresProviderRegistry {
         .bind(provider.server_id)
         .bind(provider.is_free_tier)
         .bind(provider.num_parallel)
+        .bind(&provider.mode)
+        .bind(provider.node_id)
+        .bind(provider.idle_ttl_seconds_override)
         .bind(provider.id)
         .execute(&self.pool)
         .await

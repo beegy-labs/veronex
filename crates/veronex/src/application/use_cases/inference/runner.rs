@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_else_if, clippy::collapsible_if, clippy::while_let_loop)]
+
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tracing::Instrument;
@@ -11,7 +13,6 @@ use uuid::Uuid;
 use crate::application::ports::outbound::inference_provider::LlmProviderPort;
 use crate::application::ports::outbound::job_repository::JobRepository;
 use crate::application::ports::outbound::message_store::{ConversationRecord, MessageStore};
-use crate::application::ports::outbound::model_manager_port::ModelManagerPort;
 use crate::application::ports::outbound::observability_port::ObservabilityPort;
 use crate::application::ports::outbound::provider_dispatch_port::ProviderDispatchPort;
 use crate::application::ports::outbound::valkey_port::ValkeyPort;
@@ -296,7 +297,6 @@ async fn finalize_job(
     message_store: &Option<Arc<dyn MessageStore>>,
     valkey: &Option<Arc<dyn ValkeyPort>>,
     observability: &Option<Arc<dyn ObservabilityPort>>,
-    model_manager: &Option<Arc<dyn ModelManagerPort>>,
     provider_dispatch: &dyn ProviderDispatchPort,
     event_tx: &broadcast::Sender<JobStatusEvent>,
     instance_id: &Arc<str>,
@@ -507,13 +507,6 @@ async fn finalize_job(
 
     cancel_notifiers.remove(&uuid);
 
-    // Record LRU usage (Ollama only)
-    if job.provider_type == ProviderType::Ollama
-        && let Some(mm) = model_manager
-    {
-        mm.record_used(job.model_name.as_str()).await;
-    }
-
     // Record TPM
     if let (Some(vk), Some(key_id)) = (valkey, api_key_id)
         && let Err(e) = record_tpm(vk.as_ref(), key_id, ts.token_count, tpm_minute).await
@@ -560,7 +553,6 @@ pub(super) async fn run_job(
     message_store: Option<Arc<dyn MessageStore>>,
     valkey: Option<Arc<dyn ValkeyPort>>,
     observability: Option<Arc<dyn ObservabilityPort>>,
-    model_manager: Option<Arc<dyn ModelManagerPort>>,
     provider_dispatch: Arc<dyn ProviderDispatchPort>,
     uuid: Uuid,
     mut job: InferenceJob,
@@ -572,12 +564,6 @@ pub(super) async fn run_job(
     mcp_lifecycle_phase_enabled: bool,
 ) -> Result<Option<u32>> {
     // ── Setup ──────────────────────────────────────────────────────────
-    if job.provider_type == ProviderType::Ollama
-        && let Some(ref mm) = model_manager
-        && let Err(e) = mm.ensure_loaded(job.model_name.as_str()).await
-    {
-        tracing::warn!(%uuid, "model manager ensure_loaded failed (non-fatal): {e}");
-    }
 
     let started_at = chrono::Utc::now();
     let (api_key_id, tpm_minute) = if let Some(mut entry) = jobs.get_mut(&uuid) {
@@ -826,7 +812,7 @@ pub(super) async fn run_job(
     // ── Finalize ───────────────────────────────────────────────────────
     let latency_ms = finalize_job(
         &jobs, &mut job, job_repo.as_ref(), &message_store, &valkey, &observability,
-        &model_manager, provider_dispatch.as_ref(), &event_tx, &instance_id,
+        provider_dispatch.as_ref(), &event_tx, &instance_id,
         &cancel_notifiers, uuid, started_at, ts, original_messages, original_prompt,
         api_key_id, tpm_minute, provider_id, provider_is_free_tier,
     ).await;
@@ -864,6 +850,7 @@ pub(super) fn strip_think_blocks(mut text: String) -> String {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::TokenStreamState;
 
@@ -1009,7 +996,7 @@ mod tests {
             account_id: Some(Uuid::now_v7()),
             api_key_id: None,
             provider_id: None,
-            provider_type: ProviderType::Ollama,
+            provider_type: ProviderType::LlamaServer,
             model_name: ModelName::new("qwen3-coder-next-200k:latest").unwrap(),
             status: JobStatus::Running,
             source: JobSource::Test,

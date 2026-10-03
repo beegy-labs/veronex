@@ -11,13 +11,11 @@ use crate::application::ports::outbound::gemini_repository::GeminiPolicyReposito
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
 use crate::application::ports::outbound::inference_provider::{InferenceProviderPort, LlmProviderPort};
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
 use crate::domain::entities::{InferenceJob, InferenceResult, LlmProvider};
 use crate::domain::enums::ProviderType;
 use crate::domain::value_objects::StreamToken;
 use crate::infrastructure::outbound::gemini::GeminiAdapter;
 use crate::infrastructure::outbound::hw_metrics::load_hw_metrics;
-use crate::infrastructure::outbound::ollama::OllamaAdapter;
 use crate::infrastructure::outbound::valkey_keys;
 
 use crate::domain::constants::{GEMINI_RPM_TTL_SECS, GEMINI_RPD_TTL_SECS};
@@ -149,17 +147,24 @@ pub async fn increment_gemini_counters(
 ///   - Paid providers: if model_selection_repo has rows for the provider and the
 ///     requested model is NOT enabled, that paid provider is skipped.
 ///
-/// Ollama: picks the server with the most available VRAM.
+/// llama_server: picks the server with the most available VRAM.
+///
+/// `prefix_hint` is an optional caller-supplied affinity key (typically the
+/// `conversation_id` as a string). When set, the LlamaServer branch biases
+/// toward the same provider for every request in the same conversation so
+/// the llama.cpp prompt-cache stays warm — up to a 1000× score multiplier
+/// over `slots_idle`. Saturated providers (`slots_idle == 0`) are still
+/// excluded so affinity can never overload a single instance.
 #[allow(clippy::too_many_arguments)]
 pub async fn pick_best_provider(
     registry: &dyn LlmProviderRegistry,
     policy_repo: Option<&dyn GeminiPolicyRepository>,
     model_selection_repo: Option<&dyn ProviderModelSelectionRepository>,
-    ollama_model_repo: Option<&dyn OllamaModelRepository>,
     pt: &ProviderType,
     model_name: &str,
     valkey: Option<&fred::clients::Pool>,
     tier_filter: Option<&str>,
+    prefix_hint: Option<&str>,
 ) -> Result<LlmProvider> {
     let all = registry.list_all().await?;
     let candidates: Vec<LlmProvider> = all
@@ -179,65 +184,94 @@ pub async fn pick_best_provider(
             pick_gemini_provider(candidates, policy_repo, model_selection_repo, model_name, valkey, tier_filter).await
         }
 
-        ProviderType::Ollama => {
-            // Filter to providers that have the requested model synced (if DB is populated).
-            let filtered_candidates = if let Some(repo) = ollama_model_repo {
-                if !model_name.is_empty() {
-                    match repo.providers_for_model(model_name).await {
-                        Ok(ids) if !ids.is_empty() => {
-                            let id_set: std::collections::HashSet<uuid::Uuid> =
-                                ids.into_iter().collect();
-                            let filtered: Vec<_> = candidates
-                                .iter()
-                                .filter(|b| id_set.contains(&b.id))
-                                .cloned()
-                                .collect();
-                            if filtered.is_empty() {
-                                // Model not found in DB — fall back to all candidates.
-                                candidates
-                            } else {
-                                filtered
-                            }
-                        }
-                        // DB empty or error → no filter, use all candidates.
-                        _ => candidates,
-                    }
-                } else {
-                    candidates
-                }
-            } else {
-                candidates
-            };
-
-            // Filter by model selection: if a provider has selection rows for this model
-            // and the model is disabled, skip that provider.
-            let selection_filtered = if let Some(repo) = model_selection_repo {
-                if !model_name.is_empty() {
-                    filter_by_model_selection(filtered_candidates, repo, model_name, "ollama").await
-                } else {
-                    filtered_candidates
-                }
-            } else {
-                filtered_candidates
-            };
-
-            // Score every candidate concurrently. At 10k-provider scale this turns
-            // a 10k-deep `.await` chain into one wall-clock round-trip.
-            use futures::future::join_all;
-            let scored: Vec<(LlmProvider, i64)> = join_all(
-                selection_filtered.into_iter().map(|b| async move {
-                    let avail = get_ollama_available_vram_mb(&b, valkey).await;
-                    (b, avail)
-                }),
-            )
-            .await;
-            scored
-                .into_iter()
-                .max_by_key(|(_, v)| *v)
-                .map(|(b, _)| b)
-                .ok_or_else(|| anyhow::anyhow!("no Ollama provider with available VRAM"))
+        ProviderType::LlamaServer => {
+            pick_llama_server_provider(candidates, prefix_hint).await
         }
     }
+}
+
+/// Score a llama-server candidate set with prefix-aware affinity.
+///
+/// Score formula: `slots_idle * SLOT_WEIGHT + prefix_match * MATCH_WEIGHT`
+/// with a hard cutoff at `slots_idle == 0` (saturated providers excluded).
+/// `MATCH_WEIGHT >> SLOT_WEIGHT` so any matched candidate with at least one
+/// idle slot beats any non-matched candidate; `slots_idle` is just a
+/// tiebreaker among matches and among non-matches. This keeps llama.cpp's
+/// prompt cache warm for a conversation without ever overloading a single
+/// instance.
+///
+/// Affinity strategy: when `prefix_hint` is `Some`, hash it and pick the
+/// candidate at `hash % candidates.len()` (after sorting by ID for
+/// determinism). Provider-set churn (add/remove) reshuffles the mapping
+/// for *new* conversations only; in-flight ones stay routed to whatever
+/// pick_best_provider returned the first time, since callers persist the
+/// `provider_id` on the job.
+async fn pick_llama_server_provider(
+    candidates: Vec<LlmProvider>,
+    prefix_hint: Option<&str>,
+) -> Result<LlmProvider> {
+    use futures::future::join_all;
+
+    let mut sorted = candidates;
+    sorted.sort_by_key(|b| b.id);
+
+    let client = reqwest::Client::new();
+    let scored: Vec<(LlmProvider, i64)> = join_all(sorted.into_iter().map(|b| {
+        let client = client.clone();
+        let url = b.url.clone();
+        async move {
+            let slots = match crate::infrastructure::outbound::llama_server::health::get_health(&client, &url).await {
+                Ok(s) if s.is_ok() => s.slots_idle as i64,
+                _ => 0,
+            };
+            (b, slots)
+        }
+    }))
+    .await;
+
+    pick_llama_server_from_slots(scored, prefix_hint)
+}
+
+fn pick_llama_server_from_slots(
+    mut scored: Vec<(LlmProvider, i64)>,
+    prefix_hint: Option<&str>,
+) -> Result<LlmProvider> {
+    const SLOT_WEIGHT: i64 = 1;
+    const MATCH_WEIGHT: i64 = 1000;
+
+    scored.sort_by_key(|(b, _)| b.id);
+    let preferred_id = prefix_hint
+        .filter(|h| !h.is_empty())
+        .filter(|_| !scored.is_empty())
+        .map(|h| {
+            let idx = (hash_u64(h) as usize) % scored.len();
+            scored[idx].0.id
+        });
+
+    scored
+        .into_iter()
+        .filter_map(|(b, slots)| {
+            if slots <= 0 {
+                None
+            } else {
+                let score = slots * SLOT_WEIGHT + if preferred_id == Some(b.id) { MATCH_WEIGHT } else { 0 };
+                Some((b, score))
+            }
+        })
+        .max_by_key(|(_, score)| *score)
+        .map(|(b, _)| b)
+        .ok_or_else(|| anyhow::anyhow!("no llama-server provider with idle slots"))
+}
+
+/// Stable 64-bit hash for prefix affinity. We use the standard library's
+/// `DefaultHasher` (SipHash-1-3 in current Rust) — adequate for routing
+/// since we need uniformity, not cryptographic guarantees, and the input
+/// space (conversation IDs) is non-adversarial.
+fn hash_u64(s: &str) -> u64 {
+    use std::hash::{Hash as _, Hasher as _};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    s.hash(&mut h);
+    h.finish()
 }
 
 async fn pick_gemini_provider(
@@ -361,16 +395,15 @@ async fn pick_gemini_provider(
     ))
 }
 
-/// Return available VRAM in MiB for an Ollama provider.
+/// Return available VRAM in MiB for a llama-server provider.
 ///
 /// Priority:
 /// 1. Valkey hardware metrics cache (set by health_checker when linked to a GpuServer).
 ///    Also enforces a temperature guard: providers at or above 85 °C are treated as
 ///    unavailable (returns `i64::MIN`).
-/// 2. Live Ollama `/api/ps` poll (fallback when no agent data is cached).
-/// 3. `i64::MAX` when `total_vram_mb == 0` (VRAM unknown → treat as unlimited).
-/// 4. `0` on any network / parse error (treats provider as full).
-pub async fn get_ollama_available_vram_mb(
+/// 2. `i64::MAX` when `total_vram_mb == 0` (VRAM unknown → treat as unlimited).
+/// 3. The provider's registered `total_vram_mb` otherwise.
+pub async fn get_provider_available_vram_mb(
     provider: &LlmProvider,
     valkey: Option<&fred::clients::Pool>,
 ) -> i64 {
@@ -404,7 +437,7 @@ pub async fn get_ollama_available_vram_mb(
 ///
 /// Blocks cloud metadata endpoints (169.254.169.254, metadata.google.internal),
 /// Kubernetes internal services (.svc.cluster.local), and link-local IP addresses.
-/// Localhost/private IPs are intentionally allowed since Ollama commonly runs there.
+/// Localhost/private IPs are intentionally allowed since llama-server commonly runs there.
 fn validate_provider_url(url_str: &str) -> Result<()> {
     let parsed = reqwest::Url::parse(url_str)
         .map_err(|_| anyhow::anyhow!("invalid provider URL"))?;
@@ -453,7 +486,14 @@ pub fn make_adapter(
     vram_pool: Option<Arc<dyn VramPoolPort>>,
 ) -> Arc<dyn LlmProviderPort> {
     match cfg.provider_type {
-        ProviderType::Ollama => {
+        ProviderType::Gemini => {
+            // Gemini uses a fixed Google API host; URL validation is N/A.
+            let key = cfg.api_key_encrypted.as_deref().unwrap_or("");
+            Arc::new(GeminiAdapter::new(key))
+        }
+        ProviderType::LlamaServer => {
+            // External-mode adapter: same SSRF validation as the upstream provider since
+            // operators register an arbitrary HTTP base URL.
             if let Err(e) = validate_provider_url(&cfg.url) {
                 tracing::warn!(
                     provider_id = %cfg.id,
@@ -463,19 +503,11 @@ pub fn make_adapter(
                 );
                 return Arc::new(BlockedAdapter(e.to_string()));
             }
-            let mut adapter = match valkey {
-                Some(pool) => OllamaAdapter::with_ctx_cache(&cfg.url, pool.clone(), cfg.id),
-                None => OllamaAdapter::new(&cfg.url),
-            };
-            if let Some(pool) = vram_pool {
-                adapter = adapter.with_vram_pool(pool);
-            }
-            Arc::new(adapter)
-        }
-        ProviderType::Gemini => {
-            // Gemini uses a fixed Google API host; URL validation is N/A.
-            let key = cfg.api_key_encrypted.as_deref().unwrap_or("");
-            Arc::new(GeminiAdapter::new(key))
+            let _ = (valkey, vram_pool); // Phase 1 adapter holds no Valkey/VramPool dep yet
+            Arc::new(
+                crate::infrastructure::outbound::llama_server::LlamaServerAdapter::new(&cfg.url)
+                    .with_provider_id(cfg.id),
+            )
         }
     }
 }
@@ -531,7 +563,7 @@ impl crate::application::ports::outbound::model_lifecycle::ModelLifecyclePort fo
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::useless_vec)]
 mod tests {
     use super::*;
     use crate::domain::entities::LlmProvider;
@@ -542,7 +574,7 @@ mod tests {
         LlmProvider {
             id: Uuid::now_v7(),
             name: "test".into(),
-            provider_type: crate::domain::enums::ProviderType::Ollama,
+            provider_type: crate::domain::enums::ProviderType::LlamaServer,
             url: "http://localhost:11434".into(),
             api_key_encrypted: None,
             total_vram_mb,
@@ -552,6 +584,9 @@ mod tests {
             num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: chrono::Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
         }
     }
 
@@ -560,7 +595,7 @@ mod tests {
     async fn vram_fallback_on_cache_miss() {
         let provider = make_provider(24576);
         // No Valkey connection → should return total_vram_mb as fallback
-        let vram = get_ollama_available_vram_mb(&provider, None).await;
+        let vram = get_provider_available_vram_mb(&provider, None).await;
         assert_eq!(vram, 24576);
     }
 
@@ -568,7 +603,7 @@ mod tests {
     #[tokio::test]
     async fn vram_unknown_returns_unlimited() {
         let provider = make_provider(0);
-        let vram = get_ollama_available_vram_mb(&provider, None).await;
+        let vram = get_provider_available_vram_mb(&provider, None).await;
         assert_eq!(vram, i64::MAX);
     }
 
@@ -582,5 +617,92 @@ mod tests {
     fn validate_url_allows_localhost() {
         assert!(validate_provider_url("http://localhost:11434").is_ok());
         assert!(validate_provider_url("http://192.168.1.10:11434").is_ok());
+    }
+
+    // ── Phase 1-3: prefix-aware llama-server routing ──────────────────────
+
+    fn make_llama_provider(url: &str) -> LlmProvider {
+        LlmProvider {
+            id: Uuid::now_v7(),
+            name: "llama".into(),
+            provider_type: crate::domain::enums::ProviderType::LlamaServer,
+            url: url.into(),
+            api_key_encrypted: None,
+            total_vram_mb: 0,
+            gpu_index: None,
+            server_id: None,
+            is_free_tier: false,
+            num_parallel: 4,
+            status: LlmProviderStatus::Online,
+            registered_at: chrono::Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
+        }
+    }
+
+    /// Same hint always picks the same candidate from a stable set —
+    /// the conversation-affinity contract.
+    #[test]
+    fn hash_u64_is_deterministic() {
+        let h1 = hash_u64("conversation-abc");
+        let h2 = hash_u64("conversation-abc");
+        let h3 = hash_u64("conversation-xyz");
+        assert_eq!(h1, h2);
+        assert_ne!(h1, h3);
+    }
+
+    /// Empty candidate set surfaces the "no provider with idle slots" error.
+    #[tokio::test]
+    async fn pick_llama_empty_candidates_errors() {
+        let r = pick_llama_server_provider(vec![], None).await;
+        assert!(r.is_err());
+    }
+
+    /// All candidates saturated (slots_idle=0) → no winner.
+    /// Drives every probe to a non-existent URL so health resolves to score 0.
+    #[tokio::test]
+    async fn pick_llama_all_saturated_errors() {
+        let candidates = vec![
+            make_llama_provider("http://127.0.0.1:1"),
+            make_llama_provider("http://127.0.0.1:2"),
+        ];
+        let r = pick_llama_server_provider(candidates, None).await;
+        assert!(r.is_err());
+    }
+
+    /// Match-bonus dominates `slots_idle` so kv-cache locality wins over a
+    /// modestly less busy peer. Idle-slot ties still go to the matched one.
+    #[test]
+    fn pick_llama_match_beats_higher_slots() {
+        let mut a = make_llama_provider("http://matched");
+        let mut b = make_llama_provider("http://unmatched");
+        a.id = Uuid::from_u128(1);
+        b.id = Uuid::from_u128(2);
+
+        for hint in ["conv-a", "conv-b", "conv-c", "conv-d"] {
+            let picked = pick_llama_server_from_slots(
+                vec![(a.clone(), 1), (b.clone(), 8)],
+                Some(hint),
+            ).unwrap();
+            let mut sorted = vec![a.clone(), b.clone()];
+            sorted.sort_by_key(|p| p.id);
+            let idx = (hash_u64(hint) as usize) % sorted.len();
+            let expected_id = sorted[idx].id;
+            assert_eq!(
+                picked.id, expected_id,
+                "hint {hint:?} should route to id {expected_id} (matched server)",
+            );
+        }
+    }
+
+    /// Without a hint the router falls back to the highest-`slots_idle`
+    /// candidate — same behaviour as before Phase 1-3.
+    #[test]
+    fn pick_llama_no_hint_picks_max_slots() {
+        let lo = make_llama_provider("http://lo");
+        let hi = make_llama_provider("http://hi");
+        let picked = pick_llama_server_from_slots(vec![(lo, 1), (hi.clone(), 4)], None).unwrap();
+        assert_eq!(picked.url, hi.url);
     }
 }

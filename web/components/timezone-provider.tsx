@@ -38,6 +38,10 @@ export const PRESET_TIMEZONES: readonly PresetTimezone[] = [
 
 const COOKIE_KEY = 'veronex-tz'
 
+function canReadLocalStorage(): boolean {
+  return typeof window !== 'undefined' && typeof window.localStorage?.getItem === 'function'
+}
+
 /** Returns true if the string is a valid IANA timezone accepted by Intl. */
 export function isValidTimezone(tz: string): boolean {
   try {
@@ -74,7 +78,7 @@ function initialTimezone(): Timezone {
   const cookie = readCookie()
   if (cookie) return cookie
   // No explicit override — derive from saved locale preference
-  const locale = typeof localStorage !== 'undefined' ? localStorage.getItem('hg-lang') : null
+  const locale = canReadLocalStorage() ? window.localStorage.getItem('hg-lang') : null
   return localeDefault(locale)
 }
 

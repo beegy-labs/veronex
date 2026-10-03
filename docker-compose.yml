@@ -90,6 +90,7 @@ services:
         mc alias set local http://minio:9000 $${MINIO_ROOT_USER} $${MINIO_ROOT_PASSWORD}
         mc mb --ignore-existing local/veronex-messages
         mc mb --ignore-existing local/veronex-images
+        mc mb --ignore-existing local/veronex-models
         mc anonymous set download local/veronex-images
     environment:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER:-veronex}
@@ -110,11 +111,13 @@ services:
       # to the gpu_metrics collector. On macOS/Docker Desktop this path does not
       # exist and the collector will log a single debug message then do nothing.
       - /sys/class/drm:/sys/class/drm:ro
+      # Phase 2 model store cache — sha256-keyed verified GGUF blobs. Backed
+      # by a named volume so cached blobs survive container restarts.
+      - veronex_model_cache:/var/lib/veronex/models
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-veronex}:${POSTGRES_PASSWORD:-veronex}@postgres:5432/veronex
       # DB index /0 — must match the queue/rate-limit keys in veronex
       VALKEY_URL: redis://valkey:6379/0
-      OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required - copy .env.example to .env}
       ANALYTICS_URL: http://veronex-analytics:3003
@@ -128,8 +131,6 @@ services:
       LOGIN_RATE_LIMIT: "${LOGIN_RATE_LIMIT:-10}"
       # OTel distributed tracing — optional, uncomment to enable.
       # OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4317
-      # Capacity analyzer Ollama URL — defaults to OLLAMA_URL when unset.
-      # CAPACITY_ANALYZER_OLLAMA_URL: http://host.docker.internal:11434
       # S3 / MinIO — conversation context object storage
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-veronex}
@@ -138,6 +139,13 @@ services:
       S3_IMAGE_BUCKET: veronex-images
       S3_IMAGE_PUBLIC_URL: http://localhost:9010/veronex-images
       S3_REGION: us-east-1
+      # Phase 2 — Modelfile registry + CAS blob store. Env beats the
+      # `app_config` row so dev compose skips the wizard.
+      VERONEX_MODEL_BUCKET: veronex-models
+      VERONEX_MODEL_LOCAL_PATH: /var/lib/veronex/models
+      VERONEX_MODEL_MAX_DISK_GB: "${VERONEX_MODEL_MAX_DISK_GB:-100}"
+      HF_TOKEN: ${HF_TOKEN-}
+      HF_ENDPOINT: ${HF_ENDPOINT-}
       VESPA_URL: http://vespa:8080
       VESPA_ENVIRONMENT: ${VESPA_ENVIRONMENT:-local-dev}
       VESPA_TENANT_ID: ${VESPA_TENANT_ID:-default}
@@ -247,7 +255,7 @@ services:
       # DB index /1 — separate from veronex's queue/rate-limit keys (index /0)
       VALKEY_URL: redis://valkey:6379/1
       SEARXNG_URL: ${SEARXNG_URL:-https://ai-search.girok.dev}
-      # analyze_image tool — route through Veronex gateway instead of calling Ollama directly
+      # analyze_image tool — route through Veronex gateway instead of calling the model server directly
       VERONEX_URL: http://veronex:3000
       VERONEX_API_KEY: ${VERONEX_API_KEY:-}
       ANALYZE_IMAGE_MODEL: ${ANALYZE_IMAGE_MODEL:-qwen3-vl:8b}
@@ -393,3 +401,4 @@ volumes:
   redpanda_data:
   minio_data:
   vespa_data:
+  veronex_model_cache:

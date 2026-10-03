@@ -177,19 +177,16 @@ pub const MAX_CHAT_MESSAGES: usize = 256;
 
 /// Maximum bytes allowed in an SSE/NDJSON line buffer before aborting.
 ///
-/// Shared by Ollama (NDJSON) and Gemini (SSE) streaming adapters.
+/// Shared by llama-server (chat-completions SSE) and Gemini (SSE) streaming adapters.
 pub const MAX_LINE_BUFFER: usize = 1_048_576; // 1 MB
 
 // ── HTTP request timeouts ──────────────────────────────────────────────────
 
-/// Timeout for inference requests to Ollama/Gemini providers (5 min).
+/// Timeout for inference requests to llama_server / Gemini providers (5 min).
 pub const PROVIDER_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
-/// Timeout for Ollama API metadata calls (/api/show, /api/tags, /api/ps).
-pub const OLLAMA_METADATA_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Timeout for Ollama health check (/api/version).
-pub const OLLAMA_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+/// Timeout for llama-server `/health` probe.
+pub const LLAMA_SERVER_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Timeout for Gemini health check (lightweight models list).
 pub const GEMINI_HEALTH_CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -213,12 +210,12 @@ pub const SERVICE_PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 /// Periodic MCP tool-discovery refresh interval in the background task in main.rs.
 pub const MCP_TOOL_REFRESH_INTERVAL: Duration = Duration::from_secs(25);
 
-// ── MCP / Ollama lifecycle phase timeouts ────────────────────────────────────
+// ── MCP / lifecycle phase timeouts ───────────────────────────────────────────
 //
 // The Phase-1 cold-load timeout is observed in two layers and must stay
 // coupled or runtime races. Defined here as the single source of truth.
 //
-// - `ollama::lifecycle::probe_load` sets `reqwest::timeout(...)` to bound the
+// - upstream lifecycle probe_load sets `reqwest::timeout(...)` to bound the
 //   cold-load HTTP request (200K-context measured ≈248 s on Strix Halo + ROCm).
 // - `mcp::bridge` uses the same value as the Phase-1 wait for the runner's
 //   `phase_boundary` token. If the bridge wait is shorter, the bridge fails the
@@ -257,9 +254,6 @@ pub const HW_METRICS_TTL: i64 = 60;
 
 /// TTL for per-server NodeMetrics in Valkey (seconds).
 pub const NODE_METRICS_TTL: i64 = 60;
-
-/// TTL for OllamaModel provider-for-model lookup cache (hot path).
-pub const OLLAMA_MODEL_CACHE_TTL: Duration = Duration::from_secs(10);
 
 /// TTL for provider-model-selection enabled list cache.
 pub const MODEL_SELECTION_CACHE_TTL: Duration = Duration::from_secs(30);
@@ -347,9 +341,6 @@ pub fn slot_leases_key(provider_id: uuid::Uuid, model: &str) -> String {
 pub fn provider_heartbeat_key(provider_id: uuid::Uuid) -> String {
     format!("veronex:provider:hb:{provider_id}")
 }
-pub fn provider_capacity_state_key(provider_id: uuid::Uuid) -> String {
-    format!("veronex:provider:{provider_id}:capacity_state")
-}
 pub fn provider_models_key(provider_id: uuid::Uuid) -> String {
     format!("veronex:models:{provider_id}")
 }
@@ -412,9 +403,9 @@ pub fn gemini_rpd_key(provider_id: uuid::Uuid, model: &str, date: &str) -> Strin
     format!("veronex:gemini:rpd:{provider_id}:{model}:{date}")
 }
 
-// Ollama model context.
-pub fn ollama_model_ctx_key(provider_id: uuid::Uuid, model_name: &str) -> String {
-    format!("veronex:ollama:ctx:{provider_id}:{model_name}")
+// Per-provider model context-window cache.
+pub fn model_ctx_key(provider_id: uuid::Uuid, model_name: &str) -> String {
+    format!("veronex:model:ctx:{provider_id}:{model_name}")
 }
 
 // Service health.
@@ -473,13 +464,8 @@ pub const MCP_KEY_CACHE_TTL_SECS: i64 = 60;
 /// background task; the 1-hour TTL is the safety net.
 pub const MCP_TOOLS_SUMMARY_TTL_SECS: i64 = 3600;
 
-/// TTL (seconds) for the per-(provider, model) Ollama context window cache
-/// (`veronex:ollama:ctx:{provider_id}:{model_name}`). Written by the capacity
-/// analyzer after each DB upsert; read on the inference hot path.
-pub const OLLAMA_MODEL_CTX_TTL_SECS: i64 = 600;
-
 /// TTL (seconds) for the per-provider model list cache
-/// (`veronex:models:{provider_id}`). Mirrors the upstream Ollama `/api/tags`
+/// (`veronex:models:{provider_id}`). Caches the upstream `/v1/models`
 /// freshness budget. Used by both `provider_handlers` (HTTP) and the capacity
 /// analyzer (background sync), which is why it lives in domain rather than
 /// the HTTP-layer constants.

@@ -24,7 +24,7 @@ pub async fn get_mcp_stats(
     Query(params): Query<HoursQuery>,
 ) -> Result<Json<Vec<McpServerStatRow>>, StatusCode> {
     validate_hours(params.hours)?;
-    let hours = params.hours as u32;
+    let hours = params.hours;
 
     let rows = state
         .ch
@@ -42,7 +42,8 @@ pub async fn get_mcp_stats(
              WHERE hour >= now() - INTERVAL ? HOUR
                AND call_count > 0
              GROUP BY server_slug, tool_name
-             ORDER BY server_slug ASC, total_calls DESC",
+             ORDER BY server_slug ASC, total_calls DESC
+             LIMIT 5000",
         )
         .bind(hours)
         .fetch_all::<McpServerStatRow>()

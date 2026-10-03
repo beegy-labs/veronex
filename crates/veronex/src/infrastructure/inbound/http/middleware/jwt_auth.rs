@@ -1,5 +1,5 @@
 use axum::extract::{Request, State};
-use tracing::Instrument;
+use tracing::{instrument, Instrument};
 use axum::middleware::Next;
 use axum::response::Response;
 use jsonwebtoken::{decode, Algorithm, DecodingKey, Validation};
@@ -38,6 +38,7 @@ pub struct Claims {
 /// Additional checks:
 /// - Valkey `veronex:revoked:{jti}` key presence → 401 (token revoked)
 /// - `session_repo.update_last_used(&claims.jti)` called asynchronously (non-blocking)
+#[instrument(skip_all)]
 pub async fn jwt_auth(
     State(state): State<AppState>,
     mut req: Request,
@@ -195,8 +196,10 @@ define_require_permission!(RequireSettingsManage, "settings_manage");
 define_require_permission!(RequireRoleManage,     "role_manage");
 define_require_permission!(RequireModelManage,    "model_manage");
 define_require_permission!(RequireMcpManage,      "mcp_manage");
+define_require_permission!(RequireBuilderManage,  "builder_manage");
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use axum::http::{HeaderMap, HeaderValue};

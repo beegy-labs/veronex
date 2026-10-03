@@ -5,7 +5,7 @@
 > **Stack (post-migration, 2026-05-03)**: verodesign `vds-*` utilities. Tailwind has been fully removed.
 > No `tailwindcss`, `tailwind-merge`, `@radix-ui/*`, `class-variance-authority` deps. Class concat goes
 > through `lib/vds-merge.ts` (last-wins per CSS-property family). The entire pipeline is verified by
-> `pnpm lint:no-tailwind` (0 hits across 163 files) and `pnpm verify:contrast` (22/22 WCAG pairs pass).
+> `npm run lint:no-tailwind` (0 hits across 163 files) and `npm run verify:contrast` (22/22 WCAG pairs pass).
 
 Related files:
 - [design-system-i18n.md](design-system-i18n.md) -- i18n, timezone, date formatting
@@ -23,7 +23,7 @@ Related files:
 | Add new locale | See [design-system-i18n.md](design-system-i18n.md) | i18n config + message file + timezone default |
 | Add new provider type | See [design-system-components.md](design-system-components.md) | 5-step process |
 | Add public (no-auth) route | See [design-system-components.md](design-system-components.md) | `PUBLIC_PATHS` array |
-| Change theme colors | `web/app/styles/vds/theme-veronex.css` `--vds-theme-*` | Edit token only; never hardcode hex in TSX. Run `pnpm verify:contrast` after any change |
+| Change theme colors | `web/app/styles/vds/theme-veronex.css` `--vds-theme-*` | Edit token only; never hardcode hex in TSX. Run `npm run verify:contrast` after any change |
 | Add flow visualization panel | `web/app/overview/components/` | See [design-system-components.md](design-system-components.md) |
 | Display a new date/time field | See [design-system-i18n.md](design-system-i18n.md) | `fmtDatetime`/`fmtDatetimeShort`/`fmtDateOnly` |
 | Gate component on lab feature | `web/components/lab-settings-provider.tsx` | `const { labSettings } = useLabSettings()` |
@@ -44,7 +44,7 @@ Related files:
 | `web/app/layout.tsx` | All providers: Theme, I18n, Timezone, QueryClient, LabSettings |
 | `web/components/lab-settings-provider.tsx` | `useLabSettings()` -- experimental feature flags |
 | `web/components/nav.tsx` | Collapsible sidebar (imports `HexLogo` from `nav-icons.tsx`) |
-| `web/components/nav-icons.tsx` | `HexLogo` + `OllamaIcon` SVGs |
+| `web/components/nav-icons.tsx` | `HexLogo` + `LlamaServerIcon` SVGs |
 | `web/components/nav-settings-dialog.tsx` | Settings dialog: language, timezone, lab features |
 | `web/components/theme-provider.tsx` | `data-theme` switcher, `localStorage('hg-theme')` |
 | `web/components/data-table.tsx` | `DataTable` + `DataTableEmpty` -- SSOT for all tables |
@@ -92,7 +92,7 @@ The dark-mode ramp went through six iterations. Current values are tuned for **e
 - warning: `light-dark(oklch(52% 0.18 70),  oklch(78% 0.175 70))`
 - error: `light-dark(oklch(48% 0.2 25),   oklch(72% 0.2 25))`
 
-WCAG targets enforced by `pnpm verify:contrast`: primary on bg-page AAA (≥7:1), body text AAA, dim/faint text AA-large (≥3:1), button fg AA (≥4.5:1), focus indicator UI (≥3:1). All 22 pairs pass in both modes as of 2026-05-03.
+WCAG targets enforced by `npm run verify:contrast`: primary on bg-page AAA (≥7:1), body text AAA, dim/faint text AA-large (≥3:1), button fg AA (≥4.5:1), focus indicator UI (≥3:1). All 22 pairs pass in both modes as of 2026-05-03.
 
 ---
 
@@ -127,7 +127,7 @@ WCAG targets enforced by `pnpm verify:contrast`: primary on bg-page AAA (≥7:1)
 Token flow when adding a new token:
 1. Append to `[data-theme="veronex"], [data-theme="veronex"] *` block in `app/styles/vds/theme-veronex.css`
 2. Mirror in `lib/design-tokens.ts` so TSX/SVG fills can use `tokens.<group>.<name>` (string `'var(--vds-theme-<name>)'`)
-3. Run `pnpm verify:contrast` (extend `PAIRS` in `scripts/verify-contrast.mjs` if the new token is a text/bg pair)
+3. Run `npm run verify:contrast` (extend `PAIRS` in `scripts/verify-contrast.mjs` if the new token is a text/bg pair)
 
 ---
 
@@ -137,11 +137,11 @@ Token flow when adding a new token:
 |---|---|---|
 | No `tailwindcss` / `tailwind-merge` / `@radix-ui` / `class-variance-authority` deps | ✅ | `package.json` design deps = `clsx` only |
 | No `tailwind.config.*` / `postcss.config.*` for utility generation | ✅ | none exist |
-| No bare-Tailwind class strings in `.tsx` (`bg-background`, `text-foreground`, `hover:bg-accent`, etc.) | ✅ | `pnpm lint:no-tailwind` — 0 hits across 163 files |
+| No bare-Tailwind class strings in `.tsx` (`bg-background`, `text-foreground`, `hover:bg-accent`, etc.) | ✅ | `npm run lint:no-tailwind` — 0 hits across 163 files |
 | All UI primitives (Button/Card/Input/Label/Select/Switch/Tabs/Dialog/Tooltip/Table/Badge/Checkbox/Separator) use `vds-*` only | ✅ | 13/13 components in `components/ui/` |
 | Class merger replaces `tailwind-merge` | ✅ | `lib/vds-merge.ts` (size vs. color disambiguation for border/divide/ring/outline) |
 | Verde Nexus theme overrides cascade to all descendants | ✅ | `[data-theme="veronex"] *` selector — Playwright cycle test (light/dark/light/dark) |
-| WCAG contrast 22/22 pairs pass | ✅ | `pnpm verify:contrast` — primary AAA, status AA, focus UI |
+| WCAG contrast 22/22 pairs pass | ✅ | `npm run verify:contrast` — primary AAA, status AA, focus UI |
 | Day/night toggle works at all DOM levels | ✅ | `data-mode` switches both `:root` control vars and inherited descendant tokens |
 | HexLogo paints in both desktop sidebar + mobile top bar | ✅ | per-instance `useId()` for gradient ID (resolves duplicate-ID collision) |
 | Arbitrary-value classes (`vds-h-[60px]`, `vds-sm:w-[560px]`, `vds-text-[11px]`, …) | ✅ | hand-listed in `app/globals.css` overrides layer (verodesign does not emit per-pixel arbitrary utilities — keep the list IN SYNC with `grep -rEho 'vds-[a-z-]+\[[^\]]+\]' app components`) |
@@ -188,7 +188,7 @@ Jobs                -> /jobs             <- standalone link; 3 tabs
 API Keys            -> /keys
 Servers             -> /servers
 [Providers]         <- collapsible group
-  Ollama            -> /providers?s=ollama
+  llama-server            -> /providers?s=llama-server
   Gemini            -> /providers?s=gemini
 
 Footer:

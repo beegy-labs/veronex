@@ -22,7 +22,21 @@ server_id: string | null,
  */
 is_free_tier: boolean, 
 /**
- * Maximum parallel requests per Ollama num_parallel setting.
+ * Maximum parallel requests per num_parallel setting.
  * Used as AIMD upper bound. Default 4.
  */
-num_parallel: number, status: LlmProviderStatus, registered_at: string, };
+num_parallel: number, status: LlmProviderStatus, registered_at: string, 
+/**
+ * Phase 3 lifecycle ownership. `external` = operator runs the process,
+ * `managed` = ProcessManager spawns/reaps it on `node_id`.
+ */
+mode: string, 
+/**
+ * FK → llm_nodes. Required when `mode == "managed"`, else None.
+ */
+node_id: string | null, 
+/**
+ * Per-provider override for `system_settings.llama_server.idle_ttl_seconds`.
+ * `None` = use the global setting; `Some(0)` = never reap.
+ */
+idle_ttl_seconds_override: number | null, };

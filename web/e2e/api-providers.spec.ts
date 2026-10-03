@@ -26,10 +26,10 @@ test.describe('API: Providers', () => {
     expect(res.status()).toBe(400)
   })
 
-  test('register ollama provider requires url', async () => {
+  test('register llama_server provider requires url', async () => {
     const res = await api.post('/v1/providers', {
-      name: 'no-url-ollama',
-      provider_type: 'ollama',
+      name: 'no-url-llama_server',
+      provider_type: 'llama_server',
     })
     expect(res.status()).toBe(400)
     const body = await res.json()
@@ -46,13 +46,13 @@ test.describe('API: Providers', () => {
     expect(body.error).toContain('api_key')
   })
 
-  test('provider CRUD lifecycle (ollama)', async () => {
+  test('provider CRUD lifecycle (llama_server)', async () => {
     let providerId: string | undefined
     try {
-      // Register (will likely be offline since no real Ollama is running)
+      // Register (will likely be offline since no real llama-server is running)
       const createRes = await api.post('/v1/providers', {
-        name: `e2e-ollama-${testId()}`,
-        provider_type: 'ollama',
+        name: `e2e-llama_server-${testId()}`,
+        provider_type: 'llama_server',
         url: 'http://127.0.0.1:99999', // non-existent port
       })
       // API validates URL reachability — returns 201 if reachable, 502 if not
@@ -67,11 +67,11 @@ test.describe('API: Providers', () => {
 
       // Update name
       const updateRes = await api.patch(`/v1/providers/${id}`, {
-        name: 'e2e-ollama-updated',
+        name: 'e2e-llama_server-updated',
       })
       expect(updateRes.ok()).toBeTruthy()
       const updated = await updateRes.json()
-      expect(updated.name).toBe('e2e-ollama-updated')
+      expect(updated.name).toBe('e2e-llama_server-updated')
 
       // Delete
       const deleteRes = await api.delete(`/v1/providers/${id}`)

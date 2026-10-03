@@ -3,6 +3,7 @@ use axum::http::header;
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::Value;
+use tracing::instrument;
 
 const SPEC: &str = include_str!("openapi.json");
 const OVERLAY_KO: &str = include_str!("openapi.overlay.ko.json");
@@ -32,6 +33,7 @@ fn merge_json(base: &mut Value, overlay: &Value) {
 
 /// GET /docs/openapi.json?lang=ko|ja|en — serve the embedded OpenAPI spec,
 /// optionally merged with a locale overlay.
+#[instrument(skip_all)]
 pub async fn openapi_json(Query(q): Query<LangQuery>) -> Response {
     let overlay_src = match q.lang.as_deref() {
         Some("ko") => Some(OVERLAY_KO),

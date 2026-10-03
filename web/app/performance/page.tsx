@@ -15,7 +15,7 @@ import {
   fmtMs, fmtMsAxis, fmtCompact, fmtPct, fmtTps,
 } from '@/lib/chart-theme'
 import { Timer, TrendingUp, CheckCircle, AlertTriangle, Zap } from 'lucide-react'
-import StatsCard from '@/components/stats-card'
+import StatsCard, { StatsCardSkeleton } from '@/components/stats-card'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { usePageGuard } from '@/hooks/use-page-guard'
@@ -102,10 +102,7 @@ export default function PerformancePage() {
       {isLoading && (
         <div className="vds-grid vds-grid-cols-3 vds-sm:grid-cols-5 vds-gap-4">
           {Array.from({ length: 5 }).map((_, i) => (
-            <Card key={i}><CardContent className="vds-p-6">
-              <div className="vds-h-3 vds-w-24 vds-rounded vds-bg-muted vds-animate-pulse vds-mb-4" />
-              <div className="vds-h-8 vds-w-16 vds-rounded vds-bg-muted vds-animate-pulse" />
-            </CardContent></Card>
+            <StatsCardSkeleton key={i} />
           ))}
         </div>
       )}

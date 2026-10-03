@@ -13,7 +13,7 @@ openai_handlers::chat_completions()
   │     should_intercept() = session_manager.has_sessions()
   │     (true when ≥1 enabled MCP server has an active session)
   │
-  └── YES → mcp_ollama_chat()
+  └── YES → mcp_llama_chat()
               │
               └── bridge.run_loop(...)
 ```
@@ -67,7 +67,7 @@ run_loop(state, caller, model, messages, base_tools, conversation_id, stop, seed
               │     tools = None
               │     response_format = {type:"json_schema",
               │                        json_schema:{schema}}
-              │     → Ollama adapter forwards as `format` → llama.cpp GBNF mask
+              │     → llama-server adapter forwards as `format` → llama.cpp GBNF mask
               │
               ├── collect_round(job_id) → RoundResult { content, tokens, ... }
               │     content is grammar-bound JSON
@@ -211,7 +211,7 @@ invoked. SDD: `.specs/veronex/history/mcp-tool-audit-exposure-and-loop-convergen
 |------|---------|
 | `infrastructure/outbound/mcp/bridge.rs` | `McpBridgeAdapter` — native + forced-JSON loops |
 | `infrastructure/outbound/mcp/forced_json.rs` | Forced-JSON gateway shim (schema, parser) for non-native-tool-calling models |
-| `infrastructure/inbound/http/openai_handlers.rs` | Entry, `should_intercept()`, `mcp_ollama_chat()` |
+| `infrastructure/inbound/http/openai_handlers.rs` | Entry, `should_intercept()`, `mcp_llama_chat()` |
 | `infrastructure/inbound/http/mcp_handlers.rs` | MCP server CRUD, `discover_and_persist_tools()` |
 | `infrastructure/inbound/http/key_mcp_access_handlers.rs` | ACL management REST API |
 | `veronex-mcp/src/tools/` | MCP tools (get_weather, web_search) |

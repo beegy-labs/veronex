@@ -149,24 +149,23 @@ impl McpVectorSelector {
         let conn: fred::clients::Client = self.valkey.next().clone();
 
         // Cache hit
-        if let Ok(Some(json)) = conn.get::<Option<String>, _>(&key).await {
-            if let Ok(v) = serde_json::from_str::<Vec<f32>>(&json) {
-                debug!("McpVectorSelector: embed cache hit");
-                return Ok(v);
-            }
+        if let Ok(Some(json)) = conn.get::<Option<String>, _>(&key).await
+            && let Ok(v) = serde_json::from_str::<Vec<f32>>(&json)
+        {
+            debug!("McpVectorSelector: embed cache hit");
+            return Ok(v);
         }
 
         // Cache miss — call embed service
         let vector = self.embed.embed(text).await?;
 
         // Write to Valkey (non-fatal)
-        if let Ok(json) = serde_json::to_string(&vector) {
-            if let Err(e) = conn
+        if let Ok(json) = serde_json::to_string(&vector)
+            && let Err(e) = conn
                 .set::<(), _, _>(&key, json, Some(Expiration::EX(EMBED_CACHE_TTL_SECS)), None, false)
                 .await
-            {
-                warn!(error = %e, key = %key, "MCP: embed cache SET failed");
-            }
+        {
+            warn!(error = %e, key = %key, "MCP: embed cache SET failed");
         }
 
         Ok(vector)

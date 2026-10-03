@@ -51,7 +51,7 @@ web/lib/queries/
 ├── keys.ts             # API keys
 ├── usage.ts            # usage aggregate, breakdown, key usage
 ├── servers.ts          # GPU servers, metrics
-├── providers.ts        # Ollama models, Gemini policies
+├── providers.ts        # llama-server models, Gemini policies
 ├── accounts.ts         # accounts, sessions
 └── capacity.ts         # capacity, capacity settings
 ```

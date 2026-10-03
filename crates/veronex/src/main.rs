@@ -87,6 +87,50 @@ async fn async_main() -> Result<()> {
     // ── Bootstrap super account ────────────────────────────────────
     bootstrap::repositories::maybe_bootstrap_super_account(&repos.account_repo, &config, &infra.pg_pool).await;
 
+    // ── Phase 3/4 — process manager + AIMD wiring (in-memory) ──────
+    // ProcessManager / AimdRegistry / AimdAdmission / ActivityTracker
+    // are all in-process — `Arc`-of-state, cheap to clone. The
+    // bootstrap loop registers nodes once they're announced.
+    let activity_tracker =
+        veronex::infrastructure::outbound::process_manager::ActivityTracker::new();
+    let aimd_registry =
+        veronex::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new();
+    let aimd_admission =
+        veronex::infrastructure::outbound::capacity::admission::AimdAdmission::new(
+            aimd_registry.clone(),
+        );
+    let process_manager =
+        veronex::infrastructure::outbound::process_manager::ProcessManager::new(
+            activity_tracker.clone(),
+            aimd_registry.clone(),
+        );
+
+    // ── Phase 3 — node + system_settings repos (always-on) ─────────
+    let llm_node_repo: std::sync::Arc<dyn veronex::application::ports::outbound::llm_node_repository::LlmNodeRepository> =
+        std::sync::Arc::new(
+            veronex::infrastructure::outbound::persistence::llm_node_repository::PostgresLlmNodeRepository::new(
+                infra.pg_pool.clone(),
+            ),
+        );
+    let system_settings_repo: std::sync::Arc<dyn veronex::application::ports::outbound::system_settings_repository::SystemSettingsRepository> =
+        std::sync::Arc::new(
+            veronex::infrastructure::outbound::persistence::system_settings_repository::PostgresSystemSettingsRepository::new(
+                infra.pg_pool.clone(),
+            ),
+        );
+
+    // ── Wire Phase 2 model store (env > app_config > default) ──────
+    // Reuses the same master key as the provider registry; the wizard
+    // writes encrypted secrets to `app_config` and we decrypt on read.
+    // When required keys aren't set, returns all-None and admin endpoints
+    // surface 503 until the operator runs `/v1/setup/storage` and restarts.
+    let model_store = bootstrap::wire_model_store(&infra.pg_pool, config.gemini_encryption_key)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "model store wiring failed — Phase 2 disabled");
+            bootstrap::model_store::unconfigured()
+        });
+
     // ── Background tasks ───────────────────────────────────────────
     let shutdown = CancellationToken::new();
     let mut tasks: JoinSet<()> = JoinSet::new();
@@ -96,6 +140,8 @@ async fn async_main() -> Result<()> {
         &infra,
         &shutdown,
         &mut tasks,
+        aimd_admission.clone(),
+        activity_tracker.clone(),
     )
     .await;
 
@@ -146,14 +192,8 @@ async fn async_main() -> Result<()> {
             circuit_breaker,
             analytics_repo: repos.analytics_repo.clone(),
         };
-        #[derive(sqlx::FromRow)]
-        struct McpServerStartup { id: uuid::Uuid, slug: String, url: String, timeout_secs: i16 }
-        let servers: Vec<McpServerStartup> = sqlx::query_as(
-            "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true"
-        )
-        .fetch_all(&pg_pool)
-        .await
-        .unwrap_or_default();
+        let servers = veronex::infrastructure::outbound::persistence::mcp_server_queries::
+            list_enabled_for_session(&pg_pool).await;
         // Connect to every enabled MCP server concurrently — startup wall-clock
         // becomes max(per-server) instead of sum.
         futures::future::join_all(servers.iter().map(|s| async {
@@ -181,8 +221,6 @@ async fn async_main() -> Result<()> {
         model_selection_repo: repos.model_selection_repo,
         global_model_settings_repo: repos.global_model_settings_repo,
         api_key_provider_access_repo: repos.api_key_provider_access_repo,
-        ollama_model_repo: repos.ollama_model_repo,
-        ollama_sync_job_repo: repos.ollama_sync_job_repo,
         valkey_pool,
         analytics_repo: repos.analytics_repo,
         session_repo: repos.session_repo,
@@ -193,7 +231,6 @@ async fn async_main() -> Result<()> {
         capacity_repo: repos.capacity_repo,
         capacity_settings_repo: repos.capacity_settings_repo,
         sync_trigger: handles.sync_trigger,
-        analyzer_url: config.analyzer_url,
         job_event_tx: handles.job_event_tx,
         event_ring_buffer: handles.event_ring_buffer,
         stats_tx: handles.stats_tx,
@@ -225,7 +262,40 @@ async fn async_main() -> Result<()> {
         clickhouse_db: config.clickhouse_db.as_deref().map(Arc::from),
         vespa_environment: Arc::from(config.vespa_environment.as_str()),
         vespa_tenant_id: Arc::from(config.vespa_tenant_id.as_str()),
+        // Phase 2 — env > app_config > default. None when the storage
+        // wizard hasn't run yet; admin endpoints return 503 in that state.
+        app_config_repo: model_store.app_config_repo,
+        modelfile_registry: model_store.modelfile_registry,
+        blob_registry: model_store.blob_registry,
+        install_attempts_log: model_store.install_attempts_log,
+        install_orchestrator: model_store.install_orchestrator,
+        blob_store: model_store.blob_store,
+        local_pv: model_store.local_pv,
+        llm_node_repo: Some(llm_node_repo),
+        system_settings_repo: Some(system_settings_repo.clone()),
+        process_manager: process_manager.clone(),
+        activity_tracker: activity_tracker.clone(),
+        aimd_registry: aimd_registry.clone(),
+        aimd_admission,
     };
+
+    // ── Phase 3 — IdleManager background loop ──────────────────────
+    {
+        let cancel = shutdown.clone();
+        let idle = veronex::infrastructure::outbound::process_manager::IdleManager::new(
+            activity_tracker.clone(),
+            process_manager.clone(),
+            system_settings_repo,
+            // Per-provider override lookup wires into the cached
+            // provider registry once `LlmProviderRegistry::get` is on
+            // the type-erased trait. Until then we always defer to the
+            // global setting.
+            std::sync::Arc::new(|_| None),
+        );
+        tasks.spawn(async move {
+            idle.run(std::time::Duration::from_secs(5), cancel).await;
+        });
+    }
 
     // ── MCP tool refresh loop ──────────────────────────────────────
     // Periodically refresh tool cache for all connected MCP servers,
@@ -256,19 +326,18 @@ async fn async_main() -> Result<()> {
                             if let Some(ref b) = state_clone.mcp_bridge {
                                 reconcile_mcp_sessions(&state_clone, b).await;
                                 for server_id in b.session_manager.server_ids() {
-                                    if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await {
-                                        if let Some(ref indexer) = state_clone.mcp_tool_indexer {
-                                            let indexer = indexer.clone();
-                                            let environment = state_clone.vespa_environment.to_string();
-                                            let tenant_id = state_clone.vespa_tenant_id.to_string();
-                                            use tracing::Instrument as _;
-                                            tokio::spawn(
-                                                async move {
-                                                    indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
-                                                }
-                                                .instrument(tracing::debug_span!("mcp.tool_indexer.index_server")),
-                                            );
-                                        }
+                                    if let Some(tools) = b.tool_cache.refresh(server_id, &b.session_manager).await
+                                        && let Some(ref indexer) = state_clone.mcp_tool_indexer {
+                                        let indexer = indexer.clone();
+                                        let environment = state_clone.vespa_environment.to_string();
+                                        let tenant_id = state_clone.vespa_tenant_id.to_string();
+                                        use tracing::Instrument as _;
+                                        tokio::spawn(
+                                            async move {
+                                                indexer.index_server_tools(&environment, &tenant_id, server_id, &tools).await;
+                                            }
+                                            .instrument(tracing::debug_span!("mcp.tool_indexer.index_server")),
+                                        );
                                     }
                                 }
                             }
@@ -384,19 +453,8 @@ async fn reconcile_mcp_sessions(
         .into_iter()
         .collect();
 
-    #[derive(sqlx::FromRow)]
-    struct McpServerRow {
-        id: uuid::Uuid,
-        slug: String,
-        url: String,
-        timeout_secs: i16,
-    }
-    let rows: Vec<McpServerRow> = sqlx::query_as(
-        "SELECT id, slug, url, timeout_secs FROM mcp_servers WHERE is_enabled = true",
-    )
-    .fetch_all(&state.pg_pool)
-    .await
-    .unwrap_or_default();
+    let rows = veronex::infrastructure::outbound::persistence::mcp_server_queries::
+        list_enabled_for_session(&state.pg_pool).await;
 
     for row in rows {
         if active.contains(&row.id) {

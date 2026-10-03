@@ -11,7 +11,7 @@ use crate::domain::enums::ProviderType;
 /// Port for provider selection, adapter construction, and rate-limit counter management.
 ///
 /// Abstracts over the concrete routing logic (`pick_best_provider`, `make_adapter`,
-/// `get_ollama_available_vram_mb`, `increment_gemini_counters`) so the application
+/// `get_provider_available_vram_mb`, `increment_gemini_counters`) so the application
 /// use-case layer does not depend on infrastructure adapters directly.
 #[async_trait]
 pub trait ProviderDispatchPort: Send + Sync {
@@ -30,12 +30,17 @@ pub trait ProviderDispatchPort: Send + Sync {
 
     /// Pick the best provider for the given type and model, then build an adapter.
     ///
+    /// `prefix_hint` is an optional affinity key (typically the conversation
+    /// ID) used by the LlamaServer router to keep the prompt cache warm.
+    /// Other backends ignore it.
+    ///
     /// Returns `(adapter, provider_id, is_free_tier)`.
     async fn pick_and_build(
         &self,
         provider_type: &ProviderType,
         model_name: &str,
         tier_filter: Option<&str>,
+        prefix_hint: Option<&str>,
     ) -> Result<(Arc<dyn LlmProviderPort>, Uuid, bool)>;
 
     /// Increment Gemini RPM/RPD rate-limit counters after a successful inference.

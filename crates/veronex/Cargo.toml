@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 # HTTP / Async
-axum = { version = "0.8", features = ["macros"] }
+axum = { version = "0.8", features = ["macros", "ws"] }
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync", "io-util", "net", "time", "signal", "fs"] }
 tower = { version = "0.5", features = ["timeout", "limit"] }
 tower-http = { version = "0.6", features = ["cors", "trace", "timeout", "compression-gzip", "compression-br", "sensitive-headers"] }
@@ -21,8 +21,8 @@ sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chro
 # Redis / Valkey
 fred = { version = "10", features = ["serde-json", "i-scripts", "sha-1", "subscriber-client", "i-pubsub", "i-streams"] }
 
-# HTTP client (for Ollama/Gemini)
-reqwest = { version = "0.13", default-features = false, features = ["json", "stream", "rustls"] }
+# HTTP client (for llama-server / Gemini)
+reqwest = { version = "0.13", default-features = false, features = ["json", "query", "stream", "rustls"] }
 
 # Auth / Crypto
 uuid = { version = "1", features = ["v4", "v7", "serde"] }
@@ -69,6 +69,7 @@ dashmap = "6"
 async-trait = "0.1"
 async-stream = "0.3"
 futures = "0.3"
+tokio-tungstenite = "0.28"
 tokio-stream = "0.1"
 tokio-util = { version = "0.7", features = ["rt"] }
 time = { version = "0.3.47", features = ["formatting"] }
@@ -87,3 +88,4 @@ workspace-hack = { path = "../../workspace-hack" }
 [dev-dependencies]
 proptest = "1"
 wiremock = "0.6"
+tempfile = "3"

@@ -107,7 +107,7 @@ for id in &ids {
 | Role membership counts | 200 |
 | Aggregate / GROUP BY | Commensurate with distinct count (e.g. 8760 for hourly, 10 for statuses) |
 
-**Recurrence:** a 2026-04-07 audit found missing LIMITs in 10+ repositories (`account_repository`, `api_key_repository`, `provider_registry`, `gemini_policy_repository`, `session_repository`, `model_capacity_repository`, `gpu_server_registry`, `global_model_settings`, `ollama_model_repository`, `provider_model_selection`). Run the quarterly audit grep after adding any `fetch_all` query.
+**Recurrence:** a 2026-04-07 audit found missing LIMITs in 10+ repositories (`account_repository`, `api_key_repository`, `provider_registry`, `gemini_policy_repository`, `session_repository`, `model_capacity_repository`, `gpu_server_registry`, `global_model_settings`, `modelfile_registrysitory`, `provider_model_selection`). Run the quarterly audit grep after adding any `fetch_all` query.
 
 ## L1 (Valkey) + L2 (Postgres) Cached Lookup
 
@@ -127,7 +127,7 @@ Domain enums (`ProviderType`, `JobStatus`, `JobSource`, `ApiFormat`, `KeyTier`) 
 // as_str() — zero-allocation display
 impl ProviderType {
     pub fn as_str(&self) -> &'static str {
-        match self { Self::Ollama => "ollama", Self::Gemini => "gemini" }
+        match self { Self::llama-server => "llama-server", Self::Gemini => "gemini" }
     }
 }
 
@@ -137,7 +137,7 @@ impl std::str::FromStr for ProviderType { ... }
 // resource_type() — audit resource identifiers
 impl ProviderType {
     pub fn resource_type(&self) -> &'static str {
-        match self { Self::Ollama => "ollama_provider", Self::Gemini => "gemini_provider" }
+        match self { Self::llama-server => "llm_provider", Self::Gemini => "gemini_provider" }
     }
 }
 ```

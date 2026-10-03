@@ -1,11 +1,11 @@
-/// veronex-agent: Collects hardware + Ollama metrics independently and pushes
+/// veronex-agent: Collects hardware metrics from node-exporter and pushes
 /// them to OTel Collector via OTLP HTTP.
 ///
-/// Two target types, each collected on its own:
-///   type=server  — node-exporter (CPU, mem, GPU)
-///   type=ollama  — Ollama /api/ps (loaded models, VRAM)
+/// Per-node llama-server capacity is reported separately by `veronex-llm-agent`
+/// via heartbeats — this crate scrapes node-exporter only.
 ///
-/// When linked (server_id FK), analytics can correlate both.
+/// Target type:
+///   type=server  — node-exporter (CPU, mem, GPU)
 ///
 /// Supports N replicas via modulus sharding — no external coordination.
 ///
@@ -31,7 +31,6 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 use tracing::Instrument;
 
-mod capacity_push;
 mod health;
 mod heartbeat;
 mod orphan_sweeper;
@@ -354,12 +353,110 @@ fn agent_self_gauges(stats: &AgentStats, cycle: &CycleResult) -> Vec<scraper::Ga
     ]
 }
 
-/// Shard key for a target — server_id for servers, provider_id for ollama.
+/// Shard key for a target — server_id for servers, provider_id for llama_server.
 fn shard_key(t: &SdTarget) -> &str {
     match t.labels.get("type").map(|s| s.as_str()) {
         Some("server") => t.labels.get("server_id").map(|s| s.as_str()).unwrap_or(""),
-        Some("ollama") => t.labels.get("provider_id").map(|s| s.as_str()).unwrap_or(""),
+        Some("llama_server") => t.labels.get("provider_id").map(|s| s.as_str()).unwrap_or(""),
         _ => "",
+    }
+}
+
+async fn scrape_cycle(
+    client: &reqwest::Client,
+    config: &Config,
+    replicas: u32,
+    semaphore: &Arc<Semaphore>,
+    valkey: Option<&fred::clients::Pool>,
+) -> CycleResult {
+    let start = Instant::now();
+
+    // ── MCP server health checks ─────────────────────────────────────────────
+    // Fetches enabled MCP servers from /v1/mcp/targets on every cycle (dynamic).
+    // Pings run concurrently — idempotent Valkey SET EX, no sharding needed.
+    if let Some(pool) = valkey {
+        let mcp_targets = fetch_mcp_targets(client, &config.veronex_api_url).await;
+        if !mcp_targets.is_empty() {
+            let ping_futs: Vec<_> = mcp_targets
+                .iter()
+                .map(|(server_id, base_url)| async move {
+                    let alive = scraper::ping_mcp_server(client, server_id, base_url).await;
+                    (server_id, alive)
+                })
+                .collect();
+
+            let ping_results = futures::future::join_all(ping_futs).await;
+            for (server_id, alive) in ping_results {
+                if alive {
+                    scraper::set_mcp_heartbeat(pool, server_id, HEARTBEAT_TTL_SECS).await;
+                } else {
+                    tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
+                }
+            }
+        }
+    }
+
+    let targets = discover_targets(client, &config.veronex_api_url).await;
+    if targets.is_empty() {
+        tracing::debug!("no targets discovered");
+        return CycleResult { duration_secs: start.elapsed().as_secs_f64(), targets_scraped: 0, gauges_collected: 0, success: true };
+    }
+
+    let my_targets: Vec<_> = targets
+        .iter()
+        .filter(|t| shard::owns(shard_key(t), config.ordinal, replicas))
+        .collect();
+
+    if my_targets.is_empty() {
+        return CycleResult { duration_secs: start.elapsed().as_secs_f64(), targets_scraped: 0, gauges_collected: 0, success: true };
+    }
+
+    let targets_scraped = my_targets.len();
+
+    let futures: Vec<_> = my_targets
+        .iter()
+        .filter_map(|t| {
+            let host_port = t.targets.first()?;
+            let target_type = t.labels.get("type")?.as_str();
+            // targets API now returns scheme-preserving URLs
+            let url = host_port.to_string();
+            let labels = t.labels.clone();
+            let sem = semaphore.clone();
+
+            Some(async move {
+                let _permit = sem.acquire().await;
+                match target_type {
+                    "server" => {
+                        let metrics = scraper::scrape_node_exporter(client, &url).await;
+                        (labels, metrics)
+                    }
+                    _ => (labels, vec![]),
+                }
+            })
+        })
+        .collect();
+
+    let results = futures::future::join_all(futures).await;
+
+    let mut gauges_collected = 0;
+    let mut any_error = false;
+
+    for (labels, metrics) in &results {
+        gauges_collected += metrics.len();
+        if metrics.is_empty() {
+            continue;
+        }
+        if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
+            tracing::warn!(target_type = %labels.get("type").map(|s| s.as_str()).unwrap_or("unknown"), error = %e, "OTLP push failed");
+            any_error = true;
+        }
+    }
+
+    CycleResult {
+        duration_secs: start.elapsed().as_secs_f64(),
+        targets_scraped,
+        gauges_collected,
+        success: !any_error,
     }
 }
 
@@ -411,128 +508,5 @@ mod tests {
         assert!(!state.started.load(Ordering::Relaxed));
         assert!(!state.ready.load(Ordering::Relaxed));
         assert!(state.alive.load(Ordering::Relaxed));
-    }
-
-}
-
-async fn scrape_cycle(
-    client: &reqwest::Client,
-    config: &Config,
-    replicas: u32,
-    semaphore: &Arc<Semaphore>,
-    valkey: Option<&fred::clients::Pool>,
-) -> CycleResult {
-    let start = Instant::now();
-
-    // ── MCP server health checks ─────────────────────────────────────────────
-    // Fetches enabled MCP servers from /v1/mcp/targets on every cycle (dynamic).
-    // Pings run concurrently — idempotent Valkey SET EX, no sharding needed.
-    if let Some(pool) = valkey {
-        let mcp_targets = fetch_mcp_targets(client, &config.veronex_api_url).await;
-        if !mcp_targets.is_empty() {
-            let ping_futs: Vec<_> = mcp_targets
-                .iter()
-                .cloned()
-                .map(|(server_id, base_url)| async move {
-                    let alive = scraper::ping_mcp_server(client, &server_id, &base_url).await;
-                    (server_id, alive)
-                })
-                .collect();
-
-            let ping_results = futures::future::join_all(ping_futs).await;
-            for (server_id, alive) in ping_results {
-                if alive {
-                    scraper::set_mcp_heartbeat(pool, &server_id, HEARTBEAT_TTL_SECS).await;
-                } else {
-                    tracing::debug!(server_id, "MCP server offline — heartbeat not renewed");
-                }
-            }
-        }
-    }
-
-    let targets = discover_targets(client, &config.veronex_api_url).await;
-    if targets.is_empty() {
-        tracing::debug!("no targets discovered");
-        return CycleResult { duration_secs: start.elapsed().as_secs_f64(), targets_scraped: 0, gauges_collected: 0, success: true };
-    }
-
-    let my_targets: Vec<_> = targets
-        .iter()
-        .filter(|t| shard::owns(shard_key(t), config.ordinal, replicas))
-        .collect();
-
-    if my_targets.is_empty() {
-        return CycleResult { duration_secs: start.elapsed().as_secs_f64(), targets_scraped: 0, gauges_collected: 0, success: true };
-    }
-
-    let targets_scraped = my_targets.len();
-
-    let futures: Vec<_> = my_targets
-        .iter()
-        .filter_map(|t| {
-            let host_port = t.targets.first()?;
-            let target_type = t.labels.get("type")?.as_str();
-            // targets API now returns scheme-preserving URLs
-            let url = host_port.to_string();
-            let labels = t.labels.clone();
-            let sem = semaphore.clone();
-            let valkey = valkey.cloned();
-
-            Some(async move {
-                let _permit = sem.acquire().await;
-                match target_type {
-                    "server" => {
-                        let metrics = scraper::scrape_node_exporter(client, &url).await;
-                        (labels, metrics)
-                    }
-                    "ollama" => {
-                        let raw = scraper::scrape_ollama_raw(client, &url).await;
-                        let metrics = scraper::ollama_gauges_from_raw(&raw);
-                        // Push heartbeat + capacity state when scrape succeeded.
-                        if let (Some(pool), Some(provider_id)) = (&valkey, labels.get("provider_id")) {
-                            if !raw.is_empty() || metrics.iter().any(|g| g.name == "ollama_loaded_models") {
-                                heartbeat::set_online(pool, provider_id, HEARTBEAT_TTL_SECS).await;
-                            }
-                            // Push capacity state (arch profiles) even when no models are loaded —
-                            // this lets the analyzer skip HTTP /api/ps + /api/show calls.
-                            let total_vram_mb: u64 = labels
-                                .get("total_vram_mb")
-                                .and_then(|s| s.parse().ok())
-                                .unwrap_or(0);
-                            let loaded: Vec<(String, u64)> = raw
-                                .iter()
-                                .filter_map(|m| Some((m.name.clone()?, m.size_vram.unwrap_or(0))))
-                                .collect();
-                            capacity_push::push(client, pool, &url, provider_id, total_vram_mb, &loaded).await;
-                        }
-                        (labels, metrics)
-                    }
-                    _ => (labels, vec![]),
-                }
-            })
-        })
-        .collect();
-
-    let results = futures::future::join_all(futures).await;
-
-    let mut gauges_collected = 0;
-    let mut any_error = false;
-
-    for (labels, metrics) in &results {
-        gauges_collected += metrics.len();
-        if metrics.is_empty() {
-            continue;
-        }
-        if let Err(e) = otlp::push_metrics(client, &config.otel_endpoint, labels, metrics).await {
-            tracing::warn!(target_type = %labels.get("type").map(|s| s.as_str()).unwrap_or("unknown"), error = %e, "OTLP push failed");
-            any_error = true;
-        }
-    }
-
-    CycleResult {
-        duration_secs: start.elapsed().as_secs_f64(),
-        targets_scraped,
-        gauges_collected,
-        success: !any_error,
     }
 }

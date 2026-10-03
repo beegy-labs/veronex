@@ -109,7 +109,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-    A(["dispatcher →\nrun_job(provider, job)"]) --> B{Ollama?}
+    A(["dispatcher →\nrun_job(provider, job)"]) --> B{llama-server?}
     B -->|Yes| C["model_manager.ensure_loaded()\nVerify model loaded"]
     B -->|No| D
     C --> D{Already Cancelled?}

@@ -1,7 +1,9 @@
+#![allow(clippy::redundant_closure, clippy::collapsible_if)]
+
 //! Shared validation and helper functions for inference handler endpoints.
 //!
 //! Extracted from the duplicated logic across `openai_handlers`, `gemini_compat_handlers`,
-//! and `ollama_compat_handlers` to provide a single source of truth for input validation
+//! to provide a single source of truth for input validation
 //! and common operations.
 
 use std::convert::Infallible;
@@ -123,7 +125,7 @@ pub async fn validate_and_compress_images(images: &mut Option<Vec<String>>, lab:
 // ── Vision fallback — analyze images for non-vision models ──────────────────
 
 /// Returns true if the model is known to support vision (multimodal) input.
-/// Uses a name-based heuristic — Ollama vision models consistently carry "vl",
+/// Uses a name-based heuristic — vision models consistently carry "vl",
 /// "llava", "vision", "moondream", "cogvlm", "bakllava", or "minicpm-v" in
 /// their names.
 pub fn is_vision_model(model_name: &str) -> bool {
@@ -165,13 +167,13 @@ pub async fn analyze_images_for_context(
         .unwrap_or_else(|| vision_fallback_model.to_string());
 
     let providers = provider_registry.list_all().await.ok()?;
-    let ollama_urls: Vec<String> = providers
+    let llama_urls: Vec<String> = providers
         .into_iter()
-        .filter(|p| p.is_ollama())
+        .filter(|p| p.is_llama_server())
         .map(|p| p.url)
         .collect();
 
-    if ollama_urls.is_empty() {
+    if llama_urls.is_empty() {
         return None;
     }
 
@@ -179,7 +181,7 @@ pub async fn analyze_images_for_context(
     let prompt = if user_prompt.trim().is_empty() { "Describe this image in detail." } else { user_prompt };
     let mut descriptions: Vec<String> = Vec::new();
     for image in images {
-        'provider: for url in &ollama_urls {
+        'provider: for url in &llama_urls {
             let endpoint = format!("{}/api/generate", url.trim_end_matches('/'));
             let body = serde_json::json!({
                 "model":  vision_model,
@@ -237,12 +239,12 @@ pub async fn analyze_images_for_context(
 ///
 /// Checks that the tool call has a well-formed `function.name` field with
 /// only safe characters. Rejects names with control characters or suspicious
-/// Look up the cached `configured_ctx` for `model_name` across all Ollama
+/// Look up the cached `configured_ctx` for `model_name` across all llama-server
 /// providers via a single Valkey `MGET` (one round-trip total). Returns the
 /// first non-zero value found.
 ///
 /// SSOT for the multi-turn-handoff and dispatch-time context-window lookup —
-/// previously duplicated in `openai_handlers` and `ollama_compat_handlers`
+/// previously duplicated in `openai_handlers`
 /// as a sequential `for ... .await` chain (O(N) round-trips at 10k-provider
 /// scale).
 pub async fn lookup_model_max_ctx(
@@ -254,8 +256,8 @@ pub async fn lookup_model_max_ctx(
     let providers = state.provider_registry.list_active().await.ok()?;
     let keys: Vec<String> = providers
         .iter()
-        .filter(|p| p.is_ollama())
-        .map(|p| crate::infrastructure::outbound::valkey_keys::ollama_model_ctx(p.id, model_name))
+        .filter(|p| p.is_llama_server())
+        .map(|p| crate::infrastructure::outbound::valkey_keys::model_ctx(p.id, model_name))
         .collect();
     if keys.is_empty() {
         return None;
@@ -293,7 +295,7 @@ pub fn validate_tool_call(call: &serde_json::Value) -> bool {
 
 // ── Prompt extraction ───────────────────────────────────────────────────────
 
-/// Extract the last user message content from an Ollama-format messages array.
+/// Extract the last user message content from a chat-completion messages array.
 ///
 /// Scans messages in reverse to find the most recent `"role": "user"` entry
 /// and returns its `"content"` field. Returns `"chat"` if no user message is
@@ -362,7 +364,7 @@ pub fn build_current_datetime_system_text() -> String {
 /// - Always inserts a NEW system message at index 0. We don't merge into a
 ///   user-provided `messages[0].role == "system"` because that would mutate
 ///   their explicit instructions. Multiple consecutive system messages are
-///   accepted by both Ollama `/api/chat` and the OpenAI spec; downstream
+///   accepted by the OpenAI chat-completion spec; downstream
 ///   shims (forced-JSON, vision) keep prepending their own system messages
 ///   above this one.
 /// - No-op detection: if `messages[0]` already starts with "Current date"
@@ -446,6 +448,7 @@ pub fn build_sse_response(
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

@@ -1,12 +1,12 @@
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from './constants'
+import { PROVIDER_LLAMA_SERVER, PROVIDER_GEMINI, SUCCESS_RATE_GOOD, SUCCESS_RATE_WARNING } from './constants'
 import type { Provider } from './types'
 
 export { cn } from './vds-merge'
 
 // ── Provider filtering (SSOT) ─────────────────────────────────────────────
 
-export const getOllamaProviders = (providers: Provider[] | undefined) =>
-  providers?.filter(p => p.provider_type === PROVIDER_OLLAMA) ?? []
+export const getLlamaServerProviders = (providers: Provider[] | undefined) =>
+  providers?.filter(p => p.provider_type === PROVIDER_LLAMA_SERVER) ?? []
 
 export const getGeminiProviders = (providers: Provider[] | undefined) =>
   providers?.filter(p => p.provider_type === PROVIDER_GEMINI) ?? []

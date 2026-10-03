@@ -18,10 +18,10 @@
 
 | File | Purpose |
 |------|---------|
-| `infrastructure/inbound/http/openai_handlers.rs` | `chat_completions` handler + Ollama proxy + legacy queue path |
+| `infrastructure/inbound/http/openai_handlers.rs` | `chat_completions` handler + llama-server proxy + legacy queue path |
 | `infrastructure/inbound/http/openai_sse_types.rs` | Shared SSE/response types: `CompletionChunk`, `DeltaContent`, `ChatCompletion` |
 | `infrastructure/inbound/http/openai_completions_handlers.rs` | `POST /v1/completions` — legacy text completions |
-| `infrastructure/inbound/http/openai_embeddings_handlers.rs` | `POST /v1/embeddings` — proxies to Ollama /api/embed |
+| `infrastructure/inbound/http/openai_embeddings_handlers.rs` | `POST /v1/embeddings` — proxies to /v1/embeddings |
 | `infrastructure/inbound/http/openai_models_handlers.rs` | `GET /v1/models`, `GET /v1/models/{model_id}` |
 | `infrastructure/inbound/http/openai_media_handlers.rs` | `POST /v1/audio/*`, `/v1/images/generations`, `/v1/moderations` — 501 stubs |
 | `infrastructure/inbound/http/docs_handlers.rs` | Swagger / ReDoc / OpenAPI spec |
@@ -33,10 +33,10 @@
 
 | Method | Path | Handler file | Notes |
 |--------|------|--------------|-------|
-| POST | `/v1/chat/completions` | `openai_handlers.rs` | Streaming + non-streaming; Ollama proxy + Gemini legacy path |
+| POST | `/v1/chat/completions` | `openai_handlers.rs` | Streaming + non-streaming; llama-server proxy + Gemini legacy path |
 | POST | `/v1/completions` | `openai_completions_handlers.rs` | Legacy text completion |
-| POST | `/v1/embeddings` | `openai_embeddings_handlers.rs` | Proxies to Ollama `/api/embed` |
-| GET | `/v1/models` | `openai_models_handlers.rs` | Lists all Ollama + Gemini models from DB |
+| POST | `/v1/embeddings` | `openai_embeddings_handlers.rs` | Proxies to `/v1/embeddings` |
+| GET | `/v1/models` | `openai_models_handlers.rs` | Lists all llama-server + Gemini models from DB |
 | GET | `/v1/models/{model_id}` | `openai_models_handlers.rs` | 404 if not found |
 | POST | `/v1/audio/transcriptions` | `openai_media_handlers.rs` | 501 stub |
 | POST | `/v1/audio/speech` | `openai_media_handlers.rs` | 501 stub |
@@ -49,8 +49,9 @@ All inference endpoints require `X-API-Key` auth + rate limiting.
 
 ## POST /v1/chat/completions
 
-**Auth**: `X-API-Key` (also accepts `Authorization: Bearer` and `x-goog-api-key`).
-Supports streaming (`stream: true`) and non-streaming.
+**Auth**: any of `X-API-Key`, `Authorization: Bearer {api_key}`, or
+`x-goog-api-key` (Gemini-CLI compatibility). Supports streaming
+(`stream: true`) and non-streaming.
 
 ### Request Struct
 
@@ -59,12 +60,12 @@ Supports streaming (`stream: true`) and non-streaming.
 pub struct ChatCompletionRequest {
     pub model: String,
     pub messages: Vec<ChatMessage>,
-    pub provider_type: Option<String>,          // "ollama" | "gemini-free" | "gemini"
+    pub provider_type: Option<String>,          // "llama_server" | "gemini-free" | "gemini"
     pub tools: Option<Vec<serde_json::Value>>,
     pub tool_choice: Option<serde_json::Value>,
     pub temperature: Option<f64>,
     pub top_p: Option<f64>,
-    pub max_tokens: Option<u32>,                // maps to Ollama options.num_predict
+    pub max_tokens: Option<u32>,                // maps to llama-server options.num_predict
     pub max_completion_tokens: Option<u32>,     // OpenAI v2 alias
     pub stream: Option<bool>,
     pub stream_options: Option<StreamOptions>,  // { include_usage: bool }
@@ -89,18 +90,18 @@ pub struct ChatMessage {
 
 | `provider_type` | Path | Behavior |
 |-----------------|------|----------|
-| `"ollama"` (default) | **Ollama proxy** | Full conversation history forwarded. Tools, temperature, top_p, max_tokens passed through. Tool call args: OpenAI JSON string → Ollama JSON object. |
-| `"gemini-free"`, `"gemini"` | **Legacy queue** | Only last `user` message extracted as prompt. Enqueued via Valkey queue. |
+| `"llama_server"` (default) | **llama-server proxy** | Full conversation history forwarded. Tools, temperature, top_p, max_tokens passed through. Tool call args: OpenAI JSON string → llama-server JSON object (`ChatMessage::into_chat_value`). |
+| `"gemini-free"`, `"gemini"` | **Queue path** | Last `user` message extracted as prompt. Enqueued via Valkey queue and dispatched by `dispatcher`. |
 
 ### `provider_type` Field
 
 | Value | Routing |
 |-------|---------|
-| `"ollama"` | VRAM-aware Ollama selection |
+| `"llama_server"` | VRAM-aware llama-server selection |
 | `"gemini-free"` | `is_free_tier=true` only |
 | `"gemini"` | Free-first → paid fallback on RPD exhaustion |
 
-`"gemini-free"` maps to `ProviderType::Gemini` with `tier_filter = Some("free")`. `ProviderType` enum has only two variants: `Ollama` and `Gemini`.
+`"gemini-free"` maps to `ProviderType::Gemini` with `tier_filter = Some("free")`. `ProviderType` enum has only two variants: `LlamaServer` and `Gemini`. The legacy `Ollama` variant was removed in the post-Ollama refactor.
 
 ### SSE Response
 

@@ -29,7 +29,7 @@ Runs before context assembly. Returns `400` if any condition fails.
 | Model max_ctx ≥ N tokens | `multiturn_min_ctx` | 16384 | `400 context_window_too_small` |
 | Model in allowlist | `multiturn_allowed_models` | `[]` (all) | `400 model_not_allowed` |
 
-`max_ctx` is read from Valkey (`veronex:ollama:ctx:{provider_id}:{model}`). Unknown → fail-open (allow).
+`max_ctx` is read from Valkey (`veronex:model:ctx:{provider_id}:{model}`). Unknown → fail-open (allow).
 
 Code: `context_assembler::check_multiturn_eligibility()` — `application/use_cases/inference/context_assembler.rs`
 
@@ -64,7 +64,7 @@ Decides how to compress each completed turn. Code: `compression_router.rs`.
 
 **DCP invariant**: pruning is in-memory only. The S3 ConversationRecord is **never** modified — every original turn is retained for dashboard / audit / replay.
 
-**Behavior on overflow**: pre-fix this ladder didn't exist (`configured_ctx = 32_768u32` hardcoded in `ollama_compat_handlers.rs`). Long MCP loops (30+ rounds) would grow `messages[]` unbounded → context overflow at provider level. Post-fix: bridge log emits structured event `context-pruner: trimmed accumulated messages to fit budget {model, configured_ctx, budget, initial_tokens, after_tokens, dropped}` whenever trim fires.
+**Behavior on overflow**: pre-fix this ladder didn't exist (`configured_ctx = 32_768u32` hardcoded in the Ollama-compat handler that has since been removed). Long MCP loops (30+ rounds) would grow `messages[]` unbounded → context overflow at provider level. Post-fix: bridge log emits structured event `context-pruner: trimmed accumulated messages to fit budget {model, configured_ctx, budget, initial_tokens, after_tokens, dropped}` whenever trim fires.
 
 **Live verified 2026-04-29** (image `develop-921771c`): synthetic 30-turn `qwen3:8b` conversation (27,394 initial tokens; budget 18,636) trimmed to 18,592 tokens, 19 messages dropped; model answered the final user query correctly (system + last 5 turns preserved).
 
@@ -77,7 +77,7 @@ SDD: `.specs/veronex/history/conversation-context-compression.md`.
 Code: `context_compressor::compress_turn()` — `application/use_cases/inference/context_compressor.rs`
 
 1. Build compression prompt (system prompt: lossless summarizer, ≤120 words)
-2. Call Ollama `/api/chat` with compression model
+2. Call chat-completion with compression model
 3. On success: rewrite `TurnRecord.compressed` in S3 with `CompressedTurn { summary, compression_model, original_tokens, compressed_tokens, ratio }`
 4. Invalidate Valkey conversation cache (`DEL veronex:conv:{id}`)
 5. On failure: log warn, leave raw turn in S3 (fail-open)
@@ -91,9 +91,9 @@ Trigger interval: `compression_trigger_turns` (default 1 = every turn).
 
 Code: `context_compressor::compress_input_inline()`
 
-If the latest user message exceeds 50% of context budget (`configured_ctx × context_budget_ratio × 0.5`), compress it before submission. Replaces `last_user` message content in the outgoing Ollama messages array.
+If the latest user message exceeds 50% of context budget (`configured_ctx × context_budget_ratio × 0.5`), compress it before submission. Replaces `last_user` message content in the outgoing llama-server messages array.
 
-Applied in `openai_handlers.rs` and `ollama_compat_handlers.rs` after Ollama message conversion.
+Applied in `openai_handlers.rs` after chat-completion message conversion. (The legacy Ollama-compat handler that also called this point was removed.)
 
 ---
 
@@ -156,7 +156,7 @@ pub struct HandoffTurn {
 
 ## Response Fields
 
-Non-streaming `ChatCompletion` and Ollama `/api/chat` responses include:
+Non-streaming `ChatCompletion` and chat-completion responses include:
 
 | Field | Type | Notes |
 |-------|------|-------|
@@ -180,7 +180,7 @@ Context warning badge — `api-test-form.tsx` `getMultiturnWarnings()` fires `co
 | Key | Value | TTL | Written by |
 |-----|-------|-----|-----------|
 | `veronex:conv:{conversation_id}` | S3-cached conversation record | 7d | S3 write-through |
-| `veronex:ollama:ctx:{provider_id}:{model}` | `{"configured_ctx": u32, "max_ctx": u32}` | 600s | capacity analyzer |
+| `veronex:model:ctx:{provider_id}:{model}` | `{"configured_ctx": u32, "max_ctx": u32}` | 600s | capacity analyzer |
 
 → See `infra/distributed.md`, `infra/hot-path-caching.md`
 → Flow: `flows/context-compression.md`

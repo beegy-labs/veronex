@@ -158,7 +158,7 @@ export const ApiTestForm = memo(function ApiTestForm({
             <SelectTrigger id="test-model" aria-label={t('test.model')}>
               <SelectValue placeholder={
                 availableModels.length === 0
-                  ? (isGeminiProvider ? t('test.geminiModelEmpty') : t('test.ollamaTestNoModels'))
+                  ? (isGeminiProvider ? t('test.geminiModelEmpty') : t('test.llamaServerTestNoModels'))
                   : t('test.modelSelect')
               } />
             </SelectTrigger>
@@ -205,12 +205,6 @@ export const ApiTestForm = memo(function ApiTestForm({
           <SelectTrigger id="test-endpoint" aria-label={t('test.endpoint')}><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="/v1/chat/completions" className="vds-text-xs vds-font-mono">/v1/chat/completions</SelectItem>
-            {!isGeminiProvider && (
-              <>
-                <SelectItem value="/api/chat" className="vds-text-xs vds-font-mono">/api/chat</SelectItem>
-                <SelectItem value="/api/generate" className="vds-text-xs vds-font-mono">/api/generate</SelectItem>
-              </>
-            )}
             {isGeminiProvider && (
               <SelectItem value="/v1beta/models">{t('test.endpointGemini')}</SelectItem>
             )}

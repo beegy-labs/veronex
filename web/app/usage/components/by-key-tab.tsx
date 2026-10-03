@@ -26,7 +26,7 @@ import {
 import { DataTable } from '@/components/data-table'
 import { useTranslation } from '@/i18n'
 import { KeyUsageModal } from '@/components/key-usage-modal'
-import { fmtHourLabel } from '@/lib/date'
+import { toUsageChartData } from '@/lib/usage-chart'
 import { useTimezone } from '@/components/timezone-provider'
 import { PROVIDER_BADGE, PROVIDER_COLORS } from '@/lib/constants'
 import { tokens } from '@/lib/design-tokens'
@@ -51,15 +51,7 @@ export function ByKeyTab({ breakdown, keys, hours }: ByKeyTabProps) {
   const { data: keyModels } = useQuery(keyModelBreakdownQuery(activeKeyId, hours))
 
   const chartData = useMemo(() =>
-    (hourly ?? []).map((h) => ({
-      hour:     fmtHourLabel(h.hour, tz),
-      tokens:   h.total_tokens,
-      prompt:   h.prompt_tokens,
-      compl:    h.completion_tokens,
-      requests: h.request_count,
-      success:  h.success_count,
-      errors:   h.error_count,
-    })),
+    toUsageChartData(hourly, tz),
     [hourly, tz],
   )
 

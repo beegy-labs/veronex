@@ -21,6 +21,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
     async fn get(&self) -> Result<LabSettings> {
         #[derive(sqlx::FromRow)]
         struct Row {
+            builder_enabled: bool,
             gemini_function_calling: bool,
             max_images_per_request: i32,
             max_image_b64_bytes: i32,
@@ -41,6 +42,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
 
         let row = sqlx::query_as::<_, Row>(
             r#"SELECT
+                builder_enabled,
                 gemini_function_calling,
                 max_images_per_request,
                 max_image_b64_bytes,
@@ -65,6 +67,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
 
         Ok(row
             .map(|r| LabSettings {
+                builder_enabled: r.builder_enabled,
                 gemini_function_calling: r.gemini_function_calling,
                 max_images_per_request: r.max_images_per_request,
                 max_image_b64_bytes: r.max_image_b64_bytes,
@@ -90,6 +93,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
         // pair instead of COALESCE, so that Some(None) can explicitly clear the column.
         sqlx::query(
             r#"UPDATE lab_settings SET
+                builder_enabled             = COALESCE($18, builder_enabled),
                 gemini_function_calling     = COALESCE($1,  gemini_function_calling),
                 max_images_per_request      = COALESCE($2,  max_images_per_request),
                 max_image_b64_bytes         = COALESCE($3,  max_image_b64_bytes),
@@ -125,6 +129,7 @@ impl LabSettingsRepository for PostgresLabSettingsRepository {
         .bind(patch.vision_model.and_then(|v| v))
         .bind(patch.handoff_enabled)
         .bind(patch.handoff_threshold)
+        .bind(patch.builder_enabled)
         .execute(&self.pool)
         .await
         .context("failed to update lab_settings")?;

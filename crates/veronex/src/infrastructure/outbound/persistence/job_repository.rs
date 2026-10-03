@@ -1,3 +1,5 @@
+#![allow(clippy::needless_borrows_for_generic_args, clippy::collapsible_if)]
+
 use anyhow::{Context, Result};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};

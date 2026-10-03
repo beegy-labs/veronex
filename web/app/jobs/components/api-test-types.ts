@@ -12,7 +12,7 @@ export interface OpenAIChunk {
 
 export type ProviderOption = { value: string; label: string; isGemini: boolean }
 export type StreamStatus = 'idle' | 'streaming' | 'done' | 'error'
-export type Endpoint = '/v1/chat/completions' | '/api/chat' | '/api/generate' | '/v1beta/models'
+export type Endpoint = '/v1/chat/completions' | '/v1beta/models'
 
 /// One MCP tool invocation observed during streaming.
 /// SDD: `.specs/veronex/inference-mcp-streaming-first.md` §7.

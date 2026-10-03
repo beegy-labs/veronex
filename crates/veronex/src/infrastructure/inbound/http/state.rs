@@ -28,10 +28,18 @@ use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepo
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
 use crate::application::ports::outbound::model_capacity_repository::ModelCapacityRepository;
-use crate::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
-use crate::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::application::ports::outbound::concurrency_port::VramPoolPort;
+use crate::application::ports::outbound::app_config_repository::AppConfigRepository;
+use crate::application::ports::outbound::blob_registry::BlobRegistry;
+use crate::application::ports::outbound::install_attempts_log::InstallAttemptsLog;
+use crate::application::ports::outbound::llm_node_repository::LlmNodeRepository;
+use crate::application::ports::outbound::modelfile_registry::ModelfileRegistry;
+use crate::application::ports::outbound::system_settings_repository::SystemSettingsRepository;
+use crate::infrastructure::outbound::capacity::admission::AimdAdmission;
+use crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry;
+use crate::infrastructure::outbound::model_store::{BlobStore, InstallOrchestrator, LocalPv};
+use crate::infrastructure::outbound::process_manager::{ActivityTracker, ProcessManager};
 use crate::infrastructure::outbound::capacity::thermal::ThermalThrottleMap;
 use crate::infrastructure::outbound::circuit_breaker::CircuitBreakerMap;
 use crate::infrastructure::outbound::hw_metrics::CpuSnapshot;
@@ -57,8 +65,6 @@ pub struct AppState {
     pub model_selection_repo: Arc<dyn ProviderModelSelectionRepository>,
     pub global_model_settings_repo: Arc<dyn GlobalModelSettingsRepository>,
     pub api_key_provider_access_repo: Arc<dyn ApiKeyProviderAccessRepository>,
-    pub ollama_model_repo: Arc<dyn OllamaModelRepository>,
-    pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
     pub valkey_pool: Option<fred::clients::Pool>,
     /// Analytics repository — proxies queries through veronex-analytics service.
     /// `None` when ANALYTICS_URL is not configured.
@@ -79,8 +85,6 @@ pub struct AppState {
     pub capacity_settings_repo: Arc<dyn CapacitySettingsRepository>,
     /// Fire to trigger an immediate sync run (bypasses sync interval).
     pub sync_trigger: Arc<Notify>,
-    /// Ollama URL used by the capacity analyzer (CAPACITY_ANALYZER_OLLAMA_URL).
-    pub analyzer_url: String,
     /// Broadcast channel sender for real-time job status events.
     /// Handlers subscribe by calling `.subscribe()` on this sender.
     pub job_event_tx: Arc<broadcast::Sender<JobStatusEvent>>,
@@ -151,4 +155,35 @@ pub struct AppState {
     pub clickhouse_user: Option<Arc<str>>,
     pub clickhouse_password: Option<Arc<str>>,
     pub clickhouse_db: Option<Arc<str>>,
+    // ── Phase 2 — Modelfile registry + CAS blob store ────────────────────
+    /// Runtime app config (first-install wizard) — None only when
+    /// VERONEX_ENCRYPTION_KEY is unset (which would already prevent the
+    /// server from running in any production-grade configuration).
+    pub app_config_repo: Option<Arc<dyn AppConfigRepository>>,
+    /// Modelfile registry. `None` until Phase 2 wiring lands in `main.rs`
+    /// (and `test_support`); admin endpoints return 503 when absent so the
+    /// AppState construction sites that haven't been updated still compile.
+    pub modelfile_registry: Option<Arc<dyn ModelfileRegistry>>,
+    pub blob_registry: Option<Arc<dyn BlobRegistry>>,
+    pub install_attempts_log: Option<Arc<dyn InstallAttemptsLog>>,
+    pub install_orchestrator: Option<InstallOrchestrator>,
+    pub blob_store: Option<BlobStore>,
+    pub local_pv: Option<LocalPv>,
+    // ── Phase 3 — managed-mode foundation ──────────────────────────────
+    /// `llm_nodes` repo — admin endpoints + ProcessManager. `None` only
+    /// when the binary is built without Postgres (no current path).
+    pub llm_node_repo: Option<Arc<dyn LlmNodeRepository>>,
+    /// `system_settings` repo — runtime knobs (idle TTL, warmup tokens).
+    pub system_settings_repo: Option<Arc<dyn SystemSettingsRepository>>,
+    /// Phase 3 — managed-process orchestrator. Cheap to clone.
+    pub process_manager: ProcessManager,
+    /// Phase 3 — per-provider in-flight + idle tracking. Shared with
+    /// the dispatcher so each request bumps `RequestGuard`.
+    pub activity_tracker: ActivityTracker,
+    /// Phase 4 — AIMD window registry (read by admission, written by
+    /// the analyzer loop).
+    pub aimd_registry: AimdRegistry,
+    /// Phase 4 — admission gate. The dispatcher calls `acquire()`
+    /// before invoking the adapter; `None` from acquire surfaces 503.
+    pub aimd_admission: AimdAdmission,
 }

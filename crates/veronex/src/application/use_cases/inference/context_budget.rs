@@ -6,7 +6,7 @@
 //! `messages[]` array fits under the model's effective budget before calling
 //! the LLM.
 //!
-//! Rationale for `cl100k_base`: Ollama provides no `/tokenize` endpoint, and
+//! Rationale for `cl100k_base`: the upstream chat-completion API provides no `/tokenize` endpoint, and
 //! per-call LLM round-trips just to count tokens are too expensive at the
 //! gateway-loop hot path. `cl100k_base` is the OpenAI tokenizer; for Qwen /
 //! Llama families it produces counts within ±10% of the true tokenizer.
@@ -187,7 +187,7 @@ mod tests {
     }
 
     #[test]
-    fn budget_at_default_ollama_8k() {
+    fn budget_at_default_llama_8k() {
         let b = budget_for_context(8192, 0.75);
         // 75% of 8192 = 6144, minus 1024 = 5120
         assert_eq!(b, 5120);

@@ -18,8 +18,8 @@
 //! ```
 //!
 //! The bridge adapter (`McpBridgeAdapter`) that wires everything together
-//! lives inside `veronex` itself because it depends on `AppState`,
-//! `OllamaAdapter`, and `analytics_repo`.
+//! lives inside `veronex` itself because it depends on `AppState` and
+//! `analytics_repo`.
 
 pub mod circuit_breaker;
 pub mod client;

@@ -7,8 +7,10 @@ import ko from '../messages/ko.json'
 import ja from '../messages/ja.json'
 
 export function detectLocale(): Locale {
-  if (typeof window === 'undefined') return defaultLocale
-  const stored = localStorage.getItem(localStorageKey)
+  if (typeof window === 'undefined' || typeof window.localStorage?.getItem !== 'function') {
+    return defaultLocale
+  }
+  const stored = window.localStorage.getItem(localStorageKey)
   if (stored && locales.includes(stored as Locale)) return stored as Locale
   const browser = navigator.language.slice(0, 2)
   if (locales.includes(browser as Locale)) return browser as Locale

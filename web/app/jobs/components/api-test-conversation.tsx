@@ -186,7 +186,7 @@ export const ApiTestConversation = memo(function ApiTestConversation({
                 <div className="vds-max-w-[80%] vds-rounded-2xl vds-rounded-tr-sm vds-px-3 vds-py-2 vds-bg-primary vds-text-primary-fg vds-text-sm">
                   {msg.images && msg.images.length > 0 && (
                     <div className="vds-flex vds-gap-1 vds-mb-2 vds-flex-wrap">
-                      {msg.images.map((b64, j) => (
+                      {msg.images.map((b64) => (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img key={b64.slice(0, 16)} src={`data:image/jpeg;base64,${b64}`} alt="" className="vds-h-12 vds-w-12 vds-rounded vds-object-cover" />
                       ))}

@@ -1,7 +1,9 @@
 mod background;
 mod config;
+pub mod model_store;
 pub mod repositories;
 
 pub use background::{InfraContext, spawn_background_tasks};
 pub use config::AppConfig;
+pub use model_store::wire as wire_model_store;
 pub use repositories::wire_repositories;

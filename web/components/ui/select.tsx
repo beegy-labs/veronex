@@ -293,7 +293,3 @@ export function SelectItem({ value, disabled, className, children, ...rest }: Se
 export const SelectSeparator: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({ className, ...props }) => (
   <div role="none" className={cn('vds-h-px vds-bg-border-subtle vds-my-1', className)} {...props} />
 )
-
-// Legacy aliases for any callers still using them.
-export const SelectScrollUpButton: React.FC<React.HTMLAttributes<HTMLDivElement>> = () => null
-export const SelectScrollDownButton: React.FC<React.HTMLAttributes<HTMLDivElement>> = () => null

@@ -12,8 +12,6 @@ use crate::application::ports::outbound::gemini_repository::GeminiPolicyReposito
 use crate::application::ports::outbound::gemini_repository::GeminiSyncConfigRepository;
 use crate::application::ports::outbound::gpu_server_registry::GpuServerRegistry;
 use crate::application::ports::outbound::llm_provider_registry::LlmProviderRegistry;
-use crate::application::ports::outbound::ollama_model_repository::{ModelPage, OllamaModelRepository, OllamaModelWithCount, ProviderPage};
-use crate::application::ports::outbound::ollama_sync_job_repository::{OllamaSyncJob, OllamaSyncJobRepository};
 use crate::application::ports::outbound::provider_vram_budget_repository::{ProviderVramBudget, ProviderVramBudgetRepository};
 use crate::application::ports::outbound::session_repository::SessionRepository;
 use crate::domain::entities::{Account, ApiKey, GeminiRateLimitPolicy, GpuServer, LlmProvider, Session};
@@ -216,33 +214,6 @@ impl crate::application::ports::outbound::api_key_provider_access::ApiKeyProvide
     async fn has_restrictions(&self, _api_key_id: Uuid) -> Result<bool> { Ok(false) }
 }
 
-pub(crate) struct MockOllamaModelRepo;
-
-#[async_trait]
-impl OllamaModelRepository for MockOllamaModelRepo {
-    async fn sync_provider_models(&self, _provider_id: Uuid, _model_names: &[String]) -> Result<()> { Ok(()) }
-    async fn list_all(&self) -> Result<Vec<String>> { Ok(vec![]) }
-    async fn list_with_counts(&self) -> Result<Vec<OllamaModelWithCount>> { Ok(vec![]) }
-    async fn list_with_counts_page(&self, _search: &str, _limit: i64, _offset: i64) -> Result<ModelPage> {
-        Ok(ModelPage { items: vec![], total: 0 })
-    }
-    async fn providers_for_model(&self, _model_name: &str) -> Result<Vec<Uuid>> { Ok(vec![]) }
-    async fn providers_info_for_model_page(&self, _model_name: &str, _search: &str, _limit: i64, _offset: i64) -> Result<ProviderPage> {
-        Ok(ProviderPage { items: vec![], total: 0 })
-    }
-    async fn models_for_provider(&self, _provider_id: Uuid) -> Result<Vec<String>> { Ok(vec![]) }
-}
-
-pub(crate) struct MockOllamaSyncJobRepo;
-
-#[async_trait]
-impl OllamaSyncJobRepository for MockOllamaSyncJobRepo {
-    async fn create(&self, _total_providers: i32) -> Result<Uuid> { Ok(Uuid::now_v7()) }
-    async fn update_progress(&self, _id: Uuid, _result: serde_json::Value) -> Result<()> { Ok(()) }
-    async fn complete(&self, _id: Uuid) -> Result<()> { Ok(()) }
-    async fn get_latest(&self) -> Result<Option<OllamaSyncJob>> { Ok(None) }
-}
-
 pub(crate) struct MockAccountRepo;
 
 #[async_trait]
@@ -367,8 +338,6 @@ pub(crate) fn make_app() -> axum::Router {
         model_selection_repo: Arc::new(MockModelSelectionRepo),
         global_model_settings_repo: Arc::new(MockGlobalModelSettingsRepo),
         api_key_provider_access_repo: Arc::new(MockApiKeyProviderAccessRepo),
-        ollama_model_repo: Arc::new(MockOllamaModelRepo),
-        ollama_sync_job_repo: Arc::new(MockOllamaSyncJobRepo),
         valkey_pool: None,
         analytics_repo: None,
         session_repo: Arc::new(MockSessionRepo),
@@ -379,7 +348,6 @@ pub(crate) fn make_app() -> axum::Router {
         capacity_repo: Arc::new(MockCapacityRepo),
         capacity_settings_repo: Arc::new(MockCapacitySettingsRepo),
         sync_trigger: Arc::new(tokio::sync::Notify::new()),
-        analyzer_url: String::new(),
         job_event_tx: Arc::new(tokio::sync::broadcast::channel(1).0),
         event_ring_buffer: Arc::new(std::sync::RwLock::new(std::collections::VecDeque::new())),
         stats_tx: Arc::new(tokio::sync::broadcast::channel(1).0),
@@ -406,6 +374,24 @@ pub(crate) fn make_app() -> axum::Router {
         clickhouse_db: None,
         vespa_environment: Arc::from(""),
         vespa_tenant_id: Arc::from(""),
+        app_config_repo: None,
+        modelfile_registry: None,
+        blob_registry: None,
+        install_attempts_log: None,
+        install_orchestrator: None,
+        blob_store: None,
+        local_pv: None,
+        llm_node_repo: None,
+        system_settings_repo: None,
+        process_manager: crate::infrastructure::outbound::process_manager::ProcessManager::new(
+            crate::infrastructure::outbound::process_manager::ActivityTracker::new(),
+            crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new(),
+        ),
+        activity_tracker: crate::infrastructure::outbound::process_manager::ActivityTracker::new(),
+        aimd_registry: crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new(),
+        aimd_admission: crate::infrastructure::outbound::capacity::admission::AimdAdmission::new(
+            crate::infrastructure::outbound::capacity::aimd_registry::AimdRegistry::new(),
+        ),
     };
     // Inject a fake InferCaller extension so handlers that extract it work in tests.
     router::build_api_router()

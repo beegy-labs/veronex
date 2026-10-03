@@ -88,7 +88,7 @@ export default function AuditPage() {
             <SelectItem value="all">{t('audit.allResources')}</SelectItem>
             <SelectItem value="account">account</SelectItem>
             <SelectItem value="api_key">api_key</SelectItem>
-            <SelectItem value="ollama_provider">ollama_provider</SelectItem>
+            <SelectItem value="llm_provider">llm_provider</SelectItem>
             <SelectItem value="gemini_provider">gemini_provider</SelectItem>
             <SelectItem value="gpu_server">gpu_server</SelectItem>
           </SelectContent>

@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if)]
+
 use std::sync::Arc;
 
 use crate::application::ports::outbound::lab_settings_repository::{LabSettings, LabSettingsRepository};
@@ -33,7 +35,7 @@ pub enum CompressionRoute {
 pub struct CompressParams {
     /// Compression model name (e.g. `"qwen2.5:3b"`).
     pub model: String,
-    /// Base URL of the target Ollama provider.
+    /// Base URL of the target llama-server provider.
     pub provider_url: String,
     /// Per-call timeout in seconds.
     pub timeout_secs: u64,
@@ -57,10 +59,10 @@ impl CompressionRoute {
 /// Decide where to run compression for the just-completed turn.
 ///
 /// Decision priority (matches SDD §CompressionRouter Policy):
-/// 1. `lab.compression_model` set → `AsyncDedicated` (first active Ollama provider)
-/// 2. Single Ollama provider → `SyncInline` (deferred to Phase 4 context assembly)
-/// 3. Multiple providers → `AsyncIdle` (first active Ollama provider)
-/// 4. No active Ollama providers → `Skip`
+/// 1. `lab.compression_model` set → `AsyncDedicated` (first active llama-server provider)
+/// 2. Single llama-server provider → `SyncInline` (deferred to Phase 4 context assembly)
+/// 3. Multiple providers → `AsyncIdle` (first active llama-server provider)
+/// 4. No active llama-server providers → `Skip`
 pub async fn decide(
     registry: &dyn LlmProviderRegistry,
     lab: &LabSettings,
@@ -73,18 +75,18 @@ pub async fn decide(
         }
     };
 
-    let ollama: Vec<_> = providers
+    let llama_providers: Vec<_> = providers
         .into_iter()
-        .filter(|p| p.provider_type == ProviderType::Ollama)
+        .filter(|p| p.provider_type == ProviderType::LlamaServer)
         .collect();
 
-    if ollama.is_empty() {
+    if llama_providers.is_empty() {
         return CompressionRoute::Skip;
     }
 
-    // Priority 1: dedicated compression model → route to first active Ollama provider
+    // Priority 1: dedicated compression model → route to first active llama-server provider
     if lab.compression_model.is_some() {
-        if let Some(p) = ollama.first() {
+        if let Some(p) = llama_providers.first() {
             return CompressionRoute::AsyncDedicated {
                 provider_url: p.url.clone(),
             };
@@ -92,13 +94,13 @@ pub async fn decide(
     }
 
     // Priority 2: single provider → defer to Phase 4 inline
-    if ollama.len() == 1 {
+    if llama_providers.len() == 1 {
         return CompressionRoute::SyncInline;
     }
 
     // Priority 3: multiple providers → pick first (per-provider active_requests tracking
     // is a future enhancement; skip-on-busy logic added in Phase 4)
-    if let Some(p) = ollama.first() {
+    if let Some(p) = llama_providers.first() {
         return CompressionRoute::AsyncIdle {
             provider_url: p.url.clone(),
         };
@@ -110,6 +112,7 @@ pub async fn decide(
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
     use async_trait::async_trait;
@@ -118,11 +121,11 @@ mod tests {
     use crate::domain::entities::LlmProvider;
     use crate::domain::enums::{LlmProviderStatus, ProviderType};
 
-    fn ollama_provider(id: Uuid, url: &str) -> LlmProvider {
+    fn llama_providers_provider(id: Uuid, url: &str) -> LlmProvider {
         LlmProvider {
             id,
             name: "test".to_string(),
-            provider_type: ProviderType::Ollama,
+            provider_type: ProviderType::LlamaServer,
             url: url.to_string(),
             api_key_encrypted: None,
             total_vram_mb: 0,
@@ -132,6 +135,9 @@ mod tests {
             num_parallel: 4,
             status: LlmProviderStatus::Online,
             registered_at: chrono::Utc::now(),
+            mode: "external".to_string(),
+            node_id: None,
+            idle_ttl_seconds_override: None,
         }
     }
 
@@ -163,14 +169,14 @@ mod tests {
 
     #[tokio::test]
     async fn single_provider_no_model_returns_sync_inline() {
-        let reg = MockRegistry(vec![ollama_provider(Uuid::now_v7(), "http://localhost:11434")]);
+        let reg = MockRegistry(vec![llama_providers_provider(Uuid::now_v7(), "http://localhost:11434")]);
         let route = decide(&reg, &lab_no_model()).await;
         assert!(matches!(route, CompressionRoute::SyncInline));
     }
 
     #[tokio::test]
     async fn single_provider_with_dedicated_model_returns_async_dedicated() {
-        let reg = MockRegistry(vec![ollama_provider(Uuid::now_v7(), "http://localhost:11434")]);
+        let reg = MockRegistry(vec![llama_providers_provider(Uuid::now_v7(), "http://localhost:11434")]);
         let route = decide(&reg, &lab_with_model()).await;
         assert!(matches!(route, CompressionRoute::AsyncDedicated { .. }));
     }
@@ -178,8 +184,8 @@ mod tests {
     #[tokio::test]
     async fn multiple_providers_no_model_returns_async_idle() {
         let reg = MockRegistry(vec![
-            ollama_provider(Uuid::now_v7(), "http://host1:11434"),
-            ollama_provider(Uuid::now_v7(), "http://host2:11434"),
+            llama_providers_provider(Uuid::now_v7(), "http://host1:11434"),
+            llama_providers_provider(Uuid::now_v7(), "http://host2:11434"),
         ]);
         let route = decide(&reg, &lab_no_model()).await;
         assert!(matches!(route, CompressionRoute::AsyncIdle { .. }));
@@ -189,8 +195,8 @@ mod tests {
     async fn multiple_providers_with_model_returns_async_dedicated() {
         let id = Uuid::now_v7();
         let reg = MockRegistry(vec![
-            ollama_provider(id, "http://host1:11434"),
-            ollama_provider(Uuid::now_v7(), "http://host2:11434"),
+            llama_providers_provider(id, "http://host1:11434"),
+            llama_providers_provider(Uuid::now_v7(), "http://host2:11434"),
         ]);
         let route = decide(&reg, &lab_with_model()).await;
         assert!(matches!(route, CompressionRoute::AsyncDedicated { .. }));

@@ -1,57 +1,50 @@
-# Web -- Providers Page: Ollama Components
+# Web -- Providers Page: llama-server Components
 
 > SSOT | **Last Updated**: 2026-03-08 | Companion to `providers.md`
 
-## OllamaServerMetrics
+## LlamaServerMetrics
 
-Component `OllamaServerMetrics({ serverId, gpuIndex })` renders below GPU/VRAM info for rows with a linked server.
+Component `LlamaServerMetrics({ serverId, gpuIndex })` renders below GPU/VRAM info for rows with a linked server.
 
 - Query: `['server-metrics', serverId]` via `api.serverMetrics(serverId)`, `refetchInterval: 30_000`, `retry: false`
 - Displays (compact line): `MEM used/total`, temp (red >=85, amber >=70, grey otherwise), power watts
 - If `scrape_ok === false` or error: italic `"unreachable"` in red. Hidden when no server linked.
 
-## OllamaProviderModelsModal
+## LlamaServerProviderModelsModal
 
 Opened by Model Selection on a provider row. Switch toggle UI per synced model.
 
 | Aspect | Detail |
 |--------|--------|
-| Data | `GET /v1/providers/{id}/selected-models` -- `ollama_models` merged with `provider_selected_models`, default `is_enabled = true` |
+| Data | `GET /v1/providers/{id}/selected-models` -- Modelfile registry rows merged with `provider_selected_models`, default `is_enabled = true` |
 | Toggle | `PATCH /v1/providers/{id}/selected-models/{model_name}` `{ is_enabled: bool }` |
 | Query key | `['selected-models', providerId]` |
 | Update | Optimistic: switch flips immediately, reverts on error |
-| Empty state | `providers.ollama.noProviderModels` |
-| Enabled count | `providers.ollama.enabledCount` (`X/Y enabled`) |
+| Empty state | `providers.llama-server.noProviderModels` |
+| Enabled count | `providers.llama-server.enabledCount` (`X/Y enabled`) |
 
 ---
 
-## OllamaSyncSection -- Global Model Sync
+## LlamaServerSyncSection / LlamaServerModelProvidersModal (legacy)
 
-| Query | Key | Options |
-|-------|-----|---------|
-| Sync job | `['ollama-sync-status']` via `api.ollamaSyncStatus` | `refetchInterval`: 2000 when running, else false; `retry: false` |
-| Models | `['ollama-models']` via `api.ollamaModels` | `staleTime: 30_000` |
+The Ollama-era global model-sync UI (single "Sync All" button that scraped
+every provider's `/api/tags` and persisted into `ollama_models`) was
+removed. With llama-server's one-process-per-model design there is no
+fleet-wide model list to scrape — models are catalogued centrally via the
+**Modelfile Registry** (`POST /v1/admin/models`) and providers opt in via
+`provider_selected_models`.
 
-- **Sync All**: `POST /v1/ollama/models/sync` -- invalidates `['ollama-sync-status']` + `['ollama-models']`
-- Button disabled while running
-- Model list: searchable, filtered client-side, shows filtered/total count
-- Each row clickable -- opens `OllamaModelProvidersModal`
-
-## OllamaModelProvidersModal
-
-| Aspect | Detail |
-|--------|--------|
-| Query key | `['ollama-model-providers', modelName]`, `staleTime: 30_000` |
-| Endpoint | `GET /v1/ollama/models/{model_name}/providers` |
-| Pagination | `PAGE_SIZE = 8`; Prev/Next; page resets when search changes |
-| Search | Filters by name OR url (host portion) |
-| Status | Dot + badge: green=online, amber=degraded, red=offline |
+UI surfaces that survived:
+- Per-provider model-toggle dialog (`PATCH /v1/providers/{id}/selected-models/{model}`)
+- Setup wizard's first-run model registration (`frontend/pages/setup.md`)
+- Admin modelfile install flow (`/v1/admin/models/{id}/install/*`,
+  surfaced via `frontend/pages/setup.md` + future modelfile admin page)
 
 ---
 
-## OllamaCapacitySection -- VRAM Pool View
+## LlamaServerCapacitySection -- VRAM Pool View
 
-No props. Placed after `<OllamaSyncSection />` in OllamaTab.
+No props. Placed after `<LlamaServerSyncSection />` in LlamaServerTab.
 
 | Type | Key | Endpoint |
 |------|-----|----------|
@@ -64,8 +57,8 @@ No props. Placed after `<OllamaSyncSection />` in OllamaTab.
 
 | Field | Detail |
 |-------|--------|
-| `providerFilter` | `<select>` filters analyzer model list by provider type (all/ollama/gemini); Gemini hidden when `gemini_function_calling` lab feature disabled |
-| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (Ollama/Gemini). Backend: Ollama via `/api/tags`, Gemini via `gemini_models` DB with Gemini API fallback when DB empty |
+| `providerFilter` | `<select>` filters analyzer model list by provider type (all/llama-server/gemini); Gemini hidden when `gemini_function_calling` lab feature disabled |
+| `analyzerModel` | `<select>` from `settings.available_models` grouped by provider type (llama-server/Gemini). Backend: llama-server pulled from the Modelfile registry (`modelfiles` table), Gemini via `gemini_models` DB with Gemini API fallback when DB empty |
 | `syncEnabled` | Switch; off = auto-sync paused (manual sync still works) |
 | `syncIntervalSecs` | Number input (min: 60, step: 30) |
 | `probePermits` | Number input; AIMD probe: +N (probe up), -N (probe down), 0=disabled |

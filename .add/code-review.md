@@ -50,7 +50,7 @@ All code is written and reviewed against these targets:
 
 | Axis | Target |
 | ---- | ------ |
-| Providers (Ollama servers) | **10,000** |
+| Providers (llama-server nodes) | **10,000** |
 | Concurrent requests (TPS) | **1,000,000** |
 
 Every review must validate that no code path introduces O(N) DB scans, sequential awaits, or unbounded memory growth at these scales. Flag any violation as P1 or higher.

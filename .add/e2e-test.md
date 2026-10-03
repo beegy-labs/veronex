@@ -97,7 +97,7 @@ bash test/scripts/e2e/12-mcp.sh        # creates unique slug via E2E_RUN_ID=$$
 | 03-inference | Inference pipeline |
 | 04-crud | REST CRUD operations |
 | 05-security | Auth, RBAC, rate limiting, SSRF |
-| 06-api-surface | OpenAI/Ollama/Gemini compat, audit |
+| 06-api-surface | OpenAI/llama-server/Gemini compat, audit |
 | 07-lifecycle | Job state machine |
 | 08-sdd-advanced | Stress test, AIMD |
 | 09-metrics-pipeline | OTel, Redpanda, veronex-consumer, ClickHouse |

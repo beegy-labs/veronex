@@ -10,6 +10,10 @@ impl DateTimeTool {
     pub fn new() -> Self { Self }
 }
 
+impl Default for DateTimeTool {
+    fn default() -> Self { Self::new() }
+}
+
 #[async_trait]
 impl Tool for DateTimeTool {
     fn spec(&self) -> Value {
@@ -88,4 +92,3 @@ fn weekday_name(wd: chrono::Weekday) -> &'static str {
         chrono::Weekday::Sun => "Sunday",
     }
 }
-

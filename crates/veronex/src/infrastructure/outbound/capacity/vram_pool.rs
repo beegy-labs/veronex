@@ -127,7 +127,7 @@ const SAFETY_DECAY_PERMIL: u32 = 50;
 /// Maps provider_id → ProviderVramState.
 ///
 /// Global VRAM pool: any model combination fits as long as total VRAM allows.
-/// When total_vram == 0 (not probed), always allows requests (delegates to Ollama).
+/// When total_vram == 0 (not probed), always allows requests (delegates to upstream).
 #[derive(Clone)]
 pub struct VramPool {
     providers: Arc<DashMap<Uuid, Arc<ProviderVramState>>>,
@@ -258,7 +258,7 @@ impl VramPoolPort for VramPool {
         let state = self.get_or_create(provider_id);
         let total = state.total_mb.load(Ordering::Acquire);
 
-        // If total VRAM is 0 (not probed), always allow — delegate capacity to Ollama.
+        // If total VRAM is 0 (not probed), always allow — delegate capacity to upstream.
         if total == 0 {
             // Create a zero-cost permit that tracks request count only.
             // Cold start: new models default to max_concurrent=1 until learned.
@@ -854,7 +854,7 @@ impl VramPoolPort for VramPool {
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
     use proptest::prelude::*;

@@ -1,162 +1,108 @@
 # Model Lifecycle (Phase 1 ↔ Phase 2 SoD)
 
-> **Last Updated**: 2026-04-28
+> **Last Updated**: 2026-05-10
 
-`runner::run_job` splits provider work into two distinct phases. Phase 1
-(`ensure_ready`) is observable in its own span/metric; Phase 2 (`stream_tokens`)
-runs only after Phase 1 reports success. SDD: `.specs/veronex/history/inference-lifecycle-sod.md` (archived 2026-04-28 after live verify).
-
----
+`runner::run_job` still splits provider work into two phases, but the
+heavy "Phase 1 probe loop" that existed in the Ollama era is gone — with
+llama-server running one model per process, lifecycle = process
+lifecycle. The probe/coalesce/`/api/ps` machinery moved to
+`ProcessManager`; the `ModelLifecyclePort` survives as a thin trait so
+the dispatcher keeps its phase boundary.
 
 ## State Machine — `ModelInstanceState`
 
 ```
-NotLoaded ──ensure_ready────▶ Loading ──probe completes──▶ Loaded
-    ▲                            │                           │
-    │                            │ probe fails               │ evict / KV reset
-    │                            ▼                           │
-    └────── reload ─────────  Failed                       Evicted
-                                 │ (terminal until restart)   │
-                                 │                            └── ensure_ready ──▶ Loading
+NotLoaded ──ensure_running──▶ Loading ──/health 200──▶ Loaded
+    ▲                            │                       │
+    │                            │ spawn / health fails  │ stop (idle reap, manual)
+    │                            ▼                       │
+    └─── ProcessManager.stop  Failed                  Evicted
+                                 │ (admin alert)         │
+                                 │                       └── ensure_running ──▶ Loading
                                  ▼
                               (op alert)
 ```
 
 | State | Meaning |
 |-------|---------|
-| `NotLoaded` | model never probed on this provider, or evicted from VRAM |
-| `Loading` | a probe is in flight; concurrent calls coalesce on the same `LoadInFlight` slot |
-| `Loaded` | weights + KV cache resident, `keep_alive` window active |
-| `Failed` | probe surfaced `LifecycleError`; CB increments; ops paged |
-| `Evicted` | VRAM reclaimed (manual or thermal); next request re-enters `Loading` |
+| `NotLoaded` | no llama-server process for `(provider, model)` yet |
+| `Loading` | `ProcessManager.ensure_running` in flight; concurrent callers wait on the per-provider `Mutex` |
+| `Loaded` | process running, `/health` 200, AIMD window registered |
+| `Failed` | spawn or health probe failed; `RunningProcess.state = Failed`; admin must clear |
+| `Evicted` | `IdleManager` or admin called `stop`; next request re-enters `Loading` |
 
-Transitions are validated by `ModelInstanceState::can_transition_to` (`domain/value_objects.rs`).
+Transitions are driven by `ProcessManager` state in
+`infrastructure/outbound/process_manager/manager.rs::ProcessState`.
 
----
-
-## Phase 1 — `ensure_ready` (lifecycle)
+## Phase 1 — `ensure_ready` (lifecycle, thin)
 
 ```
 runner::run_job (post-VRAM reserve, pre-stream_tokens)
   │
-  ├── [MCP_LIFECYCLE_PHASE=off]? skip — implicit auto-load via stream_tokens
+  ├── [MCP_LIFECYCLE_PHASE=off]?  skip — process is already up
+  │                                (ProcessManager warmed it on dispatch)
   │
   └── [MCP_LIFECYCLE_PHASE=on]?
         │
         ▼
-   provider.ensure_ready(model)        ← LlmProviderPort super-trait method
+   provider.ensure_ready(model)        ← LlmProviderPort super-trait
         │
-        ├── 1. VramPool SSOT check (OllamaAdapter)
-        │     └── loaded_model_names contains(provider_id, model)?
-        │           ├── YES → LifecycleOutcome::AlreadyLoaded   (no HTTP)
-        │           └── NO  → enter coalescing path
+        ├── LlamaServerAdapter::ensure_ready
+        │     └── self.health() → SlotStatus
+        │           ├── 200 + ok    → LifecycleOutcome::AlreadyLoaded
+        │           ├── 200 + busy  → LifecycleError::ProviderError
+        │           └── err / 5xx   → LifecycleError::ProviderError
         │
-        ├── 2. Per-(provider, model) in-flight coalescing
-        │     in_flight_loads: DashMap<String, Arc<LoadInFlight>>
-        │     ├── slot occupied → wait on Notify → LoadCoalesced{waited_ms}
-        │     └── slot empty    → become leader → run probe
-        │
-        ├── 3. Probe (leader only) — concurrent observers via tokio::select!
-        │     ┌── probe_fut       POST /api/generate { num_predict:0,
-        │     │                                        keep_alive:"30m",
-        │     │                                        options:{num_ctx} }
-        │     │                     num_ctx resolved from sync SSOT (Valkey
-        │     │                     ollama_model_ctx → fabricate fallback) —
-        │     │                     MUST equal what stream_chat will send
-        │     │                     (otherwise ollama spawns a second runner
-        │     │                     subprocess for the same model — see
-        │     │                     `providers/ollama-impl.md` §"Context Length")
-        │     │                     reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)
-        │     │                     wins on success → LoadCompleted{duration_ms}
-        │     │                     wins on error   → ProviderError
-        │     │
-        │     ├── ps_poller       GET /api/ps every 5s (MissedTickBehavior::Delay)
-        │     │                     entry must satisfy size_vram > 0 AND
-        │     │                     names_match(model, entry.name)
-        │     │                     (`:latest` defaulting handled both ways)
-        │     │                     match → record_progress() (slot.last_progress_at)
-        │     │
-        │     ├── stall_fut       polls every 5s, no-op while last_progress_at == 0
-        │     │                     once first /api/ps confirm: fires when
-        │     │                     now − last_progress_at > 60s (post-load HTTP hang)
-        │     │
-        │     ├── progress_log    info!(model, elapsed_s, first_progress) every 30s
-        │     │                     (operator visibility on multi-minute loads)
-        │     │
-        │     └── hard_cap        sleep LIFECYCLE_LOAD_TIMEOUT + 5s → LoadTimeout
-        │
-        │     **Probe is NEVER cancelled** when stall/hard_cap wins the select.
-        │     Closing the connection mid-load triggers ollama
-        │     `client connection closed before server finished loading`
-        │     (ollama#8006). Only `reqwest::timeout` may terminate the probe.
-        │
-        ├── 4. Resolve slot
-        │     OnceCell stores Result<LifecycleOutcome, LifecycleError>
-        │     waiters wake via Notify and read the OnceCell
-        │
-        └── 5. On success → VramPool::record_loaded(provider_id, model)
-              On error   → LifecycleError variant returned, CB increments
+        └── GeminiAdapter::ensure_ready
+              └── always Ok(AlreadyLoaded) — cloud, no local lifecycle
 ```
 
-### `LifecycleOutcome`
+The legacy probe — `POST /api/generate { num_predict:0, keep_alive }`
+plus a `GET /api/ps` poller plus stall detection plus a `LoadInFlight`
+DashMap slot — was removed when veronex stopped speaking the Ollama API.
+The equivalent of the old "warm" guarantee is now upstream of dispatch:
+`ProcessManager.ensure_running` already spawned the process and polled
+`/health` until it succeeded before any job was claimed for it.
+
+### `LifecycleOutcome` (current)
 
 | Variant | When |
 |---------|------|
-| `AlreadyLoaded` | VramPool reports model present on this provider |
-| `LoadCompleted{duration_ms}` | leader probe returned 200 |
-| `LoadCoalesced{waited_ms}` | follower joined an in-flight slot and observed leader's success |
+| `AlreadyLoaded` | `/health` returned 200 + ready slot |
+| `LoadCompleted` | reserved on the trait; not emitted by the current adapters (`ProcessManager` owns spawn timing) |
+| `LoadCoalesced` | reserved on the trait; coalescing now happens at the `ProcessManager` Mutex level |
 
 ### `LifecycleError`
 
 | Variant | When |
 |---------|------|
-| `LoadTimeout(s)` | hard-cap fired (LIFECYCLE_LOAD_TIMEOUT 600s) |
-| `Stalled(s)` | post-`/api/ps`-confirm HTTP hang — `last_progress_at` non-zero **and** gap > LIFECYCLE_STALL_INTERVAL (60s). No-op while sentinel zero (cold-load silent phase) |
-| `ProviderError(msg)` | probe HTTP returned non-2xx, or transport error |
+| `LoadTimeout(s)` | reserved on the trait; `ProcessManager.ensure_running` enforces its own timeouts on `NodeClient.health` poll |
+| `Stalled(s)` | reserved on the trait; not emitted in the simplified adapter |
+| `ProviderError(msg)` | `/health` failed or returned non-ready status |
 | `CircuitOpen` | per-provider CB rejected before HTTP |
 | `ResourcesExhausted(msg)` | VramPool refused reservation (defensive — runner already gated) |
 
-### Stall semantics — the sentinel `last_progress_at == 0`
-
-ollama's `POST /api/generate` is a **single request-response** — there is no
-streamed progress during silent cold-load (verified [ollama-python#439](https://github.com/ollama/ollama-python/issues/439)).
-On 200K-context models a load is 163 s of zero bytes on the wire (measured on
-AI Max+ 395 / ROCm 7.2). A naive "stall = N seconds without bytes" detector
-therefore misfires on every cold load.
-
-`LoadInFlight::new()` initialises `last_progress_at = 0` (sentinel meaning
-"no progress signal observed yet"). `stall_fut` is a no-op while the sentinel
-holds; only the `ps_poller` arm above transitions it to a real wall-clock
-timestamp on first `/api/ps` confirmation. Stall is then redefined as
-**post-load HTTP hang detection** — "ollama claims model loaded but probe HTTP
-is not returning". Initial silent-load duration is bounded only by
-`reqwest::timeout(LIFECYCLE_LOAD_TIMEOUT)` and the `hard_cap` arm.
-
-Production verified 2026-04-28: `outcome=LoadCompleted { duration_ms: 180862 }`
-on a 180 s 200K-context cold load (SDD `.specs/veronex/history/inference-lifecycle-sod.md`
-§9.5). Pre-fix code failed the same path at 60 s with `Stalled`.
-
----
-
 ## Phase 2 — `stream_tokens` (inference)
 
-Unchanged from pre-Tier-C: streams tokens to the SSE pipeline, broadcasts
-status events, finalizes job in `finalize_job()`. Phase 1's success guarantees
-a warm model so first-token latency is bounded by inference, not load.
+Unchanged: streams tokens from `POST /v1/chat/completions` to the SSE
+pipeline, broadcasts status events, finalizes the job in `finalize_job()`.
+Phase 1's success guarantees a live process; first-token latency is
+bounded by inference, not load.
 
----
+## Replaces / Migration Notes
 
-## Flag Behaviour
+| Pre-migration concept | Where it went |
+|-----------------------|---------------|
+| `LoadInFlight` DashMap + leader/follower coalescing | Per-provider `Mutex` inside `ProcessManager` |
+| `POST /api/generate` zero-prompt warmup probe | Process spawn via `NodeClient.spawn(model, port)` |
+| `GET /api/ps` size-vram poller | `NodeClient.health(port)` polled until 200 |
+| `last_progress_at` sentinel-zero stall detector | `ProcessState::Failed` if `health` poll exceeds `ensure_running` deadline |
+| `model_ctx` Valkey hot-path cache for num_ctx alignment | Modelfile registry row's `context_length` (Phase 2 SSOT) |
 
-| `MCP_LIFECYCLE_PHASE` | Pre-`stream_tokens` step | Defense-in-depth |
-|-----------------------|--------------------------|------------------|
-| `off` (default) | none — implicit auto-load inside `stream_tokens` | bridge phased timeouts (FIRST_TOKEN=240s / IDLE=45s / TOTAL=360s, PR #90) |
-| `on` | `provider.ensure_ready(model)` — explicit observable phase | bridge phased timeouts retained as safety net |
-
-Live verification (SDD §7.4) gates the dev/prod flip via
-`clusters/home/values/veronex-{dev,prod}-values.yaml::api.env`.
-
----
+The `MCP_LIFECYCLE_PHASE` flag still gates whether `runner` calls
+`ensure_ready` explicitly. With the simplified adapter the call is
+near-free (one `/health` round-trip), and the bridge phased timeouts
+remain the safety net.
 
 ## Files
 
@@ -164,12 +110,12 @@ Live verification (SDD §7.4) gates the dev/prod flip via
 |------|---------|
 | `domain/value_objects.rs` | `ModelInstanceState`, `EvictionReason` |
 | `domain/errors.rs` | `LifecycleError` |
-| `application/ports/outbound/model_lifecycle.rs` | `ModelLifecyclePort`, `LifecycleOutcome`, `MockLifecycle` |
+| `application/ports/outbound/model_lifecycle.rs` | `ModelLifecyclePort` trait + `MockLifecycle` |
 | `application/ports/outbound/inference_provider.rs` | `LlmProviderPort` super-trait + blanket impl |
-| `infrastructure/outbound/ollama/lifecycle.rs` | `LoadInFlight`, `probe_load`, `run_probe_with_stall`, constants |
-| `infrastructure/outbound/ollama/adapter.rs` | `OllamaAdapter::with_vram_pool`, `impl ModelLifecyclePort` |
+| `infrastructure/outbound/llama_server/adapter.rs` | `LlamaServerAdapter::ensure_ready` (now a thin `/health` check) |
+| `infrastructure/outbound/llama_server/health.rs` | `SlotStatus` parsing |
+| `infrastructure/outbound/process_manager/manager.rs` | `ProcessManager::ensure_running` (real lifecycle work) |
+| `infrastructure/outbound/process_manager/agent_client.rs` | `NodeClient` trait — `spawn`, `health`, `stop` |
 | `infrastructure/outbound/gemini/adapter.rs` | no-op cloud `impl ModelLifecyclePort` |
-| `infrastructure/outbound/provider_router.rs` | `make_adapter` returns `Arc<dyn LlmProviderPort>` |
-| `infrastructure/outbound/provider_dispatch.rs` | `ConcreteProviderDispatch` carries `vram_pool` |
 | `application/use_cases/inference/runner.rs` | Phase 1 block before `stream_tokens`, flag-gated |
-| `bootstrap/background.rs` | parses `MCP_LIFECYCLE_PHASE` env, injects `vram_pool` + flag |
+| `bootstrap/background.rs` | parses `MCP_LIFECYCLE_PHASE` env, wires `ProcessManager` + flag |

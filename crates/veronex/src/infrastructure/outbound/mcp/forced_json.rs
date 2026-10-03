@@ -1,8 +1,8 @@
 //! Forced-JSON gateway shim for MCP on models without native `tool_calls`.
 //!
 //! Replaces the text-template ReAct shim (`react_prompt.rs` + `react_parser.rs`)
-//! with deterministic constrained decoding via Ollama's `format` parameter
-//! (GBNF grammar under the hood, GA since Ollama v0.5).
+//! with deterministic constrained decoding via the upstream `format` parameter
+//! (GBNF grammar under the hood).
 //!
 //! # Why not ReAct text?
 //!
@@ -15,10 +15,10 @@
 //! > "feature-richness depends on the gateway's shims, not on each underlying
 //! >  model's intrinsic capabilities" — `docs/llm/inference/lab-features.md`
 //!
-//! With `format: <json_schema>` Ollama's llama.cpp backend masks logits at every
+//! With `format: <json_schema>` the llama.cpp backend masks logits at every
 //! decoding step so the only valid continuations are tokens consistent with the
 //! schema. The model **cannot** emit non-JSON or invalid JSON — making MCP tool
-//! invocation deterministic across every supported Ollama model, regardless of
+//! invocation deterministic across every supported model, regardless of
 //! tool-calling fine-tuning.
 //!
 //! # Schema shape
@@ -218,7 +218,7 @@ pub fn build_terminal_schema() -> Value {
 }
 
 /// Wrap a forced-JSON schema in the OpenAI `response_format` envelope so the
-/// existing Ollama adapter (`adapter.rs:594`) routes it through to Ollama's
+/// existing llama-server adapter routes it through to the upstream
 /// `format` field.
 pub fn schema_to_response_format(schema: Value) -> Value {
     json!({
@@ -263,7 +263,7 @@ pub fn build_forced_json_system_prompt(tools: &[Value]) -> Option<String> {
 ///
 /// The adapter passes `format: <schema>` so output is grammar-constrained — but
 /// downstream we still validate defensively (the model could be served by an
-/// older Ollama, or the schema could have been bypassed). On parse failure we
+/// older backend, or the schema could have been bypassed). On parse failure we
 /// fall back to treating the entire text as a `final` answer (fail-open: user
 /// always sees something).
 pub fn parse_forced_action(text: &str) -> ForcedAction {
@@ -302,6 +302,7 @@ pub fn parse_forced_action(text: &str) -> ForcedAction {
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
 

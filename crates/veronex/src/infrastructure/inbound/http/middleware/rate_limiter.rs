@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use tracing::instrument;
 
 use axum::extract::{Request, State};
 use axum::http::StatusCode;
@@ -24,6 +25,7 @@ const RPM_WINDOW_MS: f64 = 60_000.0;
 /// * `rate_limit_rpm == 0` → unlimited RPM
 /// * `rate_limit_tpm == 0` → unlimited TPM
 /// * Valkey unavailable → fail-closed (503 Service Unavailable)
+#[instrument(skip_all)]
 pub async fn rate_limiter(
     State(state): State<AppState>,
     req: Request,

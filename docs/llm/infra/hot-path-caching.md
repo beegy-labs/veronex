@@ -100,7 +100,7 @@ let lab_settings_repo: Arc<dyn LabSettingsRepository> =
 
 | Wrapper | TTL | Purpose |
 |---------|-----|---------|
-| `CachingOllamaModelRepo` | 10s | Model->provider mapping (dispatch hot path) |
+| `CachingLlamaServerModelRepo` | 10s | Model->provider mapping (dispatch hot path) |
 | `CachingModelSelection` | 30s | Model activation status |
 | `CachingProviderRegistry` | 5s | Provider list snapshot |
 | `CachingApiKeyRepo` | 60s | API key auth (inference hot path) |

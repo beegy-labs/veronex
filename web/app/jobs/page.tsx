@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react'
+import { useState, useCallback, useMemo} from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { dashboardJobsQuery, providersQuery } from '@/lib/queries'
 import { DASHBOARD_JOBS_QUERY_KEY } from '@/lib/queries/dashboard'
@@ -24,7 +24,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { StatusPill } from '@/components/status-pill'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { fmtNumber } from '@/lib/date'
-import { api } from '@/lib/api'
+
 
 const PAGE_SIZE = 50
 
@@ -156,7 +156,7 @@ function JobsSection({ source, onRetry }: JobsSectionProps) {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">{t('jobs.allProviders')}</SelectItem>
-              <SelectItem value="ollama">{t('jobs.providerOllama')}</SelectItem>
+              <SelectItem value="llama_server">{t('jobs.providerLlamaServer')}</SelectItem>
               {geminiEnabled && <SelectItem value="gemini">{t('jobs.providerGemini')}</SelectItem>}
             </SelectContent>
           </Select>

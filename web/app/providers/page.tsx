@@ -12,7 +12,7 @@ import { usePageGuard } from '@/hooks/use-page-guard'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { ConfirmDialog } from '@/components/confirm-dialog'
 import { EditModal, RegisterModal } from './components/modals'
-import { OllamaTab } from './components/ollama-tab'
+import { LlamaServerTab } from './components/llama-server-tab'
 import { GeminiTab } from './components/gemini-tab'
 
 // ── Page ──────────────────────────────────────────────────────────────────────
@@ -22,11 +22,11 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
   const queryClient = useQueryClient()
   const { labSettings } = useLabSettings()
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
-  // Fall back to 'ollama' when Gemini is disabled and the URL says ?s=gemini
-  const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
+  // Fall back to 'llama_server' when Gemini is disabled and the URL says ?s=gemini
+  const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'llama_server' : sectionParam
 
 
-  const [registerProviderType, setRegisterProviderType] = useState<'ollama' | 'gemini' | null>(null)
+  const [registerProviderType, setRegisterProviderType] = useState<'llama_server' | 'gemini' | null>(null)
   const [editingProvider, setEditingProvider] = useState<Provider | null>(null)
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; name: string } | null>(null)
 
@@ -50,8 +50,8 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
       queryClient.invalidateQueries({ queryKey: ['providers'] })
       queryClient.invalidateQueries({ queryKey: ['provider-models', id] })
       queryClient.invalidateQueries({ queryKey: ['selected-models', id] })
-      queryClient.invalidateQueries({ queryKey: ['ollama-sync-status'] })
-      queryClient.invalidateQueries({ queryKey: ['ollama-models'] })
+      queryClient.invalidateQueries({ queryKey: ['llama_server-sync-status'] })
+      queryClient.invalidateQueries({ queryKey: ['llama_server-models'] })
       queryClient.invalidateQueries({ queryKey: ['capacity'] })
     },
   })
@@ -60,17 +60,17 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
     <div className="vds-space-y-6">
       <div>
         <h1 className="vds-text-2xl vds-font-700 vds-tracking-tight">
-          {section === 'gemini' ? t('providers.gemini.title') : t('providers.ollama.title')}
+          {section === 'gemini' ? t('providers.gemini.title') : t('providers.llama_server.title')}
         </h1>
         <p className="vds-text-dim vds-mt-1 vds-text-sm">
-          {section === 'gemini' ? t('providers.gemini.description') : t('providers.ollama.description')}
+          {section === 'gemini' ? t('providers.gemini.description') : t('providers.llama_server.description')}
         </p>
       </div>
 
-      {section === 'ollama' && (
-        <OllamaTab
+      {section === 'llama_server' && (
+        <LlamaServerTab
           servers={servers ?? []}
-          onRegister={() => setRegisterProviderType('ollama')}
+          onRegister={() => setRegisterProviderType('llama_server')}
           onEdit={(b) => setEditingProvider(b)}
           onSync={(id) => syncProviderMutation.mutate(id)}
           syncPending={syncProviderMutation.isPending}
@@ -125,7 +125,7 @@ function ProvidersContent({ section: sectionParam }: { section: string }) {
 
 function ProvidersSectionReader() {
   const searchParams = useSearchParams()
-  const section = searchParams.get('s') ?? 'ollama'
+  const section = searchParams.get('s') ?? 'llama_server'
   return <ProvidersContent section={section} />
 }
 

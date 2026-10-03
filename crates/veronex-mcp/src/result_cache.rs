@@ -117,10 +117,6 @@ impl McpResultCache {
         debug!(key = %key, ttl = ttl_secs, "McpResultCache: stored");
     }
 
-    /// Compute the args hash for analytics (so the hash is consistent).
-    pub fn compute_hash(tool_name: &str, args: &serde_json::Value) -> String {
-        args_hash(tool_name, args)
-    }
 }
 
 #[cfg(test)]
@@ -135,7 +131,7 @@ mod tests {
         assert!(key.starts_with("veronex:mcp:result:"), "unexpected prefix: {key}");
         assert!(key.contains("get_weather"), "tool name not embedded: {key}");
         // hash segment is 16 hex chars
-        let hash_part = key.split(':').last().unwrap_or("");
+        let hash_part = key.split(':').next_back().unwrap_or("");
         assert_eq!(hash_part.len(), 16, "hash segment wrong length: {key}");
         assert!(hash_part.chars().all(|c| c.is_ascii_hexdigit()), "hash not hex: {key}");
     }

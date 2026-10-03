@@ -54,7 +54,7 @@ spawn_job_direct(job_id, provider_id)  → runner::run_job()
   │
   ▼
 on completion: vram_pool.release(provider_id, model)
-  └── KV cache released; weight stays in VRAM (OLLAMA_KEEP_ALIVE=-1)
+  └── KV cache released; weight stays in VRAM (LLAMA_SERVER_KEEP_ALIVE=-1)
 ```
 
 ---
@@ -71,7 +71,7 @@ Provider VRAM state machine:
     │  strict reservation enforced from this point
 
 UNKNOWN mode: available_vram_mb = (max_concurrent - active) × 1024 MB
-              routing still works — delegates OOM enforcement to Ollama
+              routing still works — delegates OOM enforcement to llama-server
 ```
 
 ---
@@ -79,46 +79,32 @@ UNKNOWN mode: available_vram_mb = (max_concurrent - active) × 1024 MB
 ## VRAM Reservation Logic
 
 ```
-Model already loaded (in /api/ps)?
+Model already loaded (ProcessManager.list_running has the (provider, model))?
   YES → reserve KV cache only      = ctx_size × bytes_per_token × 2
   NO  → reserve weight + KV cache  = weight_mb + KV
+        ProcessManager.ensure_running spawns the llama-server process
 
 On request completion:
-  release KV only (weight stays — OLLAMA_KEEP_ALIVE=-1)
+  release KV only (process keeps the model loaded; lifetime governed by IdleManager TTL)
 ```
 
 ---
 
-## Placement Planner (background, 5s interval)
+## Process Lifecycle (replaces placement planner)
 
-```
-placement_planner::planner_tick()
-  │
-  ├── Pass 0 (read-only):
-  │     ├── list active Ollama providers
-  │     ├── compute scale_out_candidates (healthy, VRAM > 0)
-  │     ├── fetch model demand from Valkey (demand keys per model)
-  │     ├── compute eligible_capacity per model
-  │     └── scale_out_needed = models where demand > capacity × 0.80
-  │
-  ├── Hard Gate Watchdog (SDD §3):
-  │     provider in Hard state?
-  │       ├── active_requests == 0 → set_cooldown()
-  │       ├── elapsed ≥ 60s → thermal_drain.cancel_jobs_for_provider()
-  │       └── elapsed ≥ 90s → warn (drain stalled)
-  │
-  ├── Pass 1 — Scale-Out:
-  │     for each scale_out_needed model:
-  │       find candidate provider with free VRAM
-  │       provisional_free[provider] -= needed_mb
-  │       POST /api/pull to Ollama (async)
-  │       set scale_out_holddown[provider] = now + holddown_ms
-  │
-  └── Pass 2 — Scale-In (idle eviction):
-        for each loaded model on each provider:
-          idle_secs >= threshold && not in scale_out_servers → evict
-          POST {ollama}/api/generate keep_alive=0  (unloads model)
-```
+The legacy 5s `placement_planner` (eager preload + LRU evict + scale-out)
+was removed when veronex migrated from Ollama to llama-server. llama-server
+runs one model per process, so model-level scaling is process-level.
+
+| Old (Ollama-era) | New (llama-server) |
+|------------------|---------------------|
+| 5s `planner_tick` scale-out by demand | Lazy spawn on first request — `ProcessManager::ensure_running` |
+| LRU evict when `max_loaded` exceeded | TTL idle reap — `IdleManager.tick` (default 30s tick, 60s TTL) |
+| `keep_alive=0` unload | `agent.process.delete()` — full process stop |
+| Hard Gate watchdog | `ProcessManager.stop()` on thermal Hard + drain (60s/90s) |
+| `scale_out_holddown` | Per-provider `Mutex` in `ProcessManager` |
+
+See `flows/process-manager.md` for the new lifecycle.
 
 ---
 
@@ -149,7 +135,8 @@ is_allowed(provider_id):
 | File | Purpose |
 |------|---------|
 | `application/use_cases/inference/dispatcher.rs` | Queue loop, `select_provider()` |
-| `application/use_cases/placement_planner.rs` | 5s planner — scale-out/in, thermal drain |
+| `infrastructure/outbound/process_manager/manager.rs` | `ProcessManager::ensure_running` + `stop` |
+| `infrastructure/outbound/process_manager/idle_manager.rs` | `IdleManager.tick` — TTL-based reap |
 | `application/ports/outbound/concurrency_port.rs` | `VramPoolPort` trait |
-| `infrastructure/outbound/vram_pool.rs` | VRAM pool implementation |
+| `infrastructure/outbound/capacity/vram_pool.rs` | VRAM pool implementation |
 | `application/ports/outbound/circuit_breaker_port.rs` | Circuit breaker trait |

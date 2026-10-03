@@ -11,7 +11,7 @@ Every doc, component, and i18n key MUST follow these definitions.
 
 | Term | Definition | Where Used |
 |------|------------|------------|
-| **Provider** | An inference service provider type (Ollama, Gemini). A provider configuration record stores the URL, API key, and routing metadata for one service account. | Nav sidebar, `/providers` page, usage breakdown UI, i18n keys under `providers.*` |
+| **Provider** | An inference service provider type (llama-server, Gemini). A provider configuration record stores the URL, API key, and routing metadata for one service account. | Nav sidebar, `/providers` page, usage breakdown UI, i18n keys under `providers.*` |
 | **Server** | A GPU hardware node registered with a `node_exporter_url` for live metrics scraping. Providers may be linked to a server via `server_id`. | `/servers` page, nav sidebar |
 | **API Key** | A bearer token that authenticates inference requests, enforces RPM/TPM rate limits, and tracks per-key usage. | `/keys` page, `X-API-Key` header |
 | **Job** | A single inference request lifecycle record: pending → running → completed/failed/cancelled. | `/jobs` page, `inference_jobs` table |
@@ -24,9 +24,9 @@ Every doc, component, and i18n key MUST follow these definitions.
 
 | Context | Correct Term | Incorrect |
 |---------|-------------|-------------|
-| Nav sidebar entry for Ollama/Gemini | Providers | Backends |
+| Nav sidebar entry for llama-server/Gemini | Providers | Backends |
 | Section header in usage breakdown | By Provider | By Backend |
-| Column header referencing Ollama/Gemini type | Provider | Backend |
+| Column header referencing llama-server/Gemini type | Provider | Backend |
 | GPU hardware management page | Servers | Backends, Nodes |
 | Card description for usage split | Split by provider, API key, and model | Split by backend, … |
 

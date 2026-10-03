@@ -21,7 +21,7 @@ CF-proxied:   client → CF Edge (100s idle) → CF Tunnel → cilium-gateway-we
 CF-bypass:    client → DNS → home public IP → router NAT 443 → cilium-gateway-web-gateway:443
 ```
 
-In-cluster traffic between services (api → mcp, api → ollama) is L4 only — no gateway, no CF, no DNS. Internal calls don't need any of this.
+In-cluster traffic between services (api → mcp, api → llama-server) is L4 only — no gateway, no CF, no DNS. Internal calls don't need any of this.
 
 ## Adding a CF-bypass route (the long-streaming case)
 

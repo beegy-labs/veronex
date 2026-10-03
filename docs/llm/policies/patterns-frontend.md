@@ -1,7 +1,7 @@
 # Code Patterns: Frontend — Index
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
-> Next.js 16 · React 19 · TanStack Query v5 · Tailwind v4 · Zod
+> SSOT | **Last Updated**: 2026-05-16 | Classification: Operational
+> Next.js 16 · React 19 · TanStack Query v5 · verodesign (vds-* utilities, no Tailwind) · Zod
 > Rust patterns → `policies/patterns.md`
 > Full rule text lives in `patterns-frontend/{domain}.md`; this file is an index.
 
@@ -70,3 +70,13 @@ When a rule references `patterns-frontend.md § X`, use this table to locate the
 | P0 (fix immediately) | Hardcoded hex, wrong token names, broken i18n keys, missing i18n parity |
 | P1 (fix in same pass) | Raw `var(--theme-*)` strings, missing `useMemo`, missing `aria-label`, SSE components without `React.memo`, time-display without interval tick, `onSuccess` for invalidation (→ `onSettled`), icon-only semantic icons missing `aria-hidden={false}` |
 | P2 (fix if touching file) | Component extraction for 3+ duplicates, prop count reduction, zero-value stat containers |
+
+## 2026 Stable Delta
+
+| Topic | Adopted Pattern | Why | Apply When |
+|---|---|---|---|
+| Next.js 16 | Treat Turbopack as default and target Node 20.9+ / TS 5.1+ baseline | This is the stable Next 16 runtime floor and build path | Web tooling, CI images, local onboarding |
+| React 19.2 | Prefer `useEffectEvent` for non-reactive effect callbacks; use `startTransition` / `useDeferredValue` for deferred UI work | Official React guidance reduces stale closures and keeps urgent updates responsive | Eventful effects, filter/search UIs, heavy list recompute |
+| TanStack Query v5 | Default to `queryOptions()` / `mutationOptions()` factories plus `onSettled` invalidation | v5 guidance keeps cache config typed and colocated | Shared queries and reusable mutations |
+| TanStack Query v5 | Prefer `skipToken` over `enabled: false` in TypeScript paths; use `useSuspenseQuery` only where Suspense boundaries are already present | Better TS narrowing; suspense is stable but should stay boundary-driven | Conditional queries and data-guaranteed routes |
+| verodesign | Use `@verobee/design-react` primitives and `vds-*` / `--vds-theme-*` tokens only | Keeps design SSOT centralized; avoids local primitive drift | Any new or touched UI surface |

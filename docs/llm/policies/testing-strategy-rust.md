@@ -117,12 +117,14 @@ use wiremock::{MockServer, Mock, ResponseTemplate};
 use wiremock::matchers::{method, path};
 
 #[tokio::test]
-async fn ollama_chat_parses_response() {
+async fn llama_server_chat_parses_response() {
     let mock = MockServer::start().await;
-    Mock::given(method("POST")).and(path("/api/chat"))
-        .respond_with(ResponseTemplate::new(200).set_body_string("{\"message\":{\"content\":\"hi\"}}"))
+    Mock::given(method("POST")).and(path("/v1/chat/completions"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(
+            "{\"choices\":[{\"message\":{\"content\":\"hi\"}}]}",
+        ))
         .mount(&mock).await;
-    let client = OllamaClient::new(mock.uri());
+    let client = LlamaServerClient::new(mock.uri());
     let out = client.chat(&ChatRequest::test_default()).await.unwrap();
     assert_eq!(out.content, "hi");
 }
@@ -143,7 +145,7 @@ Suppress trivial mutations with `#[mutants::skip]` on `Default::default()` / `St
 1. Caught by types / clippy -D warnings? → Yes → No test
 2. Pure function / domain / hook?         → Yes → Unit (proptest for non-trivial)
 3. Real Postgres / Valkey / Kafka / MCP?  → Yes → Integration (testcontainers)
-4. Outbound HTTP (Ollama/Gemini)?         → Yes → Integration (wiremock)
+4. Outbound HTTP (llama-server/Gemini)?         → Yes → Integration (wiremock)
 5. Axum handler request/response shape?   → Yes → Handler (oneshot)
 6. Cross-service / multi-crate flow?      → Yes → E2E (bash e2e)
 7. Already verified at another layer?     → Yes → Don't duplicate

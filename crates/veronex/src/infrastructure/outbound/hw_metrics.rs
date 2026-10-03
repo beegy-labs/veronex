@@ -1,3 +1,5 @@
+#![allow(clippy::collapsible_if, clippy::unnecessary_cast)]
+
 /// Hardware metrics from node-exporter (Valkey cache) and
 /// live node-exporter fetch (Prometheus text format).
 use anyhow::Result;

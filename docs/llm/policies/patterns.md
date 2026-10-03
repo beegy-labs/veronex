@@ -1,6 +1,6 @@
 # Code Patterns: Rust — Index
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-16 | Classification: Operational
 > Rust Edition 2024 · tokio 1.47 LTS (pin) · Axum 0.8 · sqlx 0.8 · OpenTelemetry 0.31
 > Frontend patterns → `policies/patterns-frontend.md`
 > Rust test patterns → `policies/testing-strategy-rust.md`
@@ -74,6 +74,16 @@ When a rule references `patterns.md § X`, use this table to locate the full tex
 | UTF-8 Safe Truncation | `patterns/tooling.md` |
 | MCP Integration Patterns | `patterns/mcp.md` |
 | Lifecycle Port Pattern (Phase 1 ↔ Phase 2 SoD) | `patterns/async.md` |
+
+## 2026 Stable Delta
+
+| Topic | Adopted Pattern | Why | Apply When |
+|---|---|---|---|
+| Axum 0.8 | Prefer typed `State<T>` + `FromRef` substates over `Extension` for app wiring | Matches current axum guidance; keeps state extraction compile-time checked | All router-owned shared state and nested routers |
+| sqlx 0.8 | Keep compile-time checked `query!` / `query_as!` / `query_file_as!` as default SSOT path | Stable sqlx guidance still favors compile-time validation over handwritten row mapping | Any static SQL known at build time |
+| Tokio 1.x | Standardize `CancellationToken` + `JoinSet` for long-lived background tasks | Tokio guidance centers shutdown on cooperative cancellation plus tracked task draining | Background loops, workers, per-provider supervisors |
+| Rust 2024 | Use Edition 2024 idioms and set `rustfmt` `style_edition = "2024"` where formatting is pinned | Prevents mixed formatter output and aligns CI/editor formatting | Crates already on Edition 2024 |
+| Async traits | Use native `async fn` in traits only for concrete or generic call sites; keep `async-trait` for `Arc<dyn Port>` | Native async traits remain unsuitable for direct dyn dispatch | Application ports stay dyn-safe; concrete internals may migrate later |
 
 ## Quarterly Audit Commands
 

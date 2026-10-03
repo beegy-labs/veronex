@@ -86,7 +86,7 @@ async fn generate_master_summary(
         .await?;
 
     if !resp.status().is_success() {
-        anyhow::bail!("Ollama returned {}", resp.status());
+        anyhow::bail!("upstream returned {}", resp.status());
     }
 
     let json: serde_json::Value = resp.json().await?;

@@ -1,6 +1,6 @@
 # docs/llm — SSOT Index
 
-> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-05-02
+> CDD Layer 2 — SSOT (LLM-facing, editable) | **Last Updated**: 2026-09-27
 
 ## Policies (Cross-Cutting)
 
@@ -13,7 +13,7 @@
 | Architecture | `policies/architecture.md` | hexagonal, ports, adapters, layers, AppState, dependency rule |
 | Code Patterns (Rust) | `policies/patterns.md` | AppError, thiserror, sqlx query_as!, async-trait, tracing, DashMap, Valkey Lua |
 | ID & API Key Policy | `policies/id-encoding.md` | UUIDv7 DB, base62 public IDs, prefix registry, BLAKE2b-256 API key hash |
-| Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, Tailwind v4 |
+| Code Patterns (Frontend) | `policies/patterns-frontend.md` | TanStack Query v5, useOptimistic, Zod, verodesign (vds-* utilities) |
 | Git Flow | `policies/git-flow.md` | branch, commit, squash, merge, conventional |
 | Testing Strategy | `policies/testing-strategy.md` | testing trophy, purity, proptest, cargo-mutants, OpenAPI schema, layer responsibility |
 | Terminology | `policies/terminology.md` | provider, provider_type, naming conventions |
@@ -25,6 +25,12 @@
 | Vespa Isolation | `policies/vespa-isolation.md` | environment, tenant_id, schema, field filter, isolation hierarchy, ES vs Vespa |
 
 ---
+
+## App Builder (`app-builder/`) — Planned
+
+| Document | Path | Keywords |
+|----------|------|---------|
+| Requirements | `app-builder/requirements.md` | Rust backend, actual CLI terminal, workspace, Codex, Claude Code, Gemini, local CLI, context handoff, N previews |
 
 ## Auth (`auth/`)
 
@@ -52,7 +58,7 @@
 | OpenAI Compat Endpoints | `inference/openai-compat-endpoints.md` | /v1/completions, /v1/embeddings, /v1/models, 501 stubs |
 | OpenAI Compat Native | `inference/openai-compat-native.md` | native endpoints, API doc endpoints, shared constants, SSE parsing, client examples |
 | Capacity | `inference/capacity.md` | VramPool, AIMD+p95, LLM Batch±2, thermal auto-detect, model stickiness, gate chain |
-| Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, Ollama $0.00, provider wildcard |
+| Model Pricing | `inference/model-pricing.md` | model_pricing table, estimated_cost_usd, LATERAL join, llama-server $0.00, provider wildcard |
 | Lab Features | `inference/lab-features.md` | gemini_function_calling, context_compression_enabled, multiturn gate, vision_model, handoff |
 | Lab Features (impl) | `inference/lab-features-impl.md` | Port, API, Frontend for lab_settings |
 | Context Compression | `inference/context-compression.md` | compression_router, context_assembler, session_handoff, compress_input_inline, conversation_renewed, TurnInternals |
@@ -65,10 +71,10 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Ollama | `providers/ollama.md` | LlmProvider, VRAM routing, DynamicProviderRouter, health_checker |
-| Ollama Allocation | `providers/ollama-allocation.md` | end-to-end automatic allocation flow, scheduling logic |
-| Ollama Implementation | `providers/ollama-impl.md` | OllamaAdapter, streaming protocol, num_ctx, format conversion |
-| Ollama Models | `providers/ollama-models.md` | ollama_models, ollama_sync_jobs, OllamaModelRepository, model-aware routing |
+| llama-server | `providers/llama-server.md` | LlmProvider, VRAM routing, DynamicProviderRouter, health_checker |
+| llama-server Allocation | `providers/llama-server-allocation.md` | end-to-end automatic allocation flow, scheduling logic |
+| llama-server Implementation | `providers/llama-server-impl.md` | LlamaServerAdapter, streaming protocol, num_ctx, format conversion |
+| llama-server Models | `providers/llama-server-models.md` | Modelfile registry (`/v1/admin/models`), CAS install pipeline, model-aware routing via `provider_selected_models` |
 | Gemini | `providers/gemini.md` | GeminiRateLimitPolicy, RPM, RPD, pick_gemini_provider, tier routing |
 | Gemini Models | `providers/gemini-models.md` | gemini_sync_config, gemini_models, provider_selected_models, UPSERT |
 | Hardware | `providers/hardware.md` | GpuServer, node-exporter, hw_metrics, NodeMetrics, ServerMetricsPoint, API endpoints |
@@ -99,7 +105,7 @@
 
 | Document | Path | Keywords |
 |----------|------|---------|
-| Design System | `frontend/design-system.md` | brand, tokens.css, Tailwind v4, nav sidebar, theme, DataTable, state management |
+| Design System | `frontend/design-system.md` | brand, --vds-theme-* tokens, verodesign white-box (no Tailwind), nav sidebar, DataTable |
 | Design System i18n | `frontend/design-system-i18n.md` | i18n, locale config, timezone provider, date formatting, translation workflow |
 | Design System Components | `frontend/design-system-components.md` | login page, auth guard, API client, status colors, auth-cookie session |
 | Design System Component Patterns | `frontend/design-system-components-patterns.md` | provider taxonomy, network flow viz, accounts page, dialogs, hooks, 2-step registration |
@@ -114,8 +120,8 @@
 |----------|------|---------|
 | Overview | `frontend/pages/overview.md` | /overview, dashboard KPIs, thermal alert, power, latency, top models, recent jobs |
 | Servers | `frontend/pages/servers.md` | /servers, ServersTable, ServerMetricsCell, ServerHistoryModal |
-| Providers | `frontend/pages/providers.md` | /providers, OllamaTab, GeminiTab, routing, lab gating |
-| Providers Impl | `frontend/pages/providers-impl.md` | OllamaServerMetrics, sync section, capacity settings |
+| Providers | `frontend/pages/providers.md` | /providers, LlamaServerTab, GeminiTab, routing, lab gating |
+| Providers Impl | `frontend/pages/providers-impl.md` | LlamaServerMetrics, sync section, capacity settings |
 | Providers Gemini | `frontend/pages/providers-gemini.md` | Gemini sync, rate limit table, EditPolicyModal, SetSyncKeyModal |
 | Jobs | `frontend/pages/jobs.md` | job-table, GroupSessionsPanel, NetworkFlowTab, i18n |
 | Jobs Impl | `frontend/pages/jobs-impl.md` | handleRetry, NetworkFlow SVG, detail modal, result branching |
@@ -148,14 +154,14 @@
 | Job Event Pipeline Steps | `flows/job-event-pipeline-steps.md` | submit, cancel, stream, run_job step diagrams |
 | Authentication | `flows/auth.md` | API key BLAKE2b, JWT HS256, InferCaller dual-auth, rate limit, MCP ACL, provider ACL |
 | MCP Agentic Loop | `flows/mcp.md` | run_loop, execute_one, ACL, circuit breaker, result cache, loop detect |
-| Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, placement planner, scale-out/in, circuit breaker |
+| Provider Scheduler | `flows/scheduler.md` | select_provider, VRAM pool, ProcessManager (lazy spawn), IdleManager TTL reap, circuit breaker |
 | Thermal Protection | `flows/thermal.md` | Normal→Soft→Hard→Cooldown→RampUp, forced drain, 60s/90s watchdog |
-| Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, ollama, OTLP, dynamic sharding, KEDA |
+| Agent Scrape Cycle | `flows/agent.md` | scrape_cycle, MCP heartbeat, node-exporter, llama-server, OTLP, dynamic sharding, KEDA |
 | Job Streaming | `flows/streaming.md` | SSE fan-out, job event streaming, stats streaming, pub/sub |
 | Multi-Instance Pub/Sub | `flows/pubsub-relay.md` | multi-instance relay, Valkey pub/sub, cross-instance fan-out |
 | Crash Recovery & Reaping | `flows/reaper.md` | crash recovery, job reaping, startup recovery, pending jobs |
 | Queue Maintenance | `flows/queue-maintenance.md` | promote_overdue, demand_resync, queue_wait_cancel, processing_reaper |
-| Placement Planner | `flows/placement-planner.md` | model auto-scaling, load_model, evict, placement score, VRAM fit |
+| Process Manager | `flows/process-manager.md` | ensure_running, IdleManager TTL reaper, ActivityTracker, AIMD admission |
 | Context Compression | `flows/context-compression.md` | context window, token budget, compress_context, sliding window |
 
 ---
@@ -170,8 +176,8 @@
 | Data Fetching | `research/frontend/data-fetching.md` | verified |
 | Next.js 16 | `research/frontend/nextjs.md` | verified |
 | Next.js 15/16 Breaking Changes | `research/frontend/nextjs-breaking-changes.md` | verified |
-| Tailwind v4 | `research/frontend/tailwind.md` | verified |
-| Tailwind v4 2026 Updates | `research/frontend/tailwind-2026.md` | verified |
+| Tailwind v4 (historical, pre-verodesign migration) | `research/frontend/tailwind.md` | superseded |
+| Tailwind v4 2026 (historical, pre-verodesign migration) | `research/frontend/tailwind-2026.md` | superseded |
 | TanStack Query | `research/frontend/tanstack-query.md` | verified |
 | TanStack Query Advanced | `research/frontend/tanstack-query-advanced.md` | verified |
 | Rust / Axum | `research/backend/rust-axum.md` | verified |
@@ -203,7 +209,7 @@
 | Sensitive-header redaction | `auth/security.md` § Sensitive-Header Redaction + `policies/patterns/middleware.md` |
 | Job tracking / state machine | `inference/job-lifecycle.md` + `inference/job-analytics.md` |
 | Model pricing / Lab feature flag | `inference/model-pricing.md` / `inference/lab-features.md` |
-| Ollama / Gemini providers | `providers/{ollama,gemini}.md` + `-impl.md` + `-models.md` |
+| llama-server / Gemini providers | `providers/{llama-server,gemini}.md` + `-impl.md` + `-models.md` |
 | GPU server / hardware metrics / health | `providers/hardware.md` + `frontend/pages/health.md` |
 | Auth / JWT / RBAC / API keys | `auth/jwt-sessions.md` + `auth/api-keys.md` + `auth/security.md` |
 | VRAM pool / AIMD / thermal | `inference/capacity.md` + `flows/{scheduler,thermal}.md` |

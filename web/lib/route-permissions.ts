@@ -27,6 +27,7 @@ export type AdminRoute =
   | '/accounts'
   | '/audit'
   | '/api-docs'
+  | '/builder'
 
 export const ROUTE_PERMISSION: Record<AdminRoute, Permission> = {
   '/overview':    'dashboard_view',
@@ -43,4 +44,5 @@ export const ROUTE_PERMISSION: Record<AdminRoute, Permission> = {
   '/accounts':    'account_manage',
   '/audit':       'audit_view',
   '/api-docs':    'dashboard_view',
+  '/builder':     'builder_manage',
 }

@@ -11,8 +11,8 @@ use std::time::Duration;
 // to keep working without changing every import site.
 pub use crate::domain::constants::{
     GEMINI_TIER_FREE, INITIAL_TOKEN_CAPACITY, JOB_CLEANUP_DELAY, JOB_OWNER_TTL_SECS,
-    KEY_TIER_PAID, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING, NO_PROVIDER_BACKOFF,
-    OLLAMA_HEALTH_CHECK_TIMEOUT, OWNERSHIP_LOST_CLEANUP_DELAY, OWNER_REFRESH_INTERVAL,
+    KEY_TIER_PAID, LLAMA_SERVER_HEALTH_CHECK_TIMEOUT, MAX_CHAT_MESSAGES, MAX_TOKENS_CEILING,
+    NO_PROVIDER_BACKOFF, OWNERSHIP_LOST_CLEANUP_DELAY, OWNER_REFRESH_INTERVAL,
     PENDING_JOB_SWEEP_INTERVAL, PROVIDER_REGISTRY_CACHE_TTL, QUEUE_ERROR_BACKOFF,
     QUEUE_POLL_INTERVAL, SYNC_LOOP_BASE_TICK, TPM_ESTIMATED_TOKENS,
 };
@@ -65,7 +65,7 @@ pub const MAX_MODEL_NAME_BYTES: usize = 256;
 /// Maximum longest edge (px) for server-side image compression.
 ///
 /// Oversized images are resized to fit this dimension (aspect-ratio preserved)
-/// and re-encoded as WebP before forwarding to Ollama and storing in S3.
+/// and re-encoded as WebP before forwarding to the model server and storing in S3.
 /// 1024px covers the sweet spot for most vision models:
 /// - Qwen3-VL / Qwen2.5-VL optimal range: 480–2560px
 /// - Gemma 3 internal: 896px
@@ -74,8 +74,8 @@ pub const IMAGE_COMPRESS_MAX_EDGE: u32 = 1024;
 
 // ── Provider type identifiers ────────────────────────────────────────────────
 
-/// Provider type string for Ollama providers (used in submit calls and routing).
-pub const PROVIDER_OLLAMA: &str = "ollama";
+/// Provider type string for llama-server providers (used in submit calls and routing).
+pub const PROVIDER_LLAMA_SERVER: &str = "llama_server";
 
 /// Provider type string for Gemini providers.
 pub const PROVIDER_GEMINI: &str = "gemini";
@@ -104,7 +104,7 @@ pub const JWT_ROUTER_TIMEOUT: Duration = Duration::from_secs(30);
 /// Timeout for the inference/API router (1750 s ≈ 29 min).
 ///
 /// Covers non-streaming inference requests (synchronous chat completions,
-/// embeddings, Ollama passthrough). Set strictly higher than `SSE_TIMEOUT`
+/// embeddings, model-server passthrough). Set strictly higher than `SSE_TIMEOUT`
 /// (1700 s) so SSE streams are killed by their own inner timeout first;
 /// this only fires on hung non-streaming requests. Held under Cilium
 /// gateway `timeouts.request=1800 s`.

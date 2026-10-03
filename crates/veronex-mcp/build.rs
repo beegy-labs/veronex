@@ -11,42 +11,9 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
-use unicode_normalization::UnicodeNormalization;
-
-// ── Serializable types (shared with lib.rs via OUT_DIR) ───────────────────────
-
-#[derive(Serialize, Deserialize)]
-struct City {
-    name: String,
-    ascii_name: String,
-    latitude: f32,
-    longitude: f32,
-    country_code: String,
-    admin1_name: String,
-    population: u32,
-    timezone: String,
-}
-
-/// Serialized index: cities vec + name → indices mapping (sorted by population desc).
-#[derive(Serialize, Deserialize)]
-struct GeoData {
-    cities: Vec<City>,
-    /// Sorted Vec for deterministic serialization; rebuilt as HashMap at runtime.
-    index: Vec<(String, Vec<u32>)>,
-}
-
-// ── Normalization ─────────────────────────────────────────────────────────────
-
-fn normalize(s: &str) -> String {
-    s.nfd()
-        .filter(|c| !unicode_normalization::char::is_combining_mark(*c))
-        .collect::<String>()
-        .to_lowercase()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
+#[path = "src/geo/data.rs"]
+mod geo_data;
+use geo_data::{City, GeoData, normalize};
 
 // ── Download helpers ──────────────────────────────────────────────────────────
 
@@ -185,6 +152,8 @@ fn main() {
     let out_dir = std::env::var("OUT_DIR").unwrap();
     let out_path = PathBuf::from(&out_dir).join("geo.bin");
 
+    println!("cargo:rerun-if-changed=src/geo/data.rs");
+    println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=data/cities1000.txt");
     println!("cargo:rerun-if-changed=data/admin1CodesASCII.txt");
 

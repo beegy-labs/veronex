@@ -163,25 +163,25 @@ Module-level state (not class-level) survives re-renders and is shared across al
 
 Follow Carbon Design System 3-element rule: **color + icon + text** (never color alone -- WCAG 1.4.1).
 
-| Status | Tailwind class | Icon | Text key |
-|--------|----------------|------|----------|
-| Connected | `text-status-success-fg` | filled dot | `overview.connected` |
-| Unreachable | `text-status-error-fg` | filled dot | `overview.unreachable` |
-| Normal (<80C) | `text-status-success-fg` | `CheckCircle2` | `overview.tempNormal` |
-| Warning (80-89C) | `text-status-warning-fg` | `AlertTriangle` | `overview.tempWarning` |
-| Critical (>=90C) | `text-status-error-fg` | `XCircle` | `overview.tempCritical` |
+| Status | vds class | Icon | Text key |
+|--------|-----------|------|----------|
+| Connected | `vds-text-success-fg` | filled dot | `overview.connected` |
+| Unreachable | `vds-text-error-fg` | filled dot | `overview.unreachable` |
+| Normal (<80C) | `vds-text-success-fg` | `CheckCircle2` | `overview.tempNormal` |
+| Warning (80-89C) | `vds-text-warning-fg` | `AlertTriangle` | `overview.tempWarning` |
+| Critical (>=90C) | `vds-text-error-fg` | `XCircle` | `overview.tempCritical` |
 
 ### Job Status Colors
 
 All job status colors live in `JOB_STATUS_COLORS` in `web/lib/constants.ts` (uses `tokens.*` internally).
 
-| Status | `tokens.*` key | Tailwind class |
-|--------|---------------|----------------|
-| `pending` | `tokens.status.warning` | `text-status-warning-fg` |
-| `running` | `tokens.status.info` | `text-status-info-fg` |
-| `completed` | `tokens.status.success` | `text-status-success-fg` |
-| `failed` | `tokens.status.error` | `text-status-error-fg` |
-| `cancelled` | `tokens.status.cancelled` | `text-muted-foreground` |
+| Status | `tokens.*` key | vds class |
+|--------|---------------|-----------|
+| `pending` | `tokens.status.warning` | `vds-text-warning-fg` |
+| `running` | `tokens.status.info` | `vds-text-info-fg` |
+| `completed` | `tokens.status.success` | `vds-text-success-fg` |
+| `failed` | `tokens.status.error` | `vds-text-error-fg` |
+| `cancelled` | `tokens.status.cancelled` | `vds-text-dim` |
 
 ### Provider Status Colors
 
@@ -194,7 +194,7 @@ All mappings in `PROVIDER_STATUS_DOT` / `PROVIDER_STATUS_BADGE` / `PROVIDER_STAT
 import { tokens } from '@/lib/design-tokens'
 
 // From web/lib/constants.ts — already use tokens internally
-const PROVIDER_COLORS = { ollama: tokens.brand.primary, gemini: tokens.status.info }
+const PROVIDER_COLORS = { llama-server: tokens.brand.primary, gemini: tokens.status.info }
 const FINISH_COLORS   = {
   stop: tokens.status.success, length: tokens.status.warning,
   error: tokens.status.error,  cancelled: tokens.text.secondary,

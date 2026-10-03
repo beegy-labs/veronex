@@ -5,6 +5,7 @@ use axum::Json;
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+use tracing::instrument;
 
 use crate::domain::entities::{Account, ApiKey};
 use crate::domain::enums::{KeyTier, KeyType};
@@ -89,17 +90,10 @@ pub struct ResetLinkResponse {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, AppError> {
-    let role_rows = sqlx::query_as::<_, (Uuid, String, Vec<String>, bool)>(
-        "SELECT r.id, r.name, r.permissions, r.is_system
-         FROM roles r
-         JOIN account_roles ar ON ar.role_id = r.id
-         WHERE ar.account_id = $1
-         LIMIT 50"
-    )
-    .bind(a.id)
-    .fetch_all(pg)
-    .await
-    .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
+    let role_rows = crate::infrastructure::outbound::persistence::role_queries::
+        list_assignments_for_account(pg, a.id)
+        .await
+        .map_err(|e| AppError::Internal(anyhow::anyhow!("role lookup: {e}")))?;
 
     let mut all_perms = std::collections::BTreeSet::new();
     let mut is_super = false;
@@ -141,6 +135,8 @@ async fn to_summary(a: Account, pg: &sqlx::PgPool) -> Result<AccountSummary, App
 
 use super::handlers::ListPageParams;
 
+#[instrument(skip_all)]
+
 pub async fn list_accounts(
     RequireAccountManage(_claims): RequireAccountManage,
     State(state): State<AppState>,
@@ -171,6 +167,8 @@ pub async fn list_accounts(
 
 // ── POST /v1/accounts ─────────────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn create_account(
     RequireAccountManage(claims): RequireAccountManage,
     State(state): State<AppState>,
@@ -179,24 +177,18 @@ pub async fn create_account(
     super::handlers::validate_username(&req.username)?;
 
     // Resolve role_ids: explicit role_ids > legacy role_id > default "viewer"
+    use crate::infrastructure::outbound::persistence::role_queries as role_q;
     let role_ids: Vec<Uuid> = if !req.role_ids.is_empty() {
-        // Batch-validate all role_ids in a single ANY($1) query — no N+1.
         let input_ids: Vec<Uuid> = req.role_ids.iter().map(|r| r.0).collect();
-        let valid: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM roles WHERE id = ANY($1::uuid[]) LIMIT 200",
-        )
-        .bind(&input_ids as &[Uuid])
-        .fetch_all(&state.pg_pool)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+        let valid = role_q::ids_in_set(&state.pg_pool, &input_ids)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
         if valid.len() != input_ids.len() {
             return Err(AppError::BadRequest("one or more invalid role_ids".into()));
         }
         input_ids
     } else if let Some(rid) = req.role_id {
-        let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM roles WHERE id = $1)")
-            .bind(rid.0)
-            .fetch_one(&state.pg_pool)
+        let exists = role_q::exists(&state.pg_pool, rid.0)
             .await
             .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
         if !exists {
@@ -204,12 +196,11 @@ pub async fn create_account(
         }
         vec![rid.0]
     } else {
-        // Default to "viewer" role
-        let row: (Uuid,) = sqlx::query_as("SELECT id FROM roles WHERE name = 'viewer'")
-            .fetch_one(&state.pg_pool)
+        let id = role_q::get_id_by_name(&state.pg_pool, "viewer")
             .await
-            .map_err(|e| AppError::Internal(anyhow::anyhow!("viewer role not found: {e}")))?;
-        vec![row.0]
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("viewer role lookup: {e}")))?
+            .ok_or_else(|| AppError::Internal(anyhow::anyhow!("viewer role not found")))?;
+        vec![id]
     };
 
     let password_hash = encryption::hash_password(&req.password)?;
@@ -282,6 +273,8 @@ pub async fn create_account(
 
 // ── PATCH /v1/accounts/{id} ───────────────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn update_account(
     RequireAccountManage(claims): RequireAccountManage,
     Path(aid): Path<AccountId>,
@@ -311,20 +304,15 @@ pub async fn update_account(
         if role_ids.is_empty() {
             return Err(AppError::BadRequest("at least one role is required".into()));
         }
-        // Batch-validate all role_ids in a single ANY($1) query — no N+1.
         let input_ids: Vec<Uuid> = role_ids.iter().map(|r| r.0).collect();
-        let valid: Vec<Uuid> = sqlx::query_scalar(
-            "SELECT id FROM roles WHERE id = ANY($1::uuid[]) LIMIT 200",
-        )
-        .bind(&input_ids as &[Uuid])
-        .fetch_all(&state.pg_pool)
-        .await
-        .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
+        let valid = crate::infrastructure::outbound::persistence::role_queries::
+            ids_in_set(&state.pg_pool, &input_ids)
+            .await
+            .map_err(|e| AppError::Internal(anyhow::anyhow!("role check: {e}")))?;
         if valid.len() != input_ids.len() {
             return Err(AppError::BadRequest("one or more invalid role_ids".into()));
         }
-        let uuid_role_ids = input_ids;
-        state.account_repo.set_roles(&aid.0, &uuid_role_ids).await?;
+        state.account_repo.set_roles(&aid.0, &input_ids).await?;
     }
 
     emit_audit(&state, &claims, "update", "account", &aid.to_string(), &account.username,
@@ -334,6 +322,8 @@ pub async fn update_account(
 }
 
 // ── DELETE /v1/accounts/{id} ──────────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn delete_account(
     RequireAccountManage(claims): RequireAccountManage,
@@ -360,6 +350,8 @@ pub async fn delete_account(
 }
 
 // ── PATCH /v1/accounts/{id}/active ────────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn set_account_active(
     RequireAccountManage(claims): RequireAccountManage,
@@ -390,6 +382,8 @@ pub struct SessionSummary {
     pub expires_at: chrono::DateTime<Utc>,
 }
 
+#[instrument(skip_all)]
+
 pub async fn list_account_sessions(
     RequireAccountManage(_claims): RequireAccountManage,
     Path(aid): Path<AccountId>,
@@ -416,6 +410,8 @@ pub async fn list_account_sessions(
 
 // ── DELETE /v1/sessions/{session_id} ──────────────────────────────────────────
 
+#[instrument(skip_all)]
+
 pub async fn revoke_session(
     RequireAccountManage(claims): RequireAccountManage,
     Path(sid): Path<SessionId>,
@@ -436,6 +432,8 @@ pub async fn revoke_session(
 }
 
 // ── DELETE /v1/accounts/{id}/sessions ─────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn revoke_all_account_sessions(
     RequireAccountManage(claims): RequireAccountManage,
@@ -459,6 +457,8 @@ pub async fn revoke_all_account_sessions(
 }
 
 // ── POST /v1/accounts/{id}/reset-link ─────────────────────────────────────────
+
+#[instrument(skip_all)]
 
 pub async fn create_reset_link(
     RequireAccountManage(claims): RequireAccountManage,

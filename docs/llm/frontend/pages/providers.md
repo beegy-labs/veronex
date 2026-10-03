@@ -1,45 +1,45 @@
 # Web -- Providers Page (/providers)
 
-> SSOT | **Last Updated**: 2026-03-04 | See `providers-impl.md` (Ollama components), `providers-gemini.md` (Gemini components)
+> SSOT | **Last Updated**: 2026-03-04 | See `providers-impl.md` (llama-server components), `providers-gemini.md` (Gemini components)
 
 ## Task Guide
 
 | Task | File | What to change |
 |------|------|----------------|
 | Add new Gemini query key | `web/app/providers/page.tsx` `GEMINI_QUERY_KEYS` constant | Add key, use in query + add to `refreshGeminiData()` |
-| Change capacity analyzer model options | `web/app/providers/components/ollama-capacity-section.tsx` | Models from `GET /v1/dashboard/capacity/settings` `available_models: Record<string, string[]>` grouped by provider type. Provider filter Select + analyzer model Select. Gemini hidden when `gemini_function_calling` lab feature disabled |
-| Change capacity refresh interval | `web/app/providers/page.tsx` `OllamaCapacitySection` -- `useQuery` capacity query | Default: no auto-refetch (manual Sync Now) |
-| Add action button to Ollama provider row | `web/app/providers/page.tsx` `OllamaTab` row actions | Same pattern as existing actions |
+| Change capacity analyzer model options | `web/app/providers/components/llama-server-capacity-section.tsx` | Models from `GET /v1/dashboard/capacity/settings` `available_models: Record<string, string[]>` grouped by provider type. Provider filter Select + analyzer model Select. Gemini hidden when `gemini_function_calling` lab feature disabled |
+| Change capacity refresh interval | `web/app/providers/page.tsx` `LlamaServerCapacitySection` -- `useQuery` capacity query | Default: no auto-refetch (manual Sync Now) |
+| Add action button to llama-server provider row | `web/app/providers/page.tsx` `LlamaServerTab` row actions | Same pattern as existing actions |
 | Add action button to Gemini paid provider row | `web/app/providers/page.tsx` `GeminiTab` Gemini API Keys Table | Paid vs free tier conditional (`!provider.is_free_tier`) |
-| Add field to RegisterOllamaModal | `web/app/providers/page.tsx` modal form state + `web/lib/api.ts` `registerProvider()` | Add field, pass to `api.registerProvider(body)` |
-| Change OllamaSyncSection empty state | `web/app/providers/page.tsx` `OllamaSyncSection` + `web/messages/en.json` `providers.ollama.ollamaNoSync` | Update i18n key in all 3 locales |
+| Add field to RegisterLlamaServerModal | `web/app/providers/page.tsx` modal form state + `web/lib/api.ts` `registerProvider()` | Add field, pass to `api.registerProvider(body)` |
+| Change LlamaServerSyncSection empty state | `web/app/providers/page.tsx` `LlamaServerSyncSection` + `web/messages/en.json` `providers.llama-server.noSync` | Update i18n key in all 3 locales |
 | Change table page size | `web/app/providers/page.tsx` `PAGE_SIZE` constant | Single constant used by all 3 tables |
 | Change rate limit policy table columns | `web/app/providers/page.tsx` `GeminiSyncSection` table | Add/remove column header + cell render |
 | Change ModelSelectionModal empty state | `web/app/providers/page.tsx` `ModelSelectionModal` + `web/messages/en.json` `providers.gemini.noGlobalModels` | Update i18n key in all 3 locales |
-| Change OllamaProviderModelsModal empty state | `web/app/providers/page.tsx` `OllamaProviderModelsModal` + `web/messages/en.json` `providers.ollama.noProviderModels` | Update i18n key in all 3 locales |
-| Change Ollama live metrics refresh interval | `web/app/providers/page.tsx` `OllamaServerMetrics` `refetchInterval` | Default: 30 000 ms |
-| Add live metric field to Ollama server cell | `web/app/providers/page.tsx` `OllamaServerMetrics` render | Add field from `NodeMetrics.gpus[n]` |
+| Change LlamaServerProviderModelsModal empty state | `web/app/providers/page.tsx` `LlamaServerProviderModelsModal` + `web/messages/en.json` `providers.llama-server.noProviderModels` | Update i18n key in all 3 locales |
+| Change llama-server live metrics refresh interval | `web/app/providers/page.tsx` `LlamaServerMetrics` `refetchInterval` | Default: 30 000 ms |
+| Add live metric field to llama-server node cell | `web/app/providers/page.tsx` `LlamaServerMetrics` render | Add field from `NodeMetrics.gpus[n]` |
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
-| `web/app/providers/page.tsx` | Tab router + shared queries (OllamaTab, GeminiTab) |
-| `web/app/providers/components/ollama-sections.tsx` | `OllamaSyncSection` + re-exports from `ollama-capacity-section.tsx` |
-| `web/app/providers/components/ollama-capacity-section.tsx` | `OllamaCapacitySection`, `ThermalBadge`, `VramBar` |
-| `web/lib/api.ts` | `api.servers()`, `api.providers()`, `api.ollamaModels()`, `api.syncOllamaModels()`, `api.ollamaSyncStatus()`, `api.geminiModels()`, `api.syncGeminiStatus()`, `api.capacity()`, `api.capacitySettings()`, `api.patchCapacitySettings()`, `api.triggerCapacitySync()` |
-| `web/lib/types.ts` | `Provider`, `GpuServer`, `OllamaSyncJob`, `GeminiRateLimitPolicy`, `GeminiModel`, `ProviderSelectedModel`, `GeminiStatusSyncResponse`, `CapacityResponse`, `ProviderCapacityInfo`, `ModelCapacityInfo`, `CapacitySettings`, `PatchCapacitySettings` |
+| `web/app/providers/page.tsx` | Tab router + shared queries (LlamaServerTab, GeminiTab) |
+| `web/app/providers/components/llama-server-sections.tsx` | `LlamaServerSyncSection` + re-exports from `llama-server-capacity-section.tsx` |
+| `web/app/providers/components/llama-server-capacity-section.tsx` | `LlamaServerCapacitySection`, `ThermalBadge`, `VramBar` |
+| `web/lib/api.ts` | `api.servers()`, `api.providers()`, `api.geminiModels()`, `api.syncGeminiStatus()`, `api.capacity()`, `api.capacitySettings()`, `api.patchCapacitySettings()`, `api.triggerCapacitySync()` (the legacy global llama-server model-sync helpers were removed alongside the Ollama-era handlers) |
+| `web/lib/types.ts` | `Provider`, `GpuServer`, `LlamaServerSyncJob`, `GeminiRateLimitPolicy`, `GeminiModel`, `ProviderSelectedModel`, `GeminiStatusSyncResponse`, `CapacityResponse`, `ProviderCapacityInfo`, `ModelCapacityInfo`, `CapacitySettings`, `PatchCapacitySettings` |
 | `web/messages/en.json` | i18n keys under `providers.*` |
 
 ---
 
 ## Routing
 
-URL `?s=` param (default: `ollama`):
+URL `?s=` param (default: `llama-server`):
 
 | URL | Section | Lab Gate |
 |-----|---------|----------|
-| `/providers` or `?s=ollama` | `OllamaTab` -- Ollama provider management | always visible |
+| `/providers` or `?s=llama-server` | `LlamaServerTab` -- llama-server provider management | always visible |
 | `?s=gemini` | `GeminiTab` -- Gemini + rate-limit policies | `gemini_function_calling` must be enabled |
 
 Section switching via `<Link>` in `nav.tsx` -- no internal tab state in page.
@@ -48,10 +48,10 @@ Lab gating (`ProvidersContent`):
 ```typescript
 const { labSettings } = useLabSettings()
 const geminiEnabled = labSettings?.gemini_function_calling ?? false
-const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'ollama' : sectionParam
+const section = (sectionParam === 'gemini' && !geminiEnabled) ? 'llama-server' : sectionParam
 ```
 
-- When disabled: direct navigation to `?s=gemini` falls back to OllamaTab silently.
+- When disabled: direct navigation to `?s=gemini` falls back to LlamaServerTab silently.
 - The Gemini nav child item is also hidden in `nav.tsx` (filtered by `useLabSettings()`).
 - Enable via Settings > Lab Features > "Gemini function calling" toggle.
 
@@ -63,7 +63,7 @@ Nav entry: `NavGroup` with `id: 'providers'`, `basePath: '/providers'`, `Server`
 
 `PAGE_SIZE = 10` (single constant, shared).
 
-Each table (Ollama, Gemini, Servers) uses local `page` state. Pattern:
+Each table (llama-server, Gemini, Servers) uses local `page` state. Pattern:
 
 ```typescript
 const [page, setPage] = useState(1)
@@ -76,26 +76,26 @@ Controls: range `{start}-{end} / {total}`, ChevronLeft/ChevronRight icon buttons
 
 ---
 
-## OllamaTab -- Overview
+## LlamaServerTab -- Overview
 
 Header shows pill badges: `N registered` / `N online` / `N offline`.
 
-**OllamaTab renders (in order)**:
+**LlamaServerTab renders (in order)**:
 1. Status pills + Register button
 2. Provider table with pagination
-3. `<OllamaSyncSection />` -- global model sync
-4. `<OllamaCapacitySection />` -- concurrency control
-5. Modals: `OllamaProviderModelsModal`, `ServerHistoryModal`
+3. `<LlamaServerSyncSection />` -- global model sync
+4. `<LlamaServerCapacitySection />` -- concurrency control
+5. Modals: `LlamaServerProviderModelsModal`, `ServerHistoryModal`
 
 Actions per row: Healthcheck, Sync Models, Model Selection (`ListFilter`), Edit, Delete.
 
-- **Sync Models**: `POST /v1/providers/{id}/models/sync` -- persists to `ollama_models` + upserts `provider_selected_models` (`is_enabled=true` for new rows). Invalidates `['ollama-sync-status']`, `['ollama-models']`, `['selected-models', providerId]`.
-- **Model Selection**: opens `OllamaProviderModelsModal` -- Switch toggle per model.
+- **Sync Models**: `POST /v1/providers/{id}/models/sync` -- upserts `provider_selected_models` from the Modelfile registry (`is_enabled=true` for new rows). Invalidates `['selected-models', providerId]`.
+- **Model Selection**: opens `LlamaServerProviderModelsModal` -- Switch toggle per model.
 
-**RegisterOllamaModal fields**: name, URL, total_vram_mb, gpu_index, server_id (dropdown).
+**RegisterLlamaServerModal fields**: name, URL, total_vram_mb, gpu_index, server_id (dropdown).
 **EditModal fields**: name, URL, api_key (blank = keep existing), total_vram_mb, gpu_index, server_id.
 
-See `providers-impl.md` for OllamaServerMetrics, OllamaProviderModelsModal, OllamaSyncSection, OllamaModelProvidersModal, OllamaCapacitySection details.
+See `providers-impl.md` for LlamaServerMetrics, LlamaServerProviderModelsModal, LlamaServerSyncSection, LlamaServerModelProvidersModal, LlamaServerCapacitySection details.
 
 ---
 

@@ -111,8 +111,8 @@ mod lifecycle_error_tests {
 
     #[test]
     fn provider_error_passes_through_inner_message() {
-        let e = LifecycleError::ProviderError("ollama 502".into());
-        assert_eq!(e.to_string(), "provider error during lifecycle: ollama 502");
+        let e = LifecycleError::ProviderError("upstream 502".into());
+        assert_eq!(e.to_string(), "provider error during lifecycle: upstream 502");
     }
 
     #[test]

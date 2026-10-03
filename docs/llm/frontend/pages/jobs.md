@@ -49,7 +49,7 @@ The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Ov
 |  Group Sessions                                                       |
 |  "Assign conversation IDs to completed jobs before the selected date."|
 |  [date input: yesterday] [Group Now]  -> success/error/already-running|
-+-- [API 호출별] [대화별] [Network Flow]  <- shadcn/ui Tabs -------------+
++-- [API 호출별] [대화별] [Network Flow]  <- verodesign Tabs ------------+
 |                                                                       |
 | Tab: "API 호출별" / "Tasks" (default, i18n key: jobs.tasks)           |
 |   [search] [status filter]      <- queries ?source=api                |
@@ -64,7 +64,7 @@ The Jobs page filters by source (`?source=api` / `?source=test`) per tab. The Ov
 +-----------------------------------------------------------------------+
 ```
 
-Network Flow notes: Ollama node centers when Gemini is disabled. Stale bee filter removes inactive bees after 2 s. Flow chart badges show live pending/running/req-s counts from `flow_stats` SSE events.
+Network Flow notes: llama-server node centers when Gemini is disabled. Stale bee filter removes inactive bees after 2 s. Flow chart badges show live pending/running/req-s counts from `flow_stats` SSE events.
 
 See `jobs-impl.md` for GroupSessionsPanel internals, handleRetry cross-tab navigation, and Network Flow details.
 
@@ -91,7 +91,7 @@ Each section maintains independent state:
 ```
 +----------------------------------------------------------------------------------------------------+
 | ID      Conv ID  Model    Provider  Provider Name  API Key  Status    Created  TTFT  Latency      |
-| 3a9f..  c7d2..   llama3   ollama    gpu-1          dev-key  complete  Feb 25  142ms  1.2s         |
+| 3a9f..  c7d2..   llama3   llama-server    gpu-1          dev-key  complete  Feb 25  142ms  1.2s         |
 +----------------------------------------------------------------------------------------------------+
 ```
 

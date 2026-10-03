@@ -23,18 +23,6 @@ use uuid::Uuid;
 use crate::domain::value_objects::JobStatusEvent;
 use crate::infrastructure::outbound::valkey_keys;
 
-// ── Token streaming (Valkey Streams) ────────────────────────────────────────
-
-/// Clean up the token stream key after a job completes.
-///
-/// Called from `run_job()` completion phase to free Valkey memory.
-pub async fn cleanup_token_stream(pool: &Pool, job_id: Uuid) {
-    let key = valkey_keys::stream_tokens(job_id);
-    if let Err(e) = pool.del::<i64, _>(&key).await {
-        tracing::warn!(error = %e, %key, "Valkey DEL token stream cleanup failed");
-    }
-}
-
 // ── Publisher helpers (Pub/Sub) ─────────────────────────────────────────────
 
 /// Publish a job status event to cross-instance subscribers.

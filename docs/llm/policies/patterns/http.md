@@ -108,15 +108,19 @@ Rules:
 
 ## Image Inference — 3-Endpoint Support
 
-All three inference formats support image forwarding to Ollama vision models:
+Image forwarding to llama-server vision models flows through the
+OpenAI-compat path:
 
 | Endpoint | Image source | Extraction |
 |----------|-------------|------------|
 | `/v1/chat/completions` | `messages[].content[]` array with `type: "image_url"` | `openai_handlers.rs`: `ContentPart.extract_base64_images()` parses `data:...;base64,{data}` from `image_url.url` |
-| `/api/chat` | `images` field on request body (Ollama native) | `ollama_compat_handlers.rs`: forwarded from parsed messages |
-| `/api/generate` | `images` field on request body | `ollama_compat_handlers.rs`: forwarded directly |
 
-`stream_chat()` in `ollama/adapter.rs` injects images into the last user message (Ollama expects per-message images, not top-level). OpenAI `images` field and content-array images are merged before injection.
+The Ollama-native `/api/chat` and `/api/generate` paths (which carried a
+top-level `images` field) were removed. Clients that previously sent
+`images` use the OpenAI content-array form now.
+
+`stream_chat()` in `llama_server/adapter.rs` injects images into the last
+user message (llama-server expects per-message images, not top-level).
 
 ## Input Validation
 
@@ -125,13 +129,13 @@ All handlers validate input lengths before processing:
 - Model name: `MAX_MODEL_NAME_BYTES` (256) in `constants.rs`
 - Error messages: `ERR_MODEL_INVALID`, `ERR_PROMPT_TOO_LARGE` in `constants.rs` — shared across all API formats
 - Password: `MIN_PASSWORD_LEN` (8) in `auth_handlers.rs`
-- Validation applied per API format (native, OpenAI, Gemini, Ollama)
+- Validation applied per API format (native, OpenAI, Gemini, llama-server)
 
 Shared validation functions in `inference_helpers.rs`:
 - `validate_content_length(messages)` — checks total content bytes against `MAX_PROMPT_BYTES`
 - `validate_model_name(model)` — checks model name length against `MAX_MODEL_NAME_BYTES`
 
-Native `submit_inference()` in `handlers.rs` delegates to these helpers. Format-specific handlers (OpenAI, Gemini, Ollama) call them directly.
+Native `submit_inference()` in `handlers.rs` delegates to these helpers. Format-specific handlers (OpenAI, Gemini, llama-server) call them directly.
 
 ## Shared Handler Helpers
 

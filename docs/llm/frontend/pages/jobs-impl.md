@@ -89,7 +89,7 @@ const { data: providers } = useQuery(providersQuery())
 
 ```
 +-- 3a9fbcd... completed ------------------------------------------+
-| llama3 - gpu-ollama-1                                             |
+| llama3 - gpu-llama-server-1                                             |
 | Created: Feb 25 14:32  Started: 14:32  Completed: 14:32          |
 | Latency: 1.2s   TTFT: 142ms   TPS: 44.3 tok/s                   |
 | Input tokens: 53  Output tokens: 12  Total tokens: 65            |
@@ -123,7 +123,7 @@ Priority order:
 
 - `useQuery({ queryKey: ['job-detail', jobId], enabled: !!jobId && open })`
 - TPS displayed when `completion_tokens` and `latency_ms - ttft_ms` are available
-- Est. Cost: `"$0.00 (self-hosted)"` for Ollama, `"$0.000xxx"` for Gemini
+- Est. Cost: `"$0.00 (self-hosted)"` for llama-server, `"$0.000xxx"` for Gemini
 
 ---
 

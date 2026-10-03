@@ -103,7 +103,7 @@ export function ServerMetricsCell({ serverId }: { serverId: string }) {
   )
 }
 
-// ── Compact inline metrics (Ollama Providers tab) ─────────────────────────────
+// ── Compact inline metrics (llama-server Providers tab) ───────────────────────
 
 export function ServerMetricsCompact({
   serverId,

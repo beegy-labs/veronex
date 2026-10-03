@@ -239,7 +239,7 @@ mod tests {
             api_key_id: None,
             tenant_id: "tenant-1".to_string(),
             model_name: "llama3.2".to_string(),
-            provider_type: "ollama".to_string(),
+            provider_type: "llama_server".to_string(),
             prompt_tokens: 10,
             completion_tokens: 20,
             latency_ms: 150,

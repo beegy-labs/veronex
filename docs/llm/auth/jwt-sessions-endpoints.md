@@ -16,17 +16,22 @@
 
 ## Test Run Endpoints (JWT Bearer)
 
-Logged-in accounts run inference without an API key. Jobs tracked by `account_id`, `source=Test`, excluded from API metrics. See [openai-compat.md](../inference/openai-compat.md) for request/response format details.
+Logged-in accounts run inference against the same routes as API-key
+clients — the dedicated `/v1/test/*` namespace was retired. The
+`InferCaller` extractor accepts either an API key OR a JWT session with
+the `api_test` permission; jobs created via JWT carry `api_key_id=NULL`,
+`account_id=claims.sub`, and `source='test'`, which excludes them from
+API-tier metrics.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/v1/test/completions` | OpenAI SSE stream |
-| GET | `/v1/test/jobs/{job_id}/stream` | SSE reconnect |
-| POST | `/v1/test/api/chat` | Ollama NDJSON stream |
-| POST | `/v1/test/api/generate` | Ollama NDJSON stream |
-| POST | `/v1/test/v1beta/models/{*path}` | Gemini SSE stream |
+| POST | `/v1/chat/completions` | OpenAI SSE / chat-completion stream |
+| POST | `/v1/inference` | Veronex-native single-shot inference |
+| POST | `/v1beta/models/{model}:generateContent` | Gemini-native (non-streaming) |
+| GET | `/v1/jobs/{job_id}/stream` | SSE reconnect for in-flight jobs |
 
-All test routes: `api_key_id=NULL`, `account_id=claims.sub`, enqueued in `veronex:queue:zset` with tier=test (lowest priority score).
+All test runs: `source='test'`, enqueued in `veronex:queue:zset` with
+tier=test (lowest priority score).
 
 Full request/response specs: [jwt-sessions-impl.md](jwt-sessions-impl.md#test-run-endpoint-details)
 

@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import Link from 'next/link'
-import type { Provider, GpuServer, DashboardStats, PerformanceStats, UsageAggregate, UsageBreakdown, Job, NodeMetrics, ServerMetricsPoint, ModelBreakdown } from '@/lib/types'
+import type { Provider, GpuServer, DashboardStats, PerformanceStats, UsageAggregate, UsageBreakdown, NodeMetrics, ServerMetricsPoint, ModelBreakdown } from '@/lib/types'
 import StatsCard from '@/components/stats-card'
 import {
   Activity, Zap, ArrowRight, Clock,
@@ -26,9 +26,9 @@ import { fmtHourLabel } from '@/lib/date'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import { PROVIDER_GEMINI, GPU_TEMP_CRITICAL, GPU_TEMP_WARNING } from '@/lib/constants'
 import { tokens } from '@/lib/design-tokens'
-import { getOllamaProviders, getGeminiProviders, successRateCls } from '@/lib/utils'
+import { getLlamaServerProviders, getGeminiProviders, successRateCls } from '@/lib/utils'
 import {
-  RequestTrendSection, TopModelsSection, RecentJobsSection, TokenSummarySection,
+  RequestTrendSection, TopModelsSection, TokenSummarySection,
 } from './dashboard-lower-sections'
 
 import {
@@ -60,7 +60,6 @@ interface Props {
   perf30d: PerformanceStats | undefined // 30 d
   usage: UsageAggregate | undefined
   breakdown: UsageBreakdown | undefined
-  recentJobsData: { jobs: Job[]; total: number } | undefined
 }
 
 /* ─── component ───────────────────────────────────────────── */
@@ -69,7 +68,7 @@ export function DashboardTab({
   providers, servers,
   serverMetricsBatch, serverHistoryQueries,
   perf, perf7d, perf30d,
-  usage, breakdown, recentJobsData,
+  usage, breakdown,
 }: Props) {
   const { t } = useTranslation()
   const { tz } = useTimezone()
@@ -78,7 +77,7 @@ export function DashboardTab({
 
   /* ── derived: providers ─────────────────────────────────── */
   const { localBs, apiBs, onlineAll, totalProv } = useMemo(() => {
-    const localBs = getOllamaProviders(providers)
+    const localBs = getLlamaServerProviders(providers)
     const apiBs   = geminiEnabled ? getGeminiProviders(providers) : []
     const visibleBs = [...localBs, ...apiBs]
     return {

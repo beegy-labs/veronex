@@ -9,7 +9,7 @@
 | Add new column to `inference_logs` | `infrastructure/outbound/observability/` HttpObservabilityAdapter + `IngestInferenceRequest` struct | Extend `record_inference()` + veronex-analytics ingest endpoint |
 | Change TTFT calculation logic | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify TTFT detection block (first non-empty non-final token) |
 | Add new analytics endpoint | `infrastructure/inbound/http/handlers.rs` + ClickHouse SQL | Add handler + route in `router.rs` |
-| Change Ollama token count fallback | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify `token_count` fallback (currently: SSE event count) |
+| Change llama-server token count fallback | `infrastructure/outbound/provider_router.rs` `run_job()` | Modify `token_count` fallback (currently: SSE event count) |
 | Change ClickHouse data retention | `docker/clickhouse/schema.sql` TTL clause | Modify `INTERVAL N DAY` on relevant table; for existing volumes use `ALTER TABLE ... MODIFY TTL` |
 | Add Gemini prompt token tracking | `infrastructure/outbound/gemini/adapter.rs` `extract_usage()` | Already implemented — verify `prompt_tokens` flows to `emit_inference_event()` |
 
@@ -83,7 +83,7 @@ emit_inference_event(
 ```
 
 - **Gemini**: real counts from `usageMetadata`
-- **Ollama**: SSE event count fallback (Ollama doesn't expose token counts in stream)
+- **llama-server**: SSE event count fallback (llama-server doesn't expose token counts in stream)
 
 ---
 
@@ -114,7 +114,7 @@ pub struct IngestInferenceRequest {
     pub job_id:            String,
     pub api_key_id:        Option<String>,
     pub model_name:        String,
-    pub provider_type:     String,   // "ollama" | "gemini"
+    pub provider_type:     String,   // "llama_server" | "gemini"
     pub status:            String,
     pub prompt_tokens:     u32,
     pub completion_tokens: u32,

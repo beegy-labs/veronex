@@ -70,14 +70,14 @@ export interface JobBase {
  account_name: string | null
  /** HTTP path the request arrived via, e.g. "/v1/chat/completions" */
  request_path: string | null
- /** Estimated API cost in USD. 0.00 for Ollama (self-hosted). null = no pricing data. */
+ /** Estimated API cost in USD. 0.00 for self-hosted (llama_server). null = no pricing data. */
  estimated_cost_usd: number | null
 }
 
 export interface Job extends JobBase {
  /** True when the model responded with tool calls instead of text. */
  has_tool_calls: boolean
- /** Name of the provider (Ollama server) that processed this job. */
+ /** Name of the provider (llama-server node) that processed this job. */
  provider_name: string | null
  /** Conversation this job belongs to (multi-turn), if any. */
  conversation_id: string | null
@@ -114,7 +114,7 @@ export interface JobDetail extends JobBase {
   message_count: number | null
   /** Full conversation context sent to the model. Null for single-turn or pre-migration jobs. */
   messages_json: ChatMessage[] | null
-  /** Name of the provider (Ollama server) that processed this job. */
+  /** Name of the provider (llama-server node) that processed this job. */
   provider_name: string | null
   /** S3 keys for stored WebP images. */
   image_keys: string[] | null
@@ -431,25 +431,25 @@ export interface CreateKeyResponse {
   created_at: string
 }
 
-export interface OllamaSyncResult {
+export interface LlamaServerSyncResult {
   provider_id: string
   name: string
   models: string[]
   error: string | null
 }
 
-export interface OllamaSyncJob {
+export interface LlamaServerSyncJob {
   id: string
   started_at: string
   completed_at: string | null
   status: 'running' | 'completed'
   total_providers: number
   done_providers: number
-  results: OllamaSyncResult[]
+  results: LlamaServerSyncResult[]
 }
 
-/** Model with count of providers that carry it (from GET /v1/ollama/models). */
-export interface OllamaModelWithCount {
+/** Model with count of providers that carry it (from GET /v1/llama_server/models). */
+export interface LlamaServerModelWithCount {
   model_name: string
   provider_count: number
   is_vision?: boolean
@@ -459,14 +459,14 @@ export interface OllamaModelWithCount {
   is_enabled?: boolean
 }
 
-/** Provider info returned by GET /v1/ollama/models/:model_name/providers. */
+/** Provider info returned by GET /v1/llama_server/models/:model_name/providers. */
 export interface RetryParams {
   prompt: string
   model: string
   provider_type: string
 }
 
-export interface OllamaProviderForModel {
+export interface LlamaServerProviderForModel {
   provider_id: string
   name: string
   url: string
@@ -475,15 +475,15 @@ export interface OllamaProviderForModel {
   is_enabled: boolean
 }
 
-export interface OllamaModelPage {
-  models: OllamaModelWithCount[]
+export interface LlamaServerModelPage {
+  models: LlamaServerModelWithCount[]
   total: number
   page: number
   limit: number
 }
 
-export interface OllamaProviderPage {
-  providers: OllamaProviderForModel[]
+export interface LlamaServerProviderPage {
+  providers: LlamaServerProviderForModel[]
   total: number
   page: number
   limit: number
@@ -623,6 +623,7 @@ export interface PatchSyncSettings {
 }
 
 export interface LabSettings {
+  builder_enabled: boolean
   gemini_function_calling: boolean
   max_images_per_request: number
   max_image_b64_bytes: number
@@ -642,6 +643,7 @@ export interface LabSettings {
 }
 
 export interface PatchLabSettings {
+  builder_enabled?: boolean
   gemini_function_calling?: boolean
   max_images_per_request?: number
   max_image_b64_bytes?: number
@@ -657,11 +659,6 @@ export interface PatchLabSettings {
   vision_model?: string | null
   handoff_enabled?: boolean
   handoff_threshold?: number
-}
-
-export interface MultiturnWarning {
-  code: 'model_too_small' | 'context_too_small' | 'model_not_allowed'
-  message: string
 }
 
 /** Aggregated snapshot from GET /v1/dashboard/overview — replaces individual stats/perf/queue/lab queries. */

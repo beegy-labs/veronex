@@ -73,7 +73,7 @@ Opened by `ListFilter` button on paid provider rows.
 | Query key | `[...GEMINI_QUERY_KEYS.selectedModels, providerId]` |
 | Refresh | Auto-refreshed when `refreshGeminiData()` called (prefix invalidation) |
 
-Ollama counterpart: `OllamaProviderModelsModal` -- same Switch UI, same endpoint, Ollama branch returns per-provider models with `is_enabled = true` default.
+llama-server counterpart: `LlamaServerProviderModelsModal` -- same Switch UI, same endpoint, llama-server branch returns per-provider models with `is_enabled = true` default.
 
 ---
 

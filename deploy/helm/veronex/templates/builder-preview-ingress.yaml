@@ -1,0 +1,28 @@
+{{- if .Values.builder.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ .Release.Name }}-builder-preview
+  namespace: {{ .Release.Namespace }}
+spec:
+  {{- if .Values.ingress.className }}
+  ingressClassName: {{ .Values.ingress.className }}
+  {{- end }}
+  {{- if .Values.builder.previewTlsSecret }}
+  tls:
+    - hosts:
+        - {{ printf "*.%s" .Values.builder.previewDomain | quote }}
+      secretName: {{ .Values.builder.previewTlsSecret | quote }}
+  {{- end }}
+  rules:
+    - host: {{ printf "*.%s" .Values.builder.previewDomain | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Release.Name }}-veronex
+                port:
+                  name: http
+{{- end }}

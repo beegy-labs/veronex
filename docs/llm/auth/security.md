@@ -89,7 +89,7 @@ Provider URLs are validated by `validate_provider_url()` in `provider_handlers.r
 | IPv6 link-local | Blocks `fe80::/10` addresses |
 | IPv4-mapped IPv6 | Blocks `::ffff:169.254.x.x` (bypass prevention) |
 | IPv6 bracket parsing | Correctly handles `[::ffff:169.254.169.254]:port` notation |
-| Applied to | Ollama provider URLs, Gemini API base URLs (register + update) |
+| Applied to | llama-server provider URLs, Gemini API base URLs (register + update) |
 
 ---
 
@@ -97,7 +97,7 @@ Provider URLs are validated by `validate_provider_url()` in `provider_handlers.r
 
 | Field | Max Size | Applied To |
 |-------|----------|------------|
-| Prompt/message content | 1 MB | All API formats (native, OpenAI, Gemini, Ollama) |
+| Prompt/message content | 1 MB | All API formats (native, OpenAI, Gemini, llama-server) |
 | Model name | 256 bytes | All API formats |
 
 ---

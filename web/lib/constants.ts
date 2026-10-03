@@ -5,18 +5,18 @@ export const BASE_API_URL =
   process.env.NEXT_PUBLIC_VERONEX_API_URL ?? 'http://localhost:3001'
 
 /** Provider type identifiers — single source of truth. */
-export const PROVIDER_OLLAMA = 'ollama' as const
+export const PROVIDER_LLAMA_SERVER = 'llama_server' as const
 export const PROVIDER_GEMINI = 'gemini' as const
 
 /** Provider type → Tailwind badge class. */
 export const PROVIDER_BADGE: Record<string, string> = {
-  ollama: 'vds-bg-primary/10 vds-text-primary vds-border-primary/30',
+  llama_server: 'vds-bg-primary/10 vds-text-primary vds-border-primary/30',
   gemini: 'vds-bg-info/10 vds-text-info vds-border-info/30',
 }
 
 /** Provider type → CSS custom-property chart colour. */
 export const PROVIDER_COLORS: Record<string, string> = {
-  ollama: tokens.brand.primary,
+  llama_server: tokens.brand.primary,
   gemini: tokens.status.info,
 }
 
@@ -81,7 +81,6 @@ export const REFETCH_INTERVAL_SLOW = 60_000
 export const STALE_TIME_LIVE = 2_000
 
 /** Refetch interval for live-polled data (queue depth — 3s). */
-export const REFETCH_INTERVAL_LIVE = 3_000
 
 /** Refetch interval for historical data (power history, metric history). */
 export const REFETCH_INTERVAL_HISTORY = 5 * 60_000
@@ -172,11 +171,6 @@ export const SERVICE_STATUS_DOT: Record<string, string> = {
 }
 
 /** Service health status → text colour class. */
-export const SERVICE_STATUS_TEXT: Record<string, string> = {
-  ok:          'vds-text-success',
-  degraded:    'vds-text-warning',
-  unavailable: 'vds-text-error',
-}
 
 /** Job source → Tailwind badge class. SSOT for source origin badges. */
 export const SOURCE_STYLES: Record<string, string> = {

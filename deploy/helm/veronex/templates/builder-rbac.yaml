@@ -1,0 +1,82 @@
+{{- if .Values.builder.enabled }}
+{{- $namespace := .Values.builder.namespace | default .Release.Namespace }}
+{{- if or (not .Values.builder.pvc) (not .Values.builder.runnerImage) (not .Values.builder.browserOrigin) (not .Values.builder.previewDomain) }}
+{{- fail "builder.enabled requires builder.pvc, builder.runnerImage, builder.browserOrigin and builder.previewDomain" }}
+{{- end }}
+{{- if not .Values.builder.existingSecretName }}
+{{- if or (not .Values.builder.runnerToken) (not .Values.builder.previewToken) }}
+{{- fail "builder requires existingSecretName or runnerToken and previewToken" }}
+{{- end }}
+{{- if eq .Values.builder.runnerToken .Values.builder.previewToken }}
+{{- fail "builder.runnerToken and builder.previewToken must differ" }}
+{{- end }}
+{{- if or (lt (len .Values.builder.runnerToken) 32) (lt (len .Values.builder.previewToken) 32) }}
+{{- fail "builder runner tokens must each contain at least 32 characters" }}
+{{- end }}
+{{- end }}
+{{- if and (hasPrefix "https://" .Values.builder.browserOrigin) (not .Values.builder.previewTlsSecret) }}
+{{- fail "HTTPS builder.browserOrigin requires builder.previewTlsSecret" }}
+{{- end }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-builder-controller
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}-builder-runtime
+  namespace: {{ $namespace }}
+automountServiceAccountToken: false
+{{- if not .Values.builder.existingSecretName }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-builder-runner
+  namespace: {{ $namespace }}
+type: Opaque
+stringData:
+  RUNNER_TOKEN: {{ .Values.builder.runnerToken | quote }}
+  PREVIEW_TOKEN: {{ .Values.builder.previewToken | quote }}
+  GIT_TOKEN: {{ .Values.builder.gitToken | quote }}
+{{- if ne $namespace .Release.Namespace }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ .Release.Name }}-builder-runner
+  namespace: {{ .Release.Namespace }}
+type: Opaque
+stringData:
+  RUNNER_TOKEN: {{ .Values.builder.runnerToken | quote }}
+  PREVIEW_TOKEN: {{ .Values.builder.previewToken | quote }}
+  GIT_TOKEN: {{ .Values.builder.gitToken | quote }}
+{{- end }}
+{{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Release.Name }}-builder-controller
+  namespace: {{ $namespace }}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["create", "get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Release.Name }}-builder-controller
+  namespace: {{ $namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ .Release.Name }}-builder-controller
+    namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ .Release.Name }}-builder-controller
+  apiGroup: rbac.authorization.k8s.io
+{{- end }}

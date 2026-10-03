@@ -1,3 +1,5 @@
+#![allow(clippy::type_complexity)]
+
 use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -139,7 +141,7 @@ pub trait VramPoolPort: Send + Sync {
     ///
     /// - If model is loaded: only reserves KV cache.
     /// - If model is NOT loaded: reserves weight + KV cache.
-    /// - If total_vram == 0 (not yet probed): always allows (delegates to Ollama).
+    /// - If total_vram == 0 (not yet probed): always allows (delegates to upstream).
     fn try_reserve(&self, provider_id: Uuid, model: &str) -> Option<VramPermit>;
 
     /// Total VRAM for a provider (0 = not yet probed).

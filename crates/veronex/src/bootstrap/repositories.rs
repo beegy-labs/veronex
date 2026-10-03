@@ -16,10 +16,7 @@ use veronex::application::ports::outbound::llm_provider_registry::LlmProviderReg
 use veronex::application::ports::outbound::image_store::ImageStore;
 use veronex::application::ports::outbound::message_store::MessageStore;
 use veronex::application::ports::outbound::model_capacity_repository::ModelCapacityRepository;
-use veronex::application::ports::outbound::model_manager_port::ModelManagerPort;
 use veronex::application::ports::outbound::observability_port::ObservabilityPort;
-use veronex::application::ports::outbound::ollama_model_repository::OllamaModelRepository;
-use veronex::application::ports::outbound::ollama_sync_job_repository::OllamaSyncJobRepository;
 use veronex::application::ports::outbound::provider_model_selection::ProviderModelSelectionRepository;
 use veronex::application::ports::outbound::global_model_settings::GlobalModelSettingsRepository;
 use veronex::application::ports::outbound::api_key_provider_access::ApiKeyProviderAccessRepository;
@@ -35,7 +32,6 @@ use veronex::infrastructure::outbound::persistence::api_key_repository::Postgres
 use veronex::infrastructure::outbound::persistence::caching_api_key_repo::CachingApiKeyRepo;
 use veronex::infrastructure::outbound::persistence::caching_lab_settings_repo::CachingLabSettingsRepo;
 use veronex::infrastructure::outbound::persistence::caching_model_selection::CachingModelSelection;
-use veronex::infrastructure::outbound::persistence::caching_ollama_model_repo::CachingOllamaModelRepo;
 use veronex::infrastructure::outbound::persistence::caching_provider_registry::CachingProviderRegistry;
 use veronex::infrastructure::outbound::persistence::capacity_settings_repository::PostgresCapacitySettingsRepository;
 use veronex::infrastructure::outbound::persistence::gemini_model_repository::PostgresGeminiModelRepository;
@@ -46,8 +42,6 @@ use veronex::infrastructure::outbound::persistence::job_repository::PostgresJobR
 use veronex::infrastructure::outbound::persistence::lab_settings_repository::PostgresLabSettingsRepository;
 use veronex::infrastructure::outbound::persistence::mcp_settings_repository::PostgresMcpSettingsRepository;
 use veronex::infrastructure::outbound::persistence::model_capacity_repository::PostgresModelCapacityRepository;
-use veronex::infrastructure::outbound::persistence::ollama_model_repository::PostgresOllamaModelRepository;
-use veronex::infrastructure::outbound::persistence::ollama_sync_job_repository::PostgresOllamaSyncJobRepository;
 use veronex::infrastructure::outbound::persistence::provider_model_selection::PostgresProviderModelSelectionRepository;
 use veronex::infrastructure::outbound::persistence::global_model_settings::PostgresGlobalModelSettingsRepository;
 use veronex::infrastructure::outbound::persistence::api_key_provider_access::PostgresApiKeyProviderAccessRepository;
@@ -74,8 +68,6 @@ pub struct Repositories {
     pub api_key_provider_access_repo: Arc<dyn ApiKeyProviderAccessRepository>,
     pub gemini_sync_config_repo: Arc<dyn GeminiSyncConfigRepository>,
     pub gemini_model_repo: Arc<dyn GeminiModelRepository>,
-    pub ollama_model_repo: Arc<dyn OllamaModelRepository>,
-    pub ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository>,
     pub session_repo: Arc<dyn SessionRepository>,
     pub lab_settings_repo: Arc<dyn LabSettingsRepository>,
     pub mcp_settings_repo: Arc<dyn McpSettingsRepository>,
@@ -85,7 +77,6 @@ pub struct Repositories {
     pub observability: Option<Arc<dyn ObservabilityPort>>,
     pub audit_port: Option<Arc<dyn AuditPort>>,
     pub analytics_repo: Option<Arc<dyn AnalyticsRepository>>,
-    pub model_manager: Option<Arc<dyn ModelManagerPort>>,
     pub vram_pool: Arc<dyn VramPoolPort>,
     pub message_store: Option<Arc<dyn MessageStore>>,
     pub image_store: Option<Arc<dyn ImageStore>>,
@@ -252,10 +243,6 @@ pub async fn wire_repositories(
         None
     };
 
-    // ── Model manager ──────────────────────────────────────────────
-    let model_manager: Option<Arc<dyn ModelManagerPort>> = None;
-    tracing::info!("model manager disabled — VramPool manages model lifecycle");
-
     // ── Postgres repositories ──────────────────────────────────────
     let account_repo: Arc<dyn AccountRepository> =
         Arc::new(PostgresAccountRepository::new(pg_pool.clone()));
@@ -285,12 +272,6 @@ pub async fn wire_repositories(
         Arc::new(PostgresGeminiSyncConfigRepository::new(pg_pool.clone(), config.gemini_encryption_key));
     let gemini_model_repo: Arc<dyn GeminiModelRepository> =
         Arc::new(PostgresGeminiModelRepository::new(pg_pool.clone()));
-    let ollama_model_repo: Arc<dyn OllamaModelRepository> =
-        Arc::new(CachingOllamaModelRepo::new(Arc::new(
-            PostgresOllamaModelRepository::new(pg_pool.clone()),
-        )));
-    let ollama_sync_job_repo: Arc<dyn OllamaSyncJobRepository> =
-        Arc::new(PostgresOllamaSyncJobRepository::new(pg_pool.clone()));
     let session_repo: Arc<dyn SessionRepository> =
         Arc::new(PostgresSessionRepository::new(pg_pool.clone()));
     let lab_settings_repo: Arc<dyn LabSettingsRepository> =
@@ -335,8 +316,6 @@ pub async fn wire_repositories(
         api_key_provider_access_repo,
         gemini_sync_config_repo,
         gemini_model_repo,
-        ollama_model_repo,
-        ollama_sync_job_repo,
         session_repo,
         lab_settings_repo,
         mcp_settings_repo,
@@ -346,7 +325,6 @@ pub async fn wire_repositories(
         observability,
         audit_port,
         analytics_repo,
-        model_manager,
         vram_pool,
         message_store,
         image_store,
@@ -382,11 +360,10 @@ pub async fn maybe_bootstrap_super_account(
             {
                 Ok(hash) => {
                     // Look up the super role_id from seeded roles table.
-                    let super_role_id = match sqlx::query_as::<_, (uuid::Uuid,)>("SELECT id FROM roles WHERE name = 'super'")
-                        .fetch_optional(pg_pool)
-                        .await
+                    let super_role_id = match veronex::infrastructure::outbound::persistence::
+                        role_queries::get_id_by_name(pg_pool, "super").await
                     {
-                        Ok(Some(row)) => row.0,
+                        Ok(Some(id)) => id,
                         Ok(None) => { tracing::warn!("super role not found in DB — skip bootstrap"); return; }
                         Err(e) => { tracing::warn!("failed to query super role: {e}"); return; }
                     };

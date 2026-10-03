@@ -84,7 +84,7 @@ export const TableHead = React.forwardRef<HTMLTableCellElement, React.ThHTMLAttr
 TableHead.displayName = 'TableHead'
 
 // `whitespace-nowrap` is the primitive default: tabular cells should never
-// break identifiers (qwen3:8b, remote-ollama, enum literals like analyzer)
+// break identifiers (qwen3:8b, remote-llama_server, enum literals like analyzer)
 // mid-token. The outer DataTable already provides horizontal scroll when
 // content is wider than the viewport, so genuine overflow becomes a scroll
 // rather than a multi-line stack. Cells that must wrap (long-form text,

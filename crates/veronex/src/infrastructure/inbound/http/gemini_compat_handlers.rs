@@ -1,17 +1,17 @@
 /// Gemini API-compatible gateway endpoint.
 ///
 /// Allows Gemini CLI and any client using `GOOGLE_GEMINI_BASE_URL` to route
-/// requests through Veronex to any active Ollama provider.
+/// requests through Veronex to any active llama-server provider.
 ///
 /// Supports:
 /// - `POST /v1beta/models/{model}:streamGenerateContent`  (SSE streaming)
 /// - `POST /v1beta/models/{model}:generateContent`        (non-streaming)
 ///
 /// Format conversions performed transparently:
-/// - Gemini `contents[]` ↔ Ollama `messages[]`  (role + part mapping)
-/// - Gemini `functionDeclarations[]` ↔ Ollama `tools[]`
-/// - Gemini `functionCall` / `functionResponse` ↔ Ollama `tool_calls` / `tool` messages
-/// - Gemini `generationConfig` ↔ Ollama `options`
+/// - Gemini `contents[]` ↔ chat `messages[]`  (role + part mapping)
+/// - Gemini `functionDeclarations[]` ↔ chat `tools[]`
+/// - Gemini `functionCall` / `functionResponse` ↔ chat `tool_calls` / `tool` messages
+/// - Gemini `generationConfig` ↔ chat `options`
 ///
 /// Auth: `x-goog-api-key` header (or standard `X-API-Key` / `Authorization: Bearer`).
 use axum::extract::{Path, State};
@@ -40,7 +40,7 @@ pub struct GeminiGenerateRequest {
     pub tools: Vec<GeminiTool>,
     #[serde(rename = "generationConfig", default)]
     pub generation_config: Option<GenerationConfig>,
-    /// System-level instructions (prepended as Ollama system message).
+    /// System-level instructions (prepended as a system message).
     #[serde(rename = "systemInstruction", default)]
     pub system_instruction: Option<GeminiContent>,
 }
@@ -223,7 +223,7 @@ pub async fn handle_request(
 
 /// Route a Gemini streamGenerateContent request through the Veronex queue.
 ///
-/// Converts Gemini `contents[]` to Ollama `/api/chat` messages format,
+/// Converts Gemini `contents[]` to chat-completion `messages` format,
 /// submits the job via the queue for VRAM-aware dispatch, and streams
 /// the response as Gemini SSE chunks.
 async fn stream_generate(
@@ -233,13 +233,13 @@ async fn stream_generate(
     req: GeminiGenerateRequest,
     conversation_id: Option<uuid::Uuid>,
 ) -> Response {
-    let messages = contents_to_ollama(req.system_instruction, req.contents);
+    let messages = contents_to_messages(req.system_instruction, req.contents);
 
     let prompt = extract_last_user_prompt(&messages).to_string();
 
     let messages_json = serde_json::Value::Array(messages);
     // Tools already passed the lab gate in handle_request; convert here.
-    let tools = gemini_tools_to_ollama(req.tools);
+    let tools = gemini_tools_to_chat_tools(req.tools);
 
     let request_path = format!("/v1beta/models/{}:streamGenerateContent", model);
     let job_id = match state
@@ -247,7 +247,7 @@ async fn stream_generate(
         .submit(SubmitJobRequest {
             prompt,
             model_name: model.clone(),
-            provider_type: ProviderType::Ollama,
+            provider_type: ProviderType::LlamaServer,
             gemini_tier: None,
             api_key_id: caller.api_key_id(),
             account_id: caller.account_id(),
@@ -328,12 +328,12 @@ async fn generate_content(
     req: GeminiGenerateRequest,
     conversation_id: Option<uuid::Uuid>,
 ) -> Response {
-    let messages = contents_to_ollama(req.system_instruction, req.contents);
+    let messages = contents_to_messages(req.system_instruction, req.contents);
 
     let prompt = extract_last_user_prompt(&messages).to_string();
 
     let messages_json = serde_json::Value::Array(messages);
-    let tools = gemini_tools_to_ollama(req.tools);
+    let tools = gemini_tools_to_chat_tools(req.tools);
 
     let request_path = format!("/v1beta/models/{}:generateContent", model);
     let job_id = match state
@@ -341,7 +341,7 @@ async fn generate_content(
         .submit(SubmitJobRequest {
             prompt,
             model_name: model.clone(),
-            provider_type: ProviderType::Ollama,
+            provider_type: ProviderType::LlamaServer,
             gemini_tier: None,
             api_key_id: caller.api_key_id(),
             account_id: caller.account_id(),
@@ -417,17 +417,17 @@ async fn generate_content(
 
 // ── Format conversion helpers ───────────────────────────────────────────────────
 
-/// Convert Gemini `contents` + optional `systemInstruction` → Ollama `messages`.
+/// Convert Gemini `contents` + optional `systemInstruction` → chat `messages`.
 ///
 /// Role mapping:
-/// - Gemini `user`  → Ollama `user`
-/// - Gemini `model` → Ollama `assistant`
+/// - Gemini `user`  → chat `user`
+/// - Gemini `model` → chat `assistant`
 ///
 /// Part mapping:
 /// - `text` parts → concatenated into `content` string
-/// - `functionCall` parts → `tool_calls` array (Ollama object format)
-/// - `functionResponse` parts → separate Ollama `tool` messages
-fn contents_to_ollama(
+/// - `functionCall` parts → `tool_calls` array (object-args format)
+/// - `functionResponse` parts → separate `tool` messages
+fn contents_to_messages(
     system: Option<GeminiContent>,
     contents: Vec<GeminiContent>,
 ) -> Vec<serde_json::Value> {
@@ -443,10 +443,10 @@ fn contents_to_ollama(
 
     for content in contents {
         let role = content.role.as_deref().unwrap_or("user");
-        let ollama_role = if role == "model" { "assistant" } else { role };
+        let chat_role = if role == "model" { "assistant" } else { role };
 
         // Gemini encodes tool results as user-role messages with functionResponse parts.
-        // Detect and convert them to Ollama tool messages.
+        // Detect and convert them to chat tool messages.
         let all_fn_responses = content.parts.iter().all(|p| {
             matches!(p, GeminiPart::FunctionResponse { .. })
         });
@@ -472,7 +472,7 @@ fn contents_to_ollama(
             match part {
                 GeminiPart::Text { text } => texts.push(text),
                 GeminiPart::FunctionCall { function_call } => {
-                    // Ollama tool_calls use object arguments (not JSON string)
+                    // tool_calls use object arguments (not JSON string)
                     tool_calls.push(serde_json::json!({
                         "function": {
                             "name": function_call.name,
@@ -493,7 +493,7 @@ fn contents_to_ollama(
         }
 
         let mut msg = serde_json::json!({
-            "role": ollama_role,
+            "role": chat_role,
             "content": texts.join(""),
         });
         if !tool_calls.is_empty() {
@@ -505,12 +505,12 @@ fn contents_to_ollama(
     messages
 }
 
-/// Convert Gemini `tools[].functionDeclarations` → Ollama `tools` JSON Value (Array).
+/// Convert Gemini `tools[].functionDeclarations` → chat `tools` JSON Value (Array).
 ///
 /// Only called when the Gemini function-calling lab feature is enabled.
 /// Returns `None` when the tools list is empty (no tools → submit without tools).
-fn gemini_tools_to_ollama(tools: Vec<GeminiTool>) -> Option<serde_json::Value> {
-    let ollama_tools: Vec<serde_json::Value> = tools
+fn gemini_tools_to_chat_tools(tools: Vec<GeminiTool>) -> Option<serde_json::Value> {
+    let chat_tools: Vec<serde_json::Value> = tools
         .into_iter()
         .flat_map(|t| t.function_declarations)
         .map(|fd| {
@@ -525,13 +525,13 @@ fn gemini_tools_to_ollama(tools: Vec<GeminiTool>) -> Option<serde_json::Value> {
         })
         .collect();
 
-    if ollama_tools.is_empty() { None } else { Some(serde_json::Value::Array(ollama_tools)) }
+    if chat_tools.is_empty() { None } else { Some(serde_json::Value::Array(chat_tools)) }
 }
 
-/// Map a Veronex/Ollama finish reason string to the Gemini wire format (uppercase).
+/// Map a Veronex finish reason string to the Gemini wire format (uppercase).
 ///
 /// Gemini uses: `"STOP"`, `"MAX_TOKENS"`, `"CANCELLED"`, `"OTHER"`.
-/// Ollama/Veronex uses: `"stop"`, `"length"`, `"cancelled"`, `"error"`.
+/// Veronex uses: `"stop"`, `"length"`, `"cancelled"`, `"error"`.
 fn to_gemini_finish_reason(reason: Option<&str>) -> String {
     match reason.unwrap_or(FinishReason::Stop.as_str()) {
         "length" => "MAX_TOKENS",
@@ -569,12 +569,12 @@ fn gemini_error(http: StatusCode, code: u32, status: &str, message: &str) -> Res
 
 /// `GET /v1beta/models` — list available models.
 ///
-/// Returns only Ollama models that are explicitly **enabled** on at least one
+/// Returns only local-server models that are explicitly **enabled** on at least one
 /// active provider (via the model selection feature in the Providers page).
 /// This is the "selected models" subset of the full synchronized model list.
 #[instrument(skip(state))]
 pub async fn list_models(State(state): State<AppState>) -> Response {
-    // Gather all active Ollama providers
+    // Gather all active llama-server providers
     let providers = match state.provider_registry.list_active().await {
         Ok(p) => p,
         Err(e) => {
@@ -583,10 +583,10 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         }
     };
 
-    // Collect enabled models across all Ollama providers (deduplicated).
+    // Collect enabled models across all llama-server providers (deduplicated).
     // Concurrent fan-out so this stays one wall-clock RTT at scale.
     let enabled_lists = futures::future::join_all(
-        providers.iter().filter(|p| p.is_ollama())
+        providers.iter().filter(|p| p.is_llama_server())
             .map(|p| state.model_selection_repo.list_enabled(p.id)),
     ).await;
 
@@ -600,9 +600,14 @@ pub async fn list_models(State(state): State<AppState>) -> Response {
         }
     }
 
-    // If no models are selected yet, fall back to all synchronized models
-    if model_names.is_empty() {
-        model_names = state.ollama_model_repo.list_all().await.unwrap_or_default();
+    // If no models are selected yet, fall back to every Modelfile in the registry.
+    if model_names.is_empty()
+        && let Some(repo) = state.modelfile_registry.as_ref()
+        && let Ok(all) = repo
+            .list(&crate::application::ports::outbound::modelfile_registry::ListFilter::default())
+            .await
+    {
+        model_names = all.into_iter().map(|m| m.model_id).collect();
     }
 
     model_names.sort();
@@ -631,9 +636,12 @@ pub async fn get_model(State(state): State<AppState>, axum::extract::Path(model)
     // Strip "models/" prefix if present (Gemini SDK adds it)
     let model_name = model.strip_prefix("models/").unwrap_or(&model);
 
-    // Check if model exists in synchronized list
-    let all = state.ollama_model_repo.list_all().await.unwrap_or_default();
-    if !all.iter().any(|n| n == model_name) {
+    // Check if the model is registered as a Modelfile.
+    let exists = match state.modelfile_registry.as_ref() {
+        Some(repo) => repo.get(model_name).await.ok().flatten().is_some(),
+        None => false,
+    };
+    if !exists {
         return gemini_error(
             StatusCode::NOT_FOUND,
             404,

@@ -31,7 +31,7 @@
 | `frontend/react.md` | useReducer, ResizeObserver, SSE rAF buffer, list key stability, relative time refresh | verified |
 | `frontend/data-fetching.md` | TanStack Query v5, polling, background refetch, staleTime | verified |
 | `frontend/nextjs.md` | App Router, 'use client' rationale, PPR, Suspense, CVE-2025-29927 middleware | verified |
-| `frontend/tailwind.md` | Tailwind v4 CSS-first, 4-layer tokens, @utility, container queries | verified |
+| `frontend/tailwind.md` | Tailwind v4 (historical research — Veronex no longer uses Tailwind, see `frontend/design-system.md` for the verodesign white-box system) | superseded |
 | `frontend/tanstack-query.md` | queryOptions factory, lib/queries/ SSOT, invalidation, optimistic updates | verified |
 
 ## Server-side (`backend/`)
@@ -70,7 +70,7 @@
 | Complex UI state (reducers, cleanup) | `frontend/react.md` |
 | Polling / background data sync | `frontend/data-fetching.md` |
 | TanStack Query queryOptions / invalidation | `frontend/tanstack-query.md` |
-| Tailwind v4 tokens / custom utilities | `frontend/tailwind.md` |
+| verodesign tokens / custom utilities | `frontend/design-system.md` (Tailwind research at `frontend/tailwind.md` is historical) |
 | Next.js page architecture decision | `frontend/nextjs.md` |
 | New Axum handler or middleware | `backend/rust-axum.md` |
 | API endpoint design / OpenAPI | `backend/api-design.md` |

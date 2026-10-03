@@ -33,7 +33,7 @@ All implementation targets:
 
 | Axis | Target |
 | ---- | ------ |
-| Providers (Ollama servers) | **10,000** |
+| Providers (llama-server nodes) | **10,000** |
 | Concurrent requests (TPS) | **1,000,000** |
 
 Design every data path, query, and async task with these numbers in mind. No O(N) sequential DB queries over providers, no unbounded in-memory collections, no blocking hot paths.

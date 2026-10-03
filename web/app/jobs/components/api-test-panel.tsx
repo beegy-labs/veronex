@@ -3,15 +3,15 @@
 import { useState, useRef, useEffect, useReducer, useMemo, useCallback, useEffectEvent } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { isLoggedIn, getAuthUser } from '@/lib/auth'
-import { providersQuery, ollamaModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
+import { providersQuery, llamaServerModelsQuery, geminiModelsQuery, geminiPoliciesQuery } from '@/lib/queries/providers'
 import { api } from '@/lib/api'
 import type { RetryParams, ConversationDetail } from '@/lib/types'
 import { Card, CardContent } from '@/components/ui/card'
 import { useTranslation } from '@/i18n'
 import { BASE } from '@/lib/api'
 import { compressImage } from '@/lib/compress-image'
-import { PROVIDER_OLLAMA, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
-import { useEnabledOllamaModels } from '@/hooks/use-enabled-ollama-models'
+import { PROVIDER_LLAMA_SERVER, PROVIDER_GEMINI, DEFAULT_MAX_IMAGES, MAX_FILE_BYTES } from '@/lib/constants'
+import { useEnabledLlamaServerModels } from '@/hooks/use-enabled-llama-server-models'
 import { iterSseLines } from '@/lib/sse'
 import { useLabSettings } from '@/components/lab-settings-provider'
 import type { OpenAIChunk, Run, ProviderOption, Endpoint, ConversationMessage, ConversationSession, TestMode } from './api-test-types'
@@ -39,7 +39,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   const authUser = getAuthUser()
 
   // ── Shared form state ─────────────────────────────────────────────────────────
-  const [providerType, setProviderType] = useState<string>(PROVIDER_OLLAMA)
+  const [providerType, setProviderType] = useState<string>(PROVIDER_LLAMA_SERVER)
   const [model, setModel] = useState('')
   const [prompt, setPrompt] = useState('')
   const [images, setImages] = useState<string[]>([])       // raw base64 (no data URL prefix)
@@ -73,10 +73,10 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
   const geminiEnabled = labSettings?.gemini_function_calling ?? false
 
   const availableOptions = useMemo((): ProviderOption[] => {
-    if (!providers) return [{ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false }]
+    if (!providers) return [{ value: 'llama_server', label: t('jobs.providerLlamaServer'), isGemini: false }]
     const opts: ProviderOption[] = []
-    if (providers.some((b) => b.provider_type === PROVIDER_OLLAMA)) {
-      opts.push({ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false })
+    if (providers.some((b) => b.provider_type === PROVIDER_LLAMA_SERVER)) {
+      opts.push({ value: 'llama_server', label: t('jobs.providerLlamaServer'), isGemini: false })
     }
     if (geminiEnabled && providers.some((b) => b.provider_type === PROVIDER_GEMINI && b.is_free_tier)) {
       opts.push({ value: 'gemini-free', label: t('test.geminiFree'), isGemini: true })
@@ -84,7 +84,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     if (geminiEnabled && providers.some((b) => b.provider_type === PROVIDER_GEMINI && !b.is_free_tier)) {
       opts.push({ value: 'gemini', label: t('test.gemini'), isGemini: true })
     }
-    return opts.length > 0 ? opts : [{ value: 'ollama', label: t('jobs.providerOllama'), isGemini: false }]
+    return opts.length > 0 ? opts : [{ value: 'llama_server', label: t('jobs.providerLlamaServer'), isGemini: false }]
   }, [providers, t, geminiEnabled])
 
   const isGeminiProvider = availableOptions.find((o) => o.value === providerType)?.isGemini ?? false
@@ -109,17 +109,14 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
 
   // Conversation mode: force messages-capable endpoint
   useEffect(() => {
-    if (mode === 'conversation' && endpoint === '/api/generate') {
-      setEndpoint('/v1/chat/completions')
-    }
     if (mode === 'conversation' && endpoint === '/v1beta/models') {
       setEndpoint('/v1/chat/completions')
     }
   }, [mode, endpoint])
 
   // ── Models ────────────────────────────────────────────────────────────────────
-  const { data: ollamaModelsData } = useQuery({
-    ...ollamaModelsQuery(),
+  const { data: llamaServerModelsData } = useQuery({
+    ...llamaServerModelsQuery(),
     enabled: !isGeminiProvider,
   })
 
@@ -133,20 +130,20 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     enabled: isGeminiProvider,
   })
 
-  const { models: enabledOllamaModels } = useEnabledOllamaModels()
+  const { models: enabledLlamaServerModels } = useEnabledLlamaServerModels()
 
   const modelContextWindows = useMemo<Record<string, number>>(() => {
     if (isGeminiProvider) return {}
     return Object.fromEntries(
-      (ollamaModelsData?.models ?? [])
+      (llamaServerModelsData?.models ?? [])
         .filter((m) => (m.max_ctx ?? 0) > 0)
         .map((m) => [m.model_name, m.max_ctx!])
     )
-  }, [isGeminiProvider, ollamaModelsData?.models])
+  }, [isGeminiProvider, llamaServerModelsData?.models])
 
   const availableModels = useMemo(() => {
     if (!isGeminiProvider) {
-      return enabledOllamaModels.map((m) => m.model_name)
+      return enabledLlamaServerModels.map((m) => m.model_name)
     }
     const allModels = geminiModelsData?.models.map((m) => m.model_name) ?? []
     if (providerType !== "gemini-free") return allModels
@@ -154,7 +151,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
       (geminiPolicies ?? []).filter((p) => p.model_name !== '*').map((p) => [p.model_name, p])
     )
     return allModels.filter((name) => policyMap.get(name)?.available_on_free_tier === true)
-  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, enabledOllamaModels])
+  }, [isGeminiProvider, providerType, geminiModelsData, geminiPolicies, enabledLlamaServerModels])
 
   useEffect(() => {
     if (availableModels.length > 0 && !availableModels.includes(model)) {
@@ -349,11 +346,9 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     setPrompt('')
     setImages([])
 
-    const ep = (endpoint === '/api/generate' || endpoint === '/v1beta/models')
-      ? '/v1/chat/completions'
-      : endpoint
+    const ep = endpoint === '/v1beta/models' ? '/v1/chat/completions' : endpoint
 
-    // Images are not retained between turns in Ollama — each message is processed
+    // Images are not retained between turns by the upstream model — each message is processed
     // independently. The assistant's analysis from turn 1 already captures image
     // context in text form. Re-sending historical images wastes bandwidth, inflates
     // the payload (causing stream timeouts), and confuses the model.
@@ -556,42 +551,21 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
     const jobIdRef = { current: null as string | null }
 
     try {
-      const isStreaming = p.endpoint === '/v1/chat/completions' || p.endpoint === '/api/chat' || p.endpoint === '/api/generate'
+      const isStreaming = p.endpoint === '/v1/chat/completions'
       let url: string
       const headers: Record<string, string> = { 'Content-Type': 'application/json' }
 
       url = `${BASE}${p.endpoint}`
       if (p.useApiKey && apiKeyValue.trim()) {
-        if (p.endpoint === '/v1/chat/completions' || p.endpoint === '/v1beta/models') {
-          headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
-        } else {
-          headers['X-API-Key'] = apiKeyValue.trim()
-        }
+        headers['Authorization'] = `Bearer ${apiKeyValue.trim()}`
       }
       // Session auth (JWT cookie) is sent automatically by the browser.
 
       let body: Record<string, unknown>
       if (p.endpoint === '/v1beta/models') {
- // Gemini native: POST /v1beta/models/{model}:generateContent
- url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
- body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
- } else if (p.endpoint ==='/api/generate') {
-        body = {
-          model: p.model,
-          prompt: p.prompt.trim(),
-          stream: isStreaming,
-          ...(p.images && p.images.length > 0 && { images: p.images }),
-        }
-      } else if (p.endpoint === '/api/chat') {
-        body = {
-          model: p.model,
-          messages: [{
-            role: 'user',
-            content: p.prompt.trim(),
-            ...(p.images && p.images.length > 0 && { images: p.images }),
-          }],
-          stream: isStreaming,
-        }
+        // Gemini native: POST /v1beta/models/{model}:generateContent
+        url = `${BASE}/v1beta/models/${encodeURIComponent(p.model)}:generateContent`
+        body = { contents: [{ parts: [{ text: p.prompt.trim() }] }] }
       } else {
         body = {
           model: p.model,
@@ -621,9 +595,7 @@ export function ApiTestPanel({ retryParams, onRetryConsumed, onTurnComplete, con
         const json = await resp.json()
         const text = p.endpoint === '/v1beta/models'
           ? (json.candidates?.[0]?.content?.parts?.[0]?.text ?? JSON.stringify(json))
-          : p.endpoint === '/api/generate'
-            ? (json.response ?? '')
-            : (json.message?.content ?? '')
+          : (json.choices?.[0]?.message?.content ?? '')
         dispatch({ type: 'APPEND', id: runId, token: text })
         dispatch({ type: 'SET_STATUS', id: runId, status: 'done' })
       }

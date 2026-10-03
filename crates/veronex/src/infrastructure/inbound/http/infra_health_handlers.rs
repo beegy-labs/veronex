@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 use axum::extract::State;
 use axum::response::IntoResponse;
@@ -45,6 +46,7 @@ struct SvcProbeEntry {
 }
 
 /// GET /v1/dashboard/services — Infrastructure services + HPA pod status.
+#[instrument(skip_all)]
 pub async fn get_service_health(
     State(state): State<AppState>,
 ) -> Result<Json<ServiceHealthResponse>, AppError> {
@@ -212,6 +214,7 @@ pub struct PipelineHealthResponse {
 }
 
 /// `GET /v1/dashboard/pipeline`
+#[instrument(skip_all)]
 pub async fn get_pipeline_health(
     RequireDashboardView(_): RequireDashboardView,
     State(state): State<AppState>,
@@ -280,18 +283,8 @@ pub async fn get_pipeline_health(
     let consumer_active: bool = !consumer_map.is_empty();
 
     // ── 3. ClickHouse → TPM ────────────────────────────────────────────────
-    let tpm_query = format!(
-        "SELECT 'otel.audit.logs' AS topic, \
-                countIf(Timestamp >= now() - INTERVAL 1 MINUTE) AS t1m, \
-                countIf(Timestamp >= now() - INTERVAL 5 MINUTE) AS t5m \
-         FROM {ch_db}.otel_logs \
-         UNION ALL \
-         SELECT 'otel.audit.metrics', \
-                countIf(ts >= now() - INTERVAL 1 MINUTE), \
-                countIf(ts >= now() - INTERVAL 5 MINUTE) \
-         FROM {ch_db}.otel_metrics_gauge \
-         FORMAT JSONEachRow"
-    );
+    let tpm_query = crate::infrastructure::outbound::persistence::
+        clickhouse_queries::audit_topic_tpm_sql(ch_db);
 
     let ch_tpm_resp = ch_get(&state.http_client, ch_url, ch_user, ch_pass, &tpm_query).await;
 

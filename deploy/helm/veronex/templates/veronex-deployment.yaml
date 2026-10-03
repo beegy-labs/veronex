@@ -16,8 +16,12 @@ spec:
         {{- include "veronex.labels" . | nindent 8 }}
         {{- include "veronex.api.selectorLabels" . | nindent 8 }}
     spec:
+      {{- if .Values.builder.enabled }}
+      serviceAccountName: {{ .Release.Name }}-builder-controller
+      {{- else }}
       {{- if .Values.serviceAccount.create }}
       serviceAccountName: {{ .Values.serviceAccount.name | default (printf "%s-veronex" .Release.Name) }}
+      {{- end }}
       {{- end }}
       containers:
         - name: veronex
@@ -49,6 +53,49 @@ spec:
             - secretRef:
                 name: {{ include "veronex.secretName" . }}
           env:
+            {{- if .Values.builder.enabled }}
+            - name: BUILDER_NAMESPACE
+              value: {{ .Values.builder.namespace | default .Release.Namespace | quote }}
+            - name: BUILDER_PVC
+              value: {{ .Values.builder.pvc | quote }}
+            - name: BUILDER_RUNNER_IMAGE
+              value: {{ .Values.builder.runnerImage | quote }}
+            - name: BUILDER_RUNNER_SECRET
+              value: {{ .Values.builder.existingSecretName | default (printf "%s-builder-runner" .Release.Name) | quote }}
+            - name: BUILDER_POD_SERVICE_ACCOUNT
+              value: {{ .Release.Name }}-builder-runtime
+            - name: BUILDER_RUNNER_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.builder.existingSecretName | default (printf "%s-builder-runner" .Release.Name) }}
+                  key: RUNNER_TOKEN
+            - name: BUILDER_PREVIEW_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.builder.existingSecretName | default (printf "%s-builder-runner" .Release.Name) }}
+                  key: PREVIEW_TOKEN
+            - name: BUILDER_GIT_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.builder.existingSecretName | default (printf "%s-builder-runner" .Release.Name) }}
+                  key: GIT_TOKEN
+            - name: BUILDER_GIT_HOSTS
+              value: {{ .Values.builder.gitHosts | quote }}
+            - name: BUILDER_BROWSER_ORIGIN
+              value: {{ .Values.builder.browserOrigin | quote }}
+            - name: BUILDER_PREVIEW_DOMAIN
+              value: {{ .Values.builder.previewDomain | quote }}
+            - name: BUILDER_PREVIEW_SCHEME
+              value: {{ ternary "https" "http" (ne .Values.builder.previewTlsSecret "") | quote }}
+            - name: BUILDER_MAX_ACTIVE_WORKSPACES
+              value: {{ .Values.builder.maxActiveWorkspaces | quote }}
+            - name: BUILDER_MAX_PREVIEWS
+              value: {{ .Values.builder.maxPreviewsPerWorkspace | quote }}
+            - name: BUILDER_CLI_MEMORY_LIMIT
+              value: {{ .Values.builder.cliMemoryLimit | quote }}
+            - name: BUILDER_PREVIEW_MEMORY_LIMIT
+              value: {{ .Values.builder.previewMemoryLimit | quote }}
+            {{- end }}
             - name: RUST_LOG
               value: {{ .Values.veronex.logLevel | default "info" | quote }}
             - name: PORT
@@ -71,12 +118,6 @@ spec:
               value: {{ include "veronex.s3Region" . | quote }}
             - name: CORS_ALLOWED_ORIGINS
               value: {{ .Values.veronex.cors.allowedOrigins | quote }}
-            - name: OLLAMA_URL
-              value: {{ .Values.veronex.ollama.url | quote }}
-            {{- if .Values.veronex.capacityAnalyzerOllamaUrl }}
-            - name: CAPACITY_ANALYZER_OLLAMA_URL
-              value: {{ .Values.veronex.capacityAnalyzerOllamaUrl | quote }}
-            {{- end }}
             {{- if .Values.veronex.sessionGroupingIntervalSecs }}
             - name: SESSION_GROUPING_INTERVAL_SECS
               value: {{ .Values.veronex.sessionGroupingIntervalSecs | quote }}

@@ -219,7 +219,7 @@ mod tests {
             ("request_id", "00000000-0000-0000-0000-000000000001"),
             ("tenant_id", "t1"),
             ("model_name", "llama3"),
-            ("provider_type", "ollama"),
+            ("provider_type", "llama_server"),
             ("finish_reason", "stop"),
             ("status", "success"),
             ("prompt_tokens", "10"),

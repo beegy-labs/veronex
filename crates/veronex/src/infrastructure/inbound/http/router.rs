@@ -15,7 +15,12 @@ use super::account_handlers;
 use super::conversation_handlers;
 use super::audit_handlers;
 use super::auth_handlers;
+use super::builder_handlers;
 use super::role_handlers;
+use super::setup_handlers;
+use super::admin_modelfile_handlers;
+use super::admin_node_handlers;
+use super::admin_settings_handlers;
 use super::model_selection_handlers;
 use super::global_model_handlers;
 use super::key_provider_access_handlers;
@@ -35,8 +40,6 @@ use super::metrics_handlers;
 use super::middleware::infer_auth::infer_auth;
 use super::middleware::jwt_auth::jwt_auth;
 use super::middleware::rate_limiter::rate_limiter;
-use super::ollama_compat_handlers;
-use super::ollama_model_handlers;
 use super::openai_handlers;
 use super::openai_models_handlers;
 use super::openai_embeddings_handlers;
@@ -74,25 +77,7 @@ pub fn build_api_router() -> Router<AppState> {
         .route("/v1/images/generations",    post(openai_completions_handlers::image_generations))
         .route("/v1/moderations",           post(openai_completions_handlers::moderations))
 
-        // ── Ollama native API (OLLAMA_HOST=http://veronex:3001) ─────────
-        // /api/tags uses Veronex-synchronized models; everything else proxies to provider.
-        .route("/api/tags",        get(ollama_compat_handlers::list_local_models))
-        .route("/api/version",     get(ollama_compat_handlers::version))
-        .route("/api/ps",          get(ollama_compat_handlers::ps))
-        .route("/api/generate",    post(ollama_compat_handlers::generate)
-            .layer(DefaultBodyLimit::max(super::constants::IMAGE_BODY_LIMIT)))
-        .route("/api/chat",        post(ollama_compat_handlers::chat))
-        .route("/api/show",        post(ollama_compat_handlers::show))
-        .route("/api/embed",       post(ollama_compat_handlers::embed))
-        .route("/api/embeddings",  post(ollama_compat_handlers::embeddings))
-        .route("/api/pull",        post(ollama_compat_handlers::pull))
-        .route("/api/push",        post(ollama_compat_handlers::push))
-        .route("/api/delete",      delete(ollama_compat_handlers::delete))
-        .route("/api/copy",        post(ollama_compat_handlers::copy))
-        .route("/api/create",      post(ollama_compat_handlers::create))
-
         // ── Gemini API-compatible (GOOGLE_GEMINI_BASE_URL=http://veronex:3001) ──
-        // Model listing uses enabled Ollama models; generation proxies to Ollama.
         // {*path} catch-all is used for both GET (get_model) and POST (handle_request)
         // to avoid a conflict between {model} and {*path} segments.
         .route("/v1beta/models",         get(gemini_compat_handlers::list_models))
@@ -107,6 +92,24 @@ pub fn build_api_router() -> Router<AppState> {
 /// Build the JWT-protected admin router.
 fn build_jwt_router() -> Router<AppState> {
     Router::new()
+        .route("/v1/builder/repositories", get(builder_handlers::list_repositories).post(builder_handlers::create_repository))
+        .route("/v1/builder/workspaces", get(builder_handlers::list_workspaces).post(builder_handlers::create_workspace))
+        .route("/v1/builder/workspaces/{id}", get(builder_handlers::get_workspace))
+        .route("/v1/builder/workspaces/{id}/start", post(builder_handlers::start_workspace))
+        .route("/v1/builder/workspaces/{id}/stop", post(builder_handlers::stop_workspace))
+        .route("/v1/builder/workspaces/{id}/switch", post(builder_handlers::switch_cli))
+        .route("/v1/builder/workspaces/{id}/terminal", get(builder_handlers::terminal))
+        .route("/v1/builder/workspaces/{id}/terminal/resize", post(builder_handlers::resize_terminal))
+        .route("/v1/builder/workspaces/{id}/git/{action}", post(builder_handlers::git_action))
+        .route("/v1/builder/workspaces/{id}/previews", get(builder_handlers::list_previews).post(builder_handlers::start_preview))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/stop", post(builder_handlers::stop_preview))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/logs", get(builder_handlers::preview_logs))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/ticket", post(builder_handlers::preview_ticket))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/view", get(builder_handlers::view_preview_root))
+        .route("/v1/builder/workspaces/{id}/previews/{preview_id}/view/{*path}", get(builder_handlers::view_preview_path))
+        .route("/v1/builder/workspaces/{id}/events", get(builder_handlers::list_events))
+        .route("/v1/builder/workspaces/{id}/pull", get(builder_handlers::get_pull).post(builder_handlers::create_pull))
+        .route("/v1/builder/workspaces/{id}/pull/merge", post(builder_handlers::merge_pull))
         // Role management (super-only)
         .route("/v1/roles", get(role_handlers::list_roles).post(role_handlers::create_role))
         .route("/v1/roles/{id}", patch(role_handlers::update_role).delete(role_handlers::delete_role))
@@ -153,6 +156,74 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/providers/{id}/key", get(provider_handlers::reveal_provider_key))
         .route("/v1/providers/{id}/selected-models", get(model_selection_handlers::list_selected_models))
         .route("/v1/providers/{id}/selected-models/{model_name}", patch(model_selection_handlers::set_model_enabled))
+        // Phase 2 — Modelfile registry + CAS blob store admin surface
+        .route(
+            "/v1/admin/models",
+            get(admin_modelfile_handlers::list_models)
+                .post(admin_modelfile_handlers::register_model),
+        )
+        .route(
+            "/v1/admin/models/{id}",
+            get(admin_modelfile_handlers::get_model)
+                .patch(admin_modelfile_handlers::patch_model)
+                .delete(admin_modelfile_handlers::delete_model),
+        )
+        .route(
+            "/v1/admin/models/{id}/promote",
+            post(admin_modelfile_handlers::promote_model),
+        )
+        .route(
+            "/v1/admin/models/{id}/install/attempts",
+            get(admin_modelfile_handlers::list_attempts),
+        )
+        .route(
+            "/v1/admin/models/{id}/install/retry",
+            post(admin_modelfile_handlers::retry_install),
+        )
+        .route(
+            "/v1/admin/models/{id}/install/cancel",
+            post(admin_modelfile_handlers::cancel_install),
+        )
+        .route(
+            "/v1/admin/models/{id}/install/stream",
+            get(admin_modelfile_handlers::install_stream),
+        )
+        .route(
+            "/v1/admin/blobs",
+            get(admin_modelfile_handlers::list_orphan_blobs),
+        )
+        .route(
+            "/v1/admin/blobs/{sha256}",
+            axum::routing::delete(admin_modelfile_handlers::delete_blob),
+        )
+        // First-run storage wizard + admin runtime config (Setup-B)
+        .route("/v1/setup/storage", post(setup_handlers::setup_storage))
+        .route("/v1/admin/config", get(setup_handlers::list_config))
+        .route(
+            "/v1/admin/config/{key}",
+            patch(setup_handlers::upsert_config).delete(setup_handlers::delete_config),
+        )
+        // Phase 3 — managed compute nodes (data layer; agent ships separately)
+        .route(
+            "/v1/admin/nodes",
+            get(admin_node_handlers::list_nodes).post(admin_node_handlers::register_node),
+        )
+        .route(
+            "/v1/admin/nodes/{id}",
+            get(admin_node_handlers::get_node).delete(admin_node_handlers::delete_node),
+        )
+        .route(
+            "/v1/admin/nodes/{id}/probe",
+            post(admin_node_handlers::probe_node),
+        )
+        // Phase 3 — system settings (idle TTL, warmup tokens, AIMD knobs)
+        .route("/v1/admin/settings", get(admin_settings_handlers::list_settings))
+        .route(
+            "/v1/admin/settings/{key}",
+            get(admin_settings_handlers::get_setting)
+                .put(admin_settings_handlers::upsert_setting)
+                .delete(admin_settings_handlers::delete_setting),
+        )
         // Global model settings
         .route("/v1/models/global-settings", get(global_model_handlers::list_global_model_settings))
         .route("/v1/models/global-disabled", get(global_model_handlers::list_global_disabled_models))
@@ -192,13 +263,6 @@ fn build_jwt_router() -> Router<AppState> {
         .route("/v1/gemini/models/sync", post(gemini_model_handlers::sync_models))
         .route("/v1/gemini/models", get(gemini_model_handlers::list_models))
         .route("/v1/gemini/sync-status", post(gemini_model_handlers::sync_status))
-        // Ollama
-        .route("/v1/ollama/models", get(ollama_model_handlers::list_models))
-        .route("/v1/ollama/models/pull", post(ollama_model_handlers::pull_model))
-        .route("/v1/ollama/models/sync", post(ollama_model_handlers::sync_all_providers))
-        .route("/v1/ollama/sync/status", get(ollama_model_handlers::get_sync_status))
-        .route("/v1/ollama/models/{model_name}/providers", get(ollama_model_handlers::list_model_providers))
-        .route("/v1/ollama/providers/{provider_id}/models", get(provider_handlers::list_provider_models))
         // Capacity / VRAM pool
         .route("/v1/dashboard/capacity", get(dashboard_handlers::get_capacity))
         .route("/v1/dashboard/capacity/cluster", get(dashboard_handlers::get_capacity_cluster))
@@ -232,10 +296,13 @@ async fn security_headers(mut response: axum::response::Response) -> axum::respo
         axum::http::header::X_CONTENT_TYPE_OPTIONS,
         "nosniff".parse().expect("static"),
     );
-    headers.insert(
-        axum::http::header::X_FRAME_OPTIONS,
-        "DENY".parse().expect("static"),
-    );
+    if !headers.contains_key("x-veronex-preview") {
+        headers.insert(
+            axum::http::header::X_FRAME_OPTIONS,
+            "DENY".parse().expect("static"),
+        );
+    }
+    headers.remove("x-veronex-preview");
     headers.insert(
         axum::http::header::REFERRER_POLICY,
         "strict-origin-when-cross-origin".parse().expect("static"),
@@ -345,7 +412,7 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             get(mcp_handlers::list_mcp_targets),
         )
         // First-run setup (no auth — only usable before any account exists)
-        .route("/v1/setup/status", get(auth_handlers::setup_status))
+        .route("/v1/setup/status", get(setup_handlers::setup_status_v2))
         .route("/v1/setup", post(auth_handlers::setup))
         // Public auth routes (no middleware)
         .route("/v1/auth/login", post(auth_handlers::login))
@@ -398,5 +465,6 @@ pub fn build_app(state: AppState, cors_origins: Vec<HeaderValue>) -> Router {
             axum::http::header::PROXY_AUTHORIZATION,
             axum::http::HeaderName::from_static("x-api-key"),
         ]))
+        .layer(middleware::from_fn_with_state(state.clone(), builder_handlers::preview_host_middleware))
         .with_state(state)
 }

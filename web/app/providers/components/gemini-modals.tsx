@@ -1,12 +1,12 @@
 'use client'
 
-import { useState, useOptimistic, startTransition } from 'react'
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useApiMutation } from '@/hooks/use-api-mutation'
 import { api } from '@/lib/api'
-import type { Provider, ProviderSelectedModel, GeminiRateLimitPolicy } from '@/lib/types'
-import { selectedModelsQuery, providerKeyQuery } from '@/lib/queries'
-import { Key, ShieldCheck, Eye, EyeOff, ListFilter } from 'lucide-react'
+import type { GeminiRateLimitPolicy } from '@/lib/types'
+import { providerKeyQuery } from '@/lib/queries'
+import { Key, ShieldCheck, Eye, EyeOff } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -137,89 +137,6 @@ export function ApiKeyCell({ providerId, masked }: { providerId: string; masked:
 }
 
 // ── Gemini model toggle with optimistic update ─────────────────────────────────
-
-function GeminiModelToggle({ providerId, model }: { providerId: string; model: ProviderSelectedModel }) {
-  const queryClient = useQueryClient()
-  const [optimistic, setOptimistic] = useOptimistic(model.is_enabled, (_, v: boolean) => v)
-  const mutation = useMutation({
-    mutationFn: (enabled: boolean) => api.setModelEnabled(providerId, model.model_name, enabled),
-    onError: () => setOptimistic(model.is_enabled),
-    onSettled: () => {
-      queryClient.invalidateQueries({ queryKey: [...GEMINI_QUERY_KEYS.selectedModels, providerId] })
-    },
-  })
-  return (
-    <Switch
-      checked={optimistic}
-      onCheckedChange={(checked) => startTransition(() => { setOptimistic(checked); mutation.mutate(checked) })}
-      disabled={mutation.isPending}
-      aria-label={model.model_name}
-    />
-  )
-}
-
-// ── Model selection modal ──────────────────────────────────────────────────────
-
-export function ModelSelectionModal({ provider, onClose }: { provider: Provider; onClose: () => void }) {
-  const { t } = useTranslation()
-
-  const { data, isLoading } = useQuery(selectedModelsQuery(provider.id))
-
-  const models = data?.models ?? []
-  const enabledCount = models.filter((m) => m.is_enabled).length
-
-  return (
-    <Dialog open onOpenChange={(open) => { if (!open) onClose() }}>
-      <DialogContent className="vds-max-w-md">
-        <DialogHeader>
-          <DialogTitle className="vds-flex vds-items-center vds-gap-2">
-            <ListFilter className="vds-h-4 vds-w-4 vds-text-accent-gpu" />
-            {t('providers.gemini.modelSelection')}
-            <span className="vds-text-dim vds-font-400 vds-text-sm">— {provider.name}</span>
-          </DialogTitle>
-        </DialogHeader>
-
-        <p className="vds-text-xs vds-text-dim vds--mt-1">
-          {t('providers.gemini.modelSelectionDesc')}
-        </p>
-
-        {isLoading && (
-          <div className="vds-flex vds-h-20 vds-items-center vds-justify-center vds-text-dim vds-text-sm vds-animate-pulse">
-            {t('common.loading')}
-          </div>
-        )}
-
-        {!isLoading && models.length === 0 && (
-          <p className="vds-text-sm vds-text-dim vds-py-4 vds-text-center">
-            {t('providers.gemini.noGlobalModels')}
-          </p>
-        )}
-
-        {models.length > 0 && (
-          <div className="vds-space-y-1 vds-max-h-80 vds-overflow-y-auto vds-pr-1">
-            {models.map((m) => (
-              <div key={m.model_name}
-                className="vds-flex vds-items-center vds-justify-between vds-rounded-lg vds-border-1 vds-border-subtle vds-px-3 vds-py-2">
-                <span className="vds-font-mono vds-text-sm vds-text-bright">{m.model_name}</span>
-                <GeminiModelToggle providerId={provider.id} model={m} />
-              </div>
-            ))}
-          </div>
-        )}
-
-        {models.length > 0 && (
-          <p className="vds-text-xs vds-text-dim vds-text-right">
-            {t('providers.gemini.modelsCount', { enabled: enabledCount, total: models.length })}
-          </p>
-        )}
-
-        <DialogFooter>
-          <Button variant="outline" onClick={onClose}>{t('common.close')}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  )
-}
 
 // ── SetSyncKeyModal ────────────────────────────────────────────────────────────
 

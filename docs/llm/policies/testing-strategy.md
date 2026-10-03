@@ -1,6 +1,6 @@
 # Testing Strategy
 
-> SSOT | **Last Updated**: 2026-04-22 | Classification: Operational
+> SSOT | **Last Updated**: 2026-05-16 | Classification: Operational
 
 ## Methodology: Testing Trophy (5-Layer, 2026)
 
@@ -71,7 +71,7 @@ Rust-specific testing rules (5-Layer Trophy, Axum `oneshot` handler tests, propt
 | **proptest** | Property-based testing for pure functions | Unit | Non-trivial input space |
 | **insta** | Structural snapshots (OpenAPI spec, migration order) | Unit/Handler | Stable-shape outputs only |
 | **testcontainers-rs** | Real Postgres / Valkey / Kafka in a container | Integration | Repository / queue / Lua tests |
-| **wiremock** | HTTP mock for outbound adapters | Integration | Ollama / Gemini / MCP / auth providers |
+| **wiremock** | HTTP mock for outbound adapters | Integration | llama-server / Gemini / MCP / auth providers |
 | **tower `ServiceExt::oneshot`** | Direct Axum handler invocation | Handler | All inbound HTTP handler tests |
 | **axum `body::to_bytes`** | Extract handler response bodies | Handler | Assert on response JSON |
 | **cargo-mutants** | Mutation testing | Meta | PR `--in-diff`; weekly full sweep |
@@ -92,6 +92,12 @@ All crates in `crates/` MUST have at least Unit + Handler (if they expose HTTP) 
 ### vitest v4 Notes
 
 v3→v4 migration details (poolOptions, projects, options position, mock behavior, reporters, min reqs) → `docs/llm/research/frontend/vitest-v4-migration.md`.
+
+| 2026 Delta | Policy |
+|---|---|
+| Runtime floor | Vitest 4 requires Vite 6+ and Node 20+; keep CI/runtime aligned before tool bumps |
+| Browser coverage | Browser Mode remains the default component-test path for layout/focus/CSS behavior |
+| Query testing | TanStack Query hooks stay at Unit/Integration level unless browser behavior is the assertion target |
 
 ### Bash E2E
 
@@ -135,7 +141,7 @@ Unit tests verify pure OTLP parse → row mapping logic only (no Kafka/ClickHous
 | Phase | Action | ROI |
 |-------|--------|-----|
 | **R1** | Add `proptest` dep + convert ≥5 pure modules (ID encoder, URL normalizer, validator) | High |
-| **R2** | Add `wiremock` dep + wrap every outbound HTTP adapter (Ollama, Gemini, MCP) | High |
+| **R2** | Add `wiremock` dep + wrap every outbound HTTP adapter (llama-server, Gemini, MCP) | High |
 | **R3** | Add `testcontainers-rs` + convert at least one repository integration test | High |
 | **R4** | Introduce Handler-layer test pattern (oneshot) — migrate existing HTTP tests | High |
 | **R5** | Add `insta` for OpenAPI snapshot; enable `cargo-mutants --in-diff` in CI | Medium |

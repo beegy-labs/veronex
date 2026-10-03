@@ -57,8 +57,8 @@ Raw OTLP payload를 그대로 Kafka에 넣고 ClickHouse에서 파싱하는 방�
 | `crates/veronex-consumer/src/` | Kafka consumer — Redpanda topic 구독 → ClickHouse HTTP INSERT |
 | `crates/veronex/src/infrastructure/outbound/observability/http_observability_adapter.rs` | `HttpObservabilityAdapter` |
 | `crates/veronex/src/infrastructure/outbound/observability/http_audit_adapter.rs` | `HttpAuditAdapter` |
-| `crates/veronex/src/infrastructure/inbound/http/metrics_handlers.rs` | `GET /v1/metrics/targets` — two target types (server + ollama), URL normalization to `host[:port]` |
-| `crates/veronex-agent/src/scraper.rs` | Metric allowlist + Prometheus text → OTLP conversion (raw values), body size limits (16MB node-exporter, 1MB Ollama) |
+| `crates/veronex/src/infrastructure/inbound/http/metrics_handlers.rs` | `GET /v1/metrics/targets` — two target types (server + llama-server), URL normalization to `host[:port]` |
+| `crates/veronex-agent/src/scraper.rs` | Metric allowlist + Prometheus text → OTLP conversion (raw values), body size limits (16MB node-exporter, 1MB llama-server) |
 | `crates/veronex-agent/src/otlp.rs` | OTLP HTTP/JSON push client (3 retries, exponential backoff 2s/4s/8s) |
 | `crates/veronex-agent/src/shard.rs` | Modulus sharding for multi-replica deduplication |
 
@@ -80,9 +80,9 @@ veronex --> POST /internal/ingest/audit    --> veronex-analytics (앱레이어 �
                                                                                                                             +- audit_events
 
 [Chain 2: metrics]
-node-exporters (type=server) -+
-                              +-> veronex-agent (allowlist 필터 + 타입분류 + OTLP push) --> OTel Collector --> kafka/metrics --> Redpanda [otel-metrics]
-ollama /api/ps (type=ollama) -+                                                                                                    +- veronex-consumer --> otel_metrics_gauge (MergeTree)
+node-exporters (type=server) --> veronex-agent (allowlist 필터 + OTLP push) --> OTel Collector --> kafka/metrics --> Redpanda [otel-metrics]
+                                                                                                                       +- veronex-consumer --> otel_metrics_gauge (MergeTree)
+(veronex-agent의 legacy llama-server /api/ps 스크레이프는 제거됨 — provider 용량은 veronex-llm-agent heartbeat로 보고)
 
 [Chain 3: traces]
 veronex traces --> OTel Collector --> kafka/traces --> Redpanda [otel-traces]
@@ -118,7 +118,10 @@ Agent discovers targets via `GET /v1/metrics/targets`. Each target has a `type` 
 | Type | Source | Shard key | Collects |
 |------|--------|-----------|----------|
 | `server` | node-exporter `/metrics` | `server_id` | CPU, mem, GPU (DRM, hwmon) |
-| `ollama` | Ollama `/api/ps` | `provider_id` | loaded models, VRAM per model |
+
+(Per-provider llama-server scrape was removed in the post-Ollama refactor —
+liveness + capacity now reported by `veronex-llm-agent` heartbeat, not the
+metrics scraper.)
 
 Targets are returned as `host[:port]` only (URL normalization strips scheme/path/query). Agent prepends `http://` before scraping.
 
@@ -131,7 +134,6 @@ StatefulSet replicas shard targets by `hash(shard_key) % replica_count == ordina
 | Guard | Value | File |
 |-------|-------|------|
 | `MAX_NODE_EXPORTER_BODY` | 16 MB | `scraper.rs` |
-| `MAX_OLLAMA_BODY` | 1 MB | `scraper.rs` |
 | `MAX_CONCURRENT_SCRAPES` | 32 (semaphore) | `main.rs` |
 | `SCRAPE_TIMEOUT` | 5 s | `scraper.rs` |
 | `OTLP_RETRIES` | 3 attempts (exponential backoff: 2s, 4s, 8s) | `otlp.rs` |
@@ -159,8 +161,11 @@ node_cpu_seconds_total,                                            (sum, isMonot
 node_drm_*,                                                        (gauge)
 node_hwmon_temp_celsius, node_hwmon_power_average_watt*,           (gauge)
 node_hwmon_chip_names,                                             (gauge — required for GPU chip→PCI address lookup)
-ollama_* (loaded_models, model_size_vram_bytes, model_size_bytes)  (gauge)
 ```
+
+The legacy `ollama_loaded_models` / `ollama_model_size_*` gauges were
+removed when the per-provider scrape was deleted; veronex-llm-agent
+reports the equivalent via heartbeat instead.
 
 Counter metrics (`node_cpu_seconds_total`) are sent as OTLP `sum` with `isMonotonic: true`. All other metrics are sent as OTLP `gauge`. `veronex-consumer`가 두 타입 모두 처리하여 `otel_metrics_gauge`에 INSERT.
 

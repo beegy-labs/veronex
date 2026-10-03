@@ -73,7 +73,7 @@ fn bool_true() -> bool {
 
 // ── Tool call / result ────────────────────────────────────────────────────────
 
-/// A tool call parsed from Ollama's raw JSON response.
+/// A tool call parsed from a chat-completion provider's raw JSON response.
 #[derive(Debug, Clone)]
 pub struct McpToolCall {
     /// Namespaced name: `mcp_{server}_{tool}`.
@@ -82,13 +82,13 @@ pub struct McpToolCall {
 }
 
 impl McpToolCall {
-    /// Parse Ollama's raw `tool_calls` array.
+    /// Parse a provider's raw `tool_calls` array.
     ///
-    /// Ollama format (no `id` field — index-based correlation):
+    /// Wire format (no `id` field — index-based correlation):
     /// ```json
     /// [{"type":"function","function":{"index":0,"name":"...","arguments":{...}}}]
     /// ```
-    pub fn from_ollama(v: &serde_json::Value) -> Vec<Self> {
+    pub fn from_chat_response(v: &serde_json::Value) -> Vec<Self> {
         v.as_array()
             .unwrap_or(&vec![])
             .iter()
@@ -264,24 +264,24 @@ mod tests {
         assert!(!tool("w", "t", false, false).can_cache());
     }
 
-    // ── McpToolCall::from_ollama ─────────────────────────────────────────────
+    // ── McpToolCall::from_chat_response ─────────────────────────────────────────────
 
     #[test]
-    fn from_ollama_parses_standard_format() {
+    fn from_chat_response_parses_standard_format() {
         let raw = serde_json::json!([{
             "type": "function",
             "function": { "index": 0, "name": "mcp_weather_get_weather", "arguments": {"lat": 37.5} }
         }]);
-        let calls = McpToolCall::from_ollama(&raw);
+        let calls = McpToolCall::from_chat_response(&raw);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "mcp_weather_get_weather");
         assert_eq!(calls[0].arguments["lat"], 37.5);
     }
 
     #[test]
-    fn from_ollama_missing_name_skipped() {
+    fn from_chat_response_missing_name_skipped() {
         let raw = serde_json::json!([{"type": "function", "function": {"index": 0}}]);
-        assert!(McpToolCall::from_ollama(&raw).is_empty());
+        assert!(McpToolCall::from_chat_response(&raw).is_empty());
     }
 
     // ── McpToolCall::server_slug / raw_tool_name ─────────────────────────────
@@ -338,28 +338,28 @@ mod tests {
         assert!(!r.is_skipped());
     }
 
-    // ── McpToolCall::from_ollama — edge cases ────────────────────────────────
+    // ── McpToolCall::from_chat_response — edge cases ────────────────────────────────
 
     #[test]
-    fn from_ollama_non_array_returns_empty() {
-        assert!(McpToolCall::from_ollama(&serde_json::json!({})).is_empty());
-        assert!(McpToolCall::from_ollama(&serde_json::json!(null)).is_empty());
-        assert!(McpToolCall::from_ollama(&serde_json::json!("string")).is_empty());
+    fn from_chat_response_non_array_returns_empty() {
+        assert!(McpToolCall::from_chat_response(&serde_json::json!({})).is_empty());
+        assert!(McpToolCall::from_chat_response(&serde_json::json!(null)).is_empty());
+        assert!(McpToolCall::from_chat_response(&serde_json::json!("string")).is_empty());
     }
 
     #[test]
-    fn from_ollama_missing_function_key_skipped() {
+    fn from_chat_response_missing_function_key_skipped() {
         let raw = serde_json::json!([{"type": "function"}]);
-        assert!(McpToolCall::from_ollama(&raw).is_empty());
+        assert!(McpToolCall::from_chat_response(&raw).is_empty());
     }
 
     #[test]
-    fn from_ollama_absent_arguments_defaults_to_empty_object() {
+    fn from_chat_response_absent_arguments_defaults_to_empty_object() {
         let raw = serde_json::json!([{
             "type": "function",
             "function": { "name": "mcp_w_t" }
         }]);
-        let calls = McpToolCall::from_ollama(&raw);
+        let calls = McpToolCall::from_chat_response(&raw);
         assert_eq!(calls.len(), 1);
         assert!(calls[0].arguments.is_object());
         assert!(calls[0].arguments.as_object().unwrap().is_empty());

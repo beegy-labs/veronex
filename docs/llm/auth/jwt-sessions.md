@@ -8,8 +8,8 @@ Two independent auth layers:
 
 | Layer | Mechanism | Protects |
 |-------|-----------|----------|
-| API Key | `X-API-Key` header (BLAKE2b hash) | Inference only: `/v1/chat/*`, `/v1/inference/*`, `/api/*`, `/v1beta/*`, `/v1/jobs/*/stream` |
-| JWT Bearer | `Authorization: Bearer <token>` (HS256) | All admin routes: `/v1/accounts/*`, `/v1/audit`, `/v1/keys/*`, `/v1/usage/*`, `/v1/dashboard/*`, `/v1/providers/*`, `/v1/servers/*`, `/v1/gemini/*`, `/v1/ollama/*`, `/v1/test/*`, `/v1/mcp/*` |
+| API Key | `X-API-Key` header (BLAKE2b hash) | Inference only: `/v1/chat/*`, `/v1/inference/*`, `/v1beta/*`, `/v1/jobs/*/stream` |
+| JWT Bearer | `Authorization: Bearer <token>` (HS256) | All admin routes: `/v1/accounts/*`, `/v1/audit`, `/v1/keys/*`, `/v1/usage/*`, `/v1/dashboard/*`, `/v1/providers/*`, `/v1/servers/*`, `/v1/gemini/*`, `/v1/admin/*`, `/v1/mcp/*` |
 | Public | None | `/v1/auth/*`, `/v1/setup/*`, `/health`, `/readyz`, `/docs/*`, `/v1/metrics/targets`, `/v1/mcp/targets` (internal-network) |
 
 ## Roles & Permissions (N:N)
@@ -68,10 +68,9 @@ Frontend nav and page guards read **`web/lib/route-permissions.ts`**, which maps
 
 ```
 Public         /v1/auth/*, /v1/setup/*, /health, /readyz, /docs/*, /v1/metrics/targets   no middleware
-API Key Auth   /v1/inference/*, /v1/chat/*, /api/*, /v1beta/*, /v1/jobs/*/stream          api_key_auth + rate_limiter
+API Key Auth   /v1/inference/*, /v1/chat/*, /v1beta/*, /v1/jobs/*/stream                  api_key_auth + rate_limiter
 JWT Auth       /v1/accounts/*, /v1/audit, /v1/keys/*, /v1/usage/*, /v1/dashboard/*,       jwt_auth
-               /v1/providers/*, /v1/servers/*, /v1/gemini/*, /v1/ollama/*
-JWT Auth       /v1/test/*                                                                  jwt_auth (no rate limit)
+               /v1/providers/*, /v1/servers/*, /v1/gemini/*, /v1/admin/*
 ```
 
 ## JWT Middleware (`jwt_auth`)

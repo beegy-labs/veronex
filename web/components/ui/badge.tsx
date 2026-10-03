@@ -29,9 +29,3 @@ const BASE =
 export function Badge({ className, variant = 'default', ...props }: BadgeProps) {
   return <div className={cn(BASE, variantClass(variant), className)} {...props} />
 }
-
-export const badgeVariants = ({
-  variant = 'default',
-  className,
-}: { variant?: BadgeVariant; className?: string } = {}) =>
-  cn(BASE, variantClass(variant), className)

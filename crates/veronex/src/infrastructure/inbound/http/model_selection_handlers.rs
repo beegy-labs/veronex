@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use tracing::instrument;
 
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
@@ -34,10 +35,11 @@ pub struct SetModelEnabledRequest {
 
 /// `GET /v1/providers/{id}/selected-models` — list models with per-provider enabled state.
 ///
-/// **Ollama**: merges per-provider `ollama_models` with `provider_selected_models`.
+/// **llama_server**: merges per-provider modelfile registry with `provider_selected_models`.
 ///   New models default to `is_enabled = true`.
 /// **Gemini**: merges the global `gemini_models` pool with `provider_selected_models`.
 ///   New models default to `is_enabled = false`.
+#[instrument(skip_all)]
 pub async fn list_selected_models(
     State(state): State<AppState>,
     Path(pid): Path<ProviderId>,
@@ -63,29 +65,6 @@ pub async fn list_selected_models(
         .collect();
 
     match provider.provider_type {
-        ProviderType::Ollama => {
-            // Use per-provider synced model list; default is_enabled = true.
-            let models = match state.ollama_model_repo.models_for_provider(id).await {
-                Ok(m) => m,
-                Err(e) => {
-                    tracing::error!(%id, "list_selected_models: failed to list ollama models: {e}");
-                    return db_error(e).into_response();
-                }
-            };
-            let dtos: Vec<SelectedModelDto> = models
-                .into_iter()
-                .map(|model_name| {
-                    let is_enabled = sel_map.get(&model_name).copied().unwrap_or(true);
-                    SelectedModelDto {
-                        model_name,
-                        is_enabled,
-                        synced_at: Utc::now(),
-                    }
-                })
-                .collect();
-            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
-        }
-
         ProviderType::Gemini => {
             // Global model pool; default is_enabled = false.
             let global = match state.gemini_model_repo.list().await {
@@ -108,10 +87,27 @@ pub async fn list_selected_models(
                 .collect();
             (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
         }
+
+        ProviderType::LlamaServer => {
+            // Phase 1: llama-server has no per-provider model registry exposed
+            // here — model selection arrives via Phase 2 Modelfile registry
+            // (`/v1/admin/models`). Return any selections recorded in the
+            // generic table without a discovery list.
+            let dtos: Vec<SelectedModelDto> = sel_map
+                .into_iter()
+                .map(|(model_name, is_enabled)| SelectedModelDto {
+                    model_name,
+                    is_enabled,
+                    synced_at: Utc::now(),
+                })
+                .collect();
+            (StatusCode::OK, Json(serde_json::json!({"models": dtos}))).into_response()
+        }
     }
 }
 
 /// `PATCH /v1/providers/{id}/selected-models/{model_name}` — toggle a model's enabled state.
+#[instrument(skip_all)]
 pub async fn set_model_enabled(
     RequireProviderManage(claims): RequireProviderManage,
     State(state): State<AppState>,

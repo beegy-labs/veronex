@@ -1,7 +1,7 @@
 use anyhow::Result;
 use uuid::Uuid;
 
-/// Persistent VRAM budget state for an Ollama provider.
+/// Persistent VRAM budget state for a llama-server provider.
 ///
 /// Stored in `provider_vram_budget`. Complements `llm_providers.num_parallel`
 /// and `llm_providers.total_vram_mb` (which are managed via the provider API).

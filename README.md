@@ -1,8 +1,8 @@
 # Veronex
 
-**Autonomous scheduler and gateway for N Ollama servers** — VRAM-aware routing, adaptive concurrency, thermal protection, MCP agentic loop, OpenAI-compatible API.
+**Autonomous scheduler and gateway for N llama-server nodes** — VRAM-aware routing, adaptive concurrency, thermal protection, MCP agentic loop, OpenAI-compatible API.
 
-Veronex treats all your Ollama instances as a single compute pool. It learns optimal concurrency per model through live inference data, runs ReAct-style tool-calling loops via MCP, and compresses long conversations automatically.
+Veronex treats all your llama-server nodes as a single compute pool. It learns optimal concurrency per model through live inference data, runs ReAct-style tool-calling loops via MCP, and compresses long conversations automatically.
 
 - **Smart routing** — dispatches to the provider with the most VRAM headroom; keeps models resident to avoid reloading
 - **Adaptive concurrency** — learns `max_concurrent` per model via AIMD (TPS + p95), refined via LLM batch analysis
@@ -10,7 +10,7 @@ Veronex treats all your Ollama instances as a single compute pool. It learns opt
 - **MCP agentic loop** — ReAct loop with multi-round tool calling (web search, image analysis, vector retrieval, datetime, weather)
 - **Context compression** — automatic conversation summarization when approaching context window limits
 - **Self-healing queue** — lease-based ZSET with heartbeat reaper; orphaned jobs are automatically recovered or failed
-- **API compatible** — OpenAI, Ollama native, and Gemini — drop-in for existing clients and SDKs
+- **API compatible** — OpenAI and Gemini — drop-in for existing clients and SDKs
 
 ---
 
@@ -23,8 +23,7 @@ docker compose up -d
 open http://localhost:3002     # setup wizard → create admin → add provider → get API key
 ```
 
-> **macOS**: `OLLAMA_URL=http://host.docker.internal:11434` works out of the box.
-> **Linux**: set `OLLAMA_URL=http://172.17.0.1:11434` in `.env`.
+> Veronex bundles llama-server inside the per-node `veronex-llm-agent` image — no external model server required.
 
 ```bash
 curl http://localhost:3001/v1/chat/completions \
@@ -69,7 +68,7 @@ flowchart TD
     GATE -->|VRAM full| RQ[re-enqueue to front]
     GATE -->|pass| RUN[Job Runner]
 
-    RUN --> OL[Ollama]
+    RUN --> OL[llama-server]
     RUN --> GM[Gemini]
     OL & GM --> SSE[SSE stream → client]
     SSE --> S3[(S3 TurnRecord\ntool_calls + turn data)]
@@ -125,7 +124,7 @@ Workers hold a lease on `queue:active` (ZSET, score = deadline_ms) and renew eve
 | **Scheduler** | Valkey (Lua ZSET priority queue + lease ZSET) · PostgreSQL 18 |
 | **MCP / Embedding** | Rust + fastembed · multilingual-e5-large · SearXNG |
 | **Analytics** | ClickHouse · OTel Collector · Redpanda |
-| **Dashboard** | Next.js 16 · React 19 · Tailwind v4 · shadcn/ui |
+| **Dashboard** | Next.js 16 · React 19 · verodesign (vds-* utilities, white-box CSS tokens) |
 | **Deploy** | Docker Compose · Kubernetes (Helm + KEDA) |
 
 ---

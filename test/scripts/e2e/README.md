@@ -32,7 +32,7 @@ SKIP_DB_RESET=1 ./test/scripts/test-e2e.sh
 A phase is skipped when its `.ok` file exists. A checkpoint is written only when exit=0 and FAIL_COUNT=0.
 Auth state (tokens, API keys) is also persisted there — reused across runs until `--reset`.
 
-**Prerequisites**: `docker compose up` (Veronex stack running), at least one reachable Ollama provider
+**Prerequisites**: `docker compose up` (Veronex stack running), at least one reachable llama-server provider
 
 ---
 
@@ -81,7 +81,7 @@ sequenceDiagram
     participant API as Veronex
     participant DB as PostgreSQL
     participant V as Valkey
-    participant O as Ollama
+    participant O as llama-server
 
     T->>DB: DROP SCHEMA + migrate
     T->>V: Delete all veronex:* keys
@@ -91,9 +91,9 @@ sequenceDiagram
     T->>API: POST /v1/auth/login → JWT
 
     T->>API: POST /v1/servers (local + remote)
-    T->>API: POST /v1/providers (local + remote Ollama)
+    T->>API: POST /v1/providers (local + remote llama-server)
     T->>API: PATCH /v1/providers/{id} (link to server)
-    T->>API: POST /v1/ollama/models/sync
+    T->>API: POST /v1/llama-server/models/sync
     API->>O: GET /api/tags
     T->>API: POST /v1/providers/{id}/sync
     API->>O: GET /api/ps (VRAM probing)
@@ -113,9 +113,9 @@ sequenceDiagram
 | Remote server/provider | Same flow for second set |
 | Provider-server link | PATCH /v1/providers/{id} (server_id, gpu_index) |
 | Dual provider verification | GET /v1/providers → count >= 2 |
-| Global model sync | POST /v1/ollama/models/sync → wait for completion |
+| Global model sync | POST /v1/llama-server/models/sync → wait for completion |
 | Per-provider sync | POST /v1/providers/{id}/sync → VRAM probing |
-| Model availability | GET /v1/ollama/models → MODEL present |
+| Model availability | GET /v1/llama-server/models → MODEL present |
 | Capacity settings | PATCH + GET /v1/dashboard/capacity/settings |
 | Paid API key | POST /v1/keys (tier=paid) |
 | Standard API key | POST /v1/keys (tier=free) |
@@ -184,8 +184,8 @@ Validates the full inference lifecycle from Cold Start through AIMD learning to 
 sequenceDiagram
     participant T as Test
     participant API as Veronex
-    participant OL as Ollama Local
-    participant OR as Ollama Remote
+    participant OL as llama-server Local
+    participant OR as llama-server Remote
 
     rect rgb(240,248,255)
         Note over T,OR: Round 1 — Cold Start
@@ -283,7 +283,7 @@ flowchart LR
 | Provider models | GET /v1/providers/{id}/models → 200 |
 | Selected models | GET /v1/providers/{id}/selected-models → 200 |
 | Model disable/enable | PATCH selected-models/{model} is_enabled=false/true |
-| Model-to-provider mapping | GET /v1/ollama/models/{model}/providers → 200 |
+| Model-to-provider mapping | GET /v1/models/{model}/providers → 200 |
 | List servers | GET /v1/servers → 200 |
 | Server without URL rejected | POST /v1/servers without node_exporter_url → 400 |
 | Create server | POST /v1/servers with node_exporter_url → 201 (or 409 if duplicate) |
@@ -379,19 +379,19 @@ flowchart TD
 
 ## 06-api-surface.sh — Multi-Format Inference + Endpoints + Pull Drain
 
-Validates all inference formats (OpenAI/Ollama/Gemini), full endpoint smoke tests, and Pull Drain.
+Validates all inference formats (OpenAI/llama-server/Gemini), full endpoint smoke tests, and Pull Drain.
 
 ```mermaid
 sequenceDiagram
     participant T as Test
     participant API as Veronex
-    participant O as Ollama
+    participant O as llama-server
 
     rect rgb(240,248,255)
         Note over T,O: Multi-Format Inference (8 concurrent)
         T->>API: /v1/chat/completions (SSE)
-        T->>API: /api/chat (Ollama)
-        T->>API: /api/generate (Ollama)
+        T->>API: /api/chat (llama-server)
+        T->>API: /api/generate (llama-server)
         T->>API: /api/tags
         T->>API: /api/show
         T->>API: /v1beta/models (Gemini)
@@ -400,7 +400,7 @@ sequenceDiagram
 
     rect rgb(255,245,238)
         Note over T,O: Pull Drain
-        T->>API: POST /v1/ollama/models/pull
+        T->>API: POST /v1/llama-server/models/pull
         API-->>T: 202 Accepted
         T->>API: Inference request (during pull)
         API-->>T: 200 (rerouted) or 503
@@ -410,10 +410,10 @@ sequenceDiagram
 | Test | Validates |
 |------|-----------|
 | OpenAI SSE streaming | /v1/chat/completions stream=true → data: events present |
-| Ollama /api/chat | 200 |
-| Ollama /api/generate | 200 |
-| Ollama /api/tags | 200 |
-| Ollama /api/show | 200 |
+| chat-completion | 200 |
+| completion | 200 |
+| /v1/models | 200 |
+| (removed) | 200 |
 | Gemini /v1beta/models | 200 |
 | Test completions | /v1/test/completions → 200 |
 | Test chat | /v1/test/api/chat → 200 |
@@ -449,7 +449,7 @@ sequenceDiagram
 | Per-key jobs | /v1/usage/{key_id}/jobs → 200 |
 | Per-key models | /v1/usage/{key_id}/models → 200 |
 | Job detail | /v1/dashboard/jobs/{id} → 200 |
-| Pull drain endpoint | POST /v1/ollama/models/pull → 202/200/409 |
+| Pull drain endpoint | POST /v1/llama-server/models/pull → 202/200/409 |
 | Pull dispatch block | During pull, inference reroutes to non-pulling provider (200) or 503 |
 
 ---
@@ -594,7 +594,7 @@ Validates image inference through both API key and test panel paths, S3 WebP sto
 
 | Test | Validates |
 |------|-----------|
-| Vision model detection | Local Ollama has a vision model (llava, minicpm-v, etc.) |
+| Vision model detection | Local llama-server has a vision model (llava, minicpm-v, etc.) |
 | API image inference | /api/generate with base64 image → 200, response contains text |
 | Test panel image inference | /v1/test/completions with images array → 200 |
 | S3 WebP storage | Job image stored as WebP in S3 bucket |
@@ -648,16 +648,16 @@ flowchart TD
 | Verify server: unreachable | Non-routable IP → 502 |
 | Verify provider: empty URL | POST /v1/providers/verify with empty url → 400 |
 | Verify provider: bad scheme | ftp:// URL → 400 |
-| Verify provider: duplicate | Already-registered Ollama URL → 409 |
+| Verify provider: duplicate | Already-registered llama-server URL → 409 |
 | Verify provider: unreachable | Non-routable IP → 502 |
 | Register server: no URL | POST /v1/servers without node_exporter_url → 400 |
 | Register server: bad scheme | ftp:// node_exporter_url → 400 |
 | Register server: duplicate | Duplicate node_exporter_url → 409 |
 | Register server: unreachable | Unreachable node_exporter_url → 502 |
-| Register provider: duplicate | Duplicate Ollama URL → 409 |
-| Register provider: unreachable | Unreachable Ollama URL → 502 |
-| Register provider: no URL | Missing Ollama URL → 400 |
-| Register provider: bad scheme | ftp:// Ollama URL → 400 |
+| Register provider: duplicate | Duplicate llama-server URL → 409 |
+| Register provider: unreachable | Unreachable llama-server URL → 502 |
+| Register provider: no URL | Missing llama-server URL → 400 |
+| Register provider: bad scheme | ftp:// llama-server URL → 400 |
 | PROVIDERS_ONLINE_COUNTER | Valkey key exists with valid integer value |
 | Provider heartbeat key | veronex:provider:hb:{id} present (if agent running) |
 
@@ -667,7 +667,7 @@ flowchart TD
 
 ### gpu_vendor Thermal Mapping
 
-`gpu_vendor` is populated by **veronex-agent** (`hw_metrics.rs`), a separate binary that scrapes hardware info on each Ollama server. The agent is not deployed in E2E, so `servers.gpu_vendor` remains NULL and threshold mapping cannot be verified.
+`gpu_vendor` is populated by **veronex-agent** (`hw_metrics.rs`), a separate binary that scrapes hardware info on each llama-server node. The agent is not deployed in E2E, so `servers.gpu_vendor` remains NULL and threshold mapping cannot be verified.
 
 The logic is fully implemented in `thermal.rs`. To enable: deploy the agent or manually seed the DB.
 

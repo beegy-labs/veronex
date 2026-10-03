@@ -12,7 +12,7 @@ import { fmtMsNullable } from '@/lib/chart-theme'
 import { useTimezone } from '@/components/timezone-provider'
 import { fmtDatetime } from '@/lib/date'
 import { JobDetailModal } from './job-detail-modal'
-import { STATUS_STYLES, SOURCE_STYLES } from '@/lib/constants'
+import { SOURCE_STYLES } from '@/lib/constants'
 import { StatusBadge } from './status-badge'
 
 function truncateId(id: string) {

@@ -4,8 +4,10 @@ members = [
     "crates/veronex-analytics",
     "crates/veronex-agent",
     "crates/veronex-consumer",
+    "crates/veronex-llm-agent",
     "crates/veronex-mcp",
     "crates/veronex-embed",
+    "crates/veronex-builder-runner",
     "workspace-hack",
 ]
 # Default build target — selected by `cargo build` / `cargo chef cook` when no
@@ -19,6 +21,7 @@ default-members = [
     "crates/veronex-analytics",
     "crates/veronex-agent",
     "crates/veronex-consumer",
+    "crates/veronex-llm-agent",
     "crates/veronex-mcp",
     "workspace-hack",
 ]

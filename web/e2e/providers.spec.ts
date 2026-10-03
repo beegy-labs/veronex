@@ -6,12 +6,12 @@ test.describe('Providers', () => {
     await page.goto('/providers')
   })
 
-  test('providers page loads with Ollama and Gemini tabs', async ({ page }) => {
+  test('providers page loads with llama-server and Gemini tabs', async ({ page }) => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible({ timeout: T_DEFAULT })
-    // The providers page has tabs for Ollama and Gemini
+    // The providers page has tabs for llama-server and Gemini
     await expect(
-      page.getByRole('tab', { name: /ollama/i })
-        .or(page.getByText(/ollama/i))
+      page.getByRole('tab', { name: /llama_server/i })
+        .or(page.getByText(/llama_server/i))
         .first()
     ).toBeVisible({ timeout: T_DEFAULT })
   })
